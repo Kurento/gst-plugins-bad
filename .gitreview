@@ -1,0 +1,6 @@
+[gerrit]
+host=code.kurento.org
+port=12345
+project=gst-plugins-bad
+defaultbranch=master
+
