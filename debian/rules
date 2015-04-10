@@ -39,13 +39,13 @@ version=$(shell dpkg-parsechangelog | grep ^Version: | cut -d ' ' -f 2)
 # upstream version
 gst_version=$(shell echo $(version) | cut -d '-' -f 1)
 gst_major=1
-gst_minor=0
+gst_minor=5
 gst_abi=$(gst_major).$(gst_minor)
 # gstreamer library package names
 gst_lib=libgstreamer$(gst_abi)-0
 gst_lib_dev=libgstreamer$(gst_abi)-dev
 # what gstreamer version is needed
-gst_lib_dev_dep=$(gst_lib_dev) (>= 1.5.0.1+git20150316)
+gst_lib_dev_dep=$(gst_lib_dev) (>= 1.5.0.1~0)
 
 gst_pkgname=gstreamer$(gst_abi)
 gst_deb_abi=$(gst_abi)-0
@@ -63,7 +63,7 @@ gst_extra_build_depends += , libwayland-dev (>= 1.0) [linux-any]
 # The plugins are basically the same.
 # Link special names to a template file.
 # still need "*.install" to be done by hand
-# 
+#
 # EXTRA_PLUGINS: See debian/README.Debian for docs
 EXTRA_PLUGINS +=
 
@@ -207,7 +207,7 @@ DEB_CONFIGURE_EXTRA_FLAGS += --enable-gtk-doc
 endif
 
 common-binary-fixup-arch::
-	LD_LIBRARY_PATH=debian/libgstreamer-plugins-bad1.0-0/usr/lib/$(DEB_HOST_MULTIARCH):$(LD_LIBRARY_PATH) \
+	LD_LIBRARY_PATH=debian/libgstreamer-plugins-bad1.5-0/usr/lib/$(DEB_HOST_MULTIARCH):$(LD_LIBRARY_PATH) \
 		dh_gstscancodecs
 
 clean::

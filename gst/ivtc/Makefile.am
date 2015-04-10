@@ -5,7 +5,7 @@ libgstivtc_la_SOURCES = \
 	gstcombdetect.c gstcombdetect.h
 libgstivtc_la_CFLAGS = $(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
 	$(GST_BASE_CFLAGS) $(GST_CFLAGS)
-libgstivtc_la_LIBADD = $(GST_PLUGINS_BASE_LIBS) -lgstvideo-1.0 \
+libgstivtc_la_LIBADD = $(GST_PLUGINS_BASE_LIBS) -lgstvideo-1.5 \
 	$(GST_BASE_LIBS) $(GST_LIBS)
 libgstivtc_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 libgstivtc_la_LIBTOOLFLAGS = $(GST_PLUGIN_LIBTOOLFLAGS)

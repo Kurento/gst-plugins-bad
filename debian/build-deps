@@ -9,13 +9,13 @@ dpkg-dev (>= 1.15.1)
 flite-dev
 gir1.2-freedesktop
 gir1.2-glib-2.0
-gir1.2-gst-plugins-base-1.0
-gir1.2-gstreamer-1.0
+gir1.2-gst-plugins-base-1.5
+gir1.2-gstreamer-1.5
 gobject-introspection (>= 0.9.12-4~)
 @GST_EXTRA_BUILD_DEPENDS@
 @GST_LIB_DEV_DEP@
 gstreamer@GST_ABI@-doc
-gstreamer@GST_ABI@-plugins-base (>= 1.5.0.1+git20150316)
+gstreamer@GST_ABI@-plugins-base (>= 1.5.0.1~0)
 gstreamer@GST_ABI@-plugins-base-doc
 gtk-doc-tools (>= 1.12)
 ladspa-sdk
@@ -42,7 +42,7 @@ libglu1-mesa-dev
 libgme-dev
 libgnutls28-dev (>= 2.11.3)
 libgsm1-dev
-libgstreamer-plugins-base@GST_ABI@-dev (>= 1.5.0.1+git20150316)
+libgstreamer-plugins-base@GST_ABI@-dev (>= 1.5.0.1~0)
 libgtk2.0-dev (>= 2.14.0)
 libiptcdata0-dev (>= 1.0.2)
 libjasper-dev

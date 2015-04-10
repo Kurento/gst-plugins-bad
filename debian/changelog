@@ -1,3 +1,9 @@
+gst-plugins-bad1.5 (1.5.0.1) experimental; urgency=medium
+
+  * Change package name to diferenciate between versions
+
+ -- Jose Antonio Santos Cadenas <santoscadenas@gmail.com>  Thu, 09 Apr 2015 16:33:45 +0200
+
 gst-plugins-bad1.0 (1.5.0.1+git20150316-2) experimental; urgency=medium
 
   * debian/libgstreamer-plugins-bad-dev.install:

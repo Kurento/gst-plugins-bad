@@ -30,7 +30,7 @@ Description: GStreamer documentation for plugins from the "bad" set
  real live maintainer, or some actual wide use.
  .
  This package contains the documentation for plugins from the "bad" set.
- 
+
 Package: @GST_PKGNAME@-plugins-bad
 Architecture: any
 Multi-Arch: same
@@ -41,8 +41,6 @@ Depends: ${misc:Depends},
          libgstreamer-plugins-bad@GST_DEB_ABI@ (= ${binary:Version}),
 Provides: ${gstreamer:Provides}
 Suggests: frei0r-plugins
-Replaces: gstreamer1.0-plugins-base (<< 0.11.94), gstreamer1.0-plugins-good (<< 1.1.2)
-Breaks: gstreamer1.0-plugins-base (<< 0.11.94), gstreamer1.0-plugins-good (<< 1.1.2)
 XB-GStreamer-Version: ${gstreamer:Version}
 XB-GStreamer-Elements: ${gstreamer:Elements}
 XB-GStreamer-URI-Sources: ${gstreamer:URISources}
@@ -69,8 +67,6 @@ Section: debug
 Priority: extra
 Depends: @GST_PKGNAME@-plugins-bad (= ${binary:Version}),
          ${misc:Depends}
-Replaces: gstreamer1.0-plugins-base-dbg (<< 0.11.94), gstreamer1.0-plugins-good (<< 1.1.2)
-Breaks: gstreamer1.0-plugins-base-dbg (<< 0.11.94), gstreamer1.0-plugins-good (<< 1.1.2)
 Description: GStreamer plugins from the "bad" set (debug symbols)
  GStreamer is a streaming media framework, based on graphs of filters
  which operate on media data.  Applications using this library can do
@@ -117,6 +113,7 @@ Depends: ${misc:Depends},
          libgstreamer@GST_ABI@-dev,
          libgstreamer-plugins-base@GST_ABI@-dev,
          gir1.2-gst-plugins-bad-@GST_ABI@ (= ${binary:Version})
+Conflicts: libgstreamer-plugins-bad1.0-dev
 Description: GStreamer development files for libraries from the "bad" set
  GStreamer is a streaming media framework, based on graphs of filters
  which operate on media data.  Applications using this library can do
