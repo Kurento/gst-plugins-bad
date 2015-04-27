@@ -24,6 +24,7 @@
 
 #include <gst/gst.h>
 #include <gst/base/gstadapter.h>
+#include <gst/uridownloader/gsturidownloader.h>
 
 G_BEGIN_DECLS
 
@@ -176,7 +177,7 @@ struct _GstAdaptiveDemux
   /*< protected >*/
   GstPad         *sinkpad;
 
-  GstAdaptiveDemuxPrivate *priv;
+  GstUriDownloader *downloader;
 
   GList *streams;
   GList *next_streams;
@@ -198,6 +199,9 @@ struct _GstAdaptiveDemux
 
   gboolean have_group_id;
   guint group_id;
+
+  /* < private > */
+  GstAdaptiveDemuxPrivate *priv;
 };
 
 /**
@@ -233,8 +237,22 @@ struct _GstAdaptiveDemuxClass
    * Returns: the update interval in microseconds
    */
   gint64        (*get_manifest_update_interval) (GstAdaptiveDemux * demux);
+
   /**
    * update_manifest:
+   * @demux: #GstAdaptiveDemux
+   *
+   * During live streaming, this will be called for the subclass to update its
+   * manifest with the new version. By default it fetches the manifest URI
+   * and passes it to GstAdaptiveDemux::update_manifest_data().
+   *
+   * Returns: #GST_FLOW_OK is all succeeded, #GST_FLOW_EOS if the stream ended
+   *          or #GST_FLOW_ERROR if an error happened
+   */
+  GstFlowReturn (*update_manifest) (GstAdaptiveDemux * demux);
+
+  /**
+   * update_manifest_data:
    * @demux: #GstAdaptiveDemux
    * @buf: Downloaded manifest data
    *
@@ -244,7 +262,7 @@ struct _GstAdaptiveDemuxClass
    * Returns: #GST_FLOW_OK is all succeeded, #GST_FLOW_EOS if the stream ended
    *          or #GST_FLOW_ERROR if an error happened
    */
-  GstFlowReturn (*update_manifest) (GstAdaptiveDemux * demux, GstBuffer * buf);
+  GstFlowReturn (*update_manifest_data) (GstAdaptiveDemux * demux, GstBuffer * buf);
 
   gboolean      (*is_live)          (GstAdaptiveDemux * demux);
   GstClockTime  (*get_duration)     (GstAdaptiveDemux * demux);

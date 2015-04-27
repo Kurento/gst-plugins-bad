@@ -1,237 +1,158 @@
 /* GStreamer
  * Copyright (C) 2011 Robert Jobbagy <jobbagy.robert@gmail.com>
+ * Copyright (C) 2014 Tim-Philipp Müller <tim centricular com>
  *
+ * motioncells_dynamic_test: test to show effect of property changes at runtime
  *
- *  gst_motioncells_dynamic_test(): a test tool what can to do dynamic change properties
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
  *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
  *
- *  This program is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
  *
  */
 #include <gst/gst.h>
-#include <glib.h>
-#include <glib/gprintf.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <locale.h>
-#include "gstmotioncells_dynamic_test.h"
-#include "gst_element_print_properties.h"
 
-const guint c2w = 21;           // column 2 width
-const guint c3w = 19;           // column 3 width
-const guint c4w = 23;           // column 4 width
-
-void
-setProperty (GstElement * mcells, char *property, char *prop_value, GType type,
-    GValue * value)
+static void
+print_element_properties (GstElement * element)
 {
+  GParamSpec **pspecs, *pspec;
+  guint num, i;
 
-  switch (type) {
-    case G_TYPE_STRING:
-    {
-      g_object_set (G_OBJECT (mcells), property, prop_value, NULL);
-      break;
+  g_print ("\tProperty : value (type)\n");
+
+  pspecs = g_object_class_list_properties (G_OBJECT_GET_CLASS (element), &num);
+  for (i = 0; i < num; ++i) {
+    GValue val = G_VALUE_INIT;
+    const gchar *type_name;
+    gchar *s;
+
+    pspec = pspecs[i];
+
+    /* only care about properties we can read and write */
+    if ((pspec->flags & G_PARAM_READWRITE) != G_PARAM_READWRITE)
+      continue;
+    /* and which can be changed after construction */
+    if ((pspec->flags & G_PARAM_CONSTRUCT_ONLY))
+      continue;
+    /* ignore some GstObject properties which are not interesting */
+    if (!strcmp (pspec->name, "name") || !strcmp (pspec->name, "parent"))
+      continue;
+    /* ignore properties we can't change in a meaningful way */
+    if (G_IS_PARAM_SPEC_BOXED (pspec) || G_IS_PARAM_SPEC_OBJECT (pspec)
+        || G_IS_PARAM_SPEC_POINTER (pspec))
+      continue;
+
+    g_value_init (&val, G_PARAM_SPEC_VALUE_TYPE (pspec));
+    g_object_get_property (G_OBJECT (element), pspec->name, &val);
+    s = gst_value_serialize (&val);
+
+    if (G_PARAM_SPEC_VALUE_TYPE (pspec) == G_TYPE_STRING) {
+      type_name = "string";
+      g_free (s);
+      g_object_get (G_OBJECT (element), pspec->name, &s, NULL);
+      if (s == NULL)
+        s = g_strdup ("(null)");
+    } else {
+      type_name = g_type_name (G_PARAM_SPEC_VALUE_TYPE (pspec));
     }
-    case G_TYPE_BOOLEAN:
-    {
-      gboolean flag = (g_strcmp0 (prop_value, "true") == 0) ? TRUE : FALSE;
-      g_object_set (G_OBJECT (mcells), property, flag, NULL);
-      break;
-    }
-    case G_TYPE_ULONG:
-    {
-      unsigned long ulongval = strtoul (prop_value, NULL, 0);
-      g_object_set (G_OBJECT (mcells), property, ulongval, NULL);
-      break;
-    }
-    case G_TYPE_LONG:
-    {
-      long longval = atol (prop_value);
-      g_object_set (G_OBJECT (mcells), property, longval, NULL);
-      break;
-    }
-    case G_TYPE_UINT:
-    {
-      unsigned int uintval = atoi (prop_value);
-      g_object_set (G_OBJECT (mcells), property, uintval, NULL);
-      break;
-    }
-    case G_TYPE_INT:
-    {
-      int intval = atoi (prop_value);
-      g_object_set (G_OBJECT (mcells), property, intval, NULL);
-      break;
-    }
-    case G_TYPE_UINT64:
-    {
-      guint64 guint64val = atoi (prop_value);
-      g_object_set (G_OBJECT (mcells), property, guint64val, NULL);
-      break;
-    }
-    case G_TYPE_INT64:
-    {
-      gint64 gint64val = atoi (prop_value);
-      g_object_set (G_OBJECT (mcells), property, gint64val, NULL);
-      break;
-    }
-    case G_TYPE_FLOAT:
-    {
-      float floatval = atof (prop_value);
-      g_object_set (G_OBJECT (mcells), property, floatval, NULL);
-      break;
-    }
-    case G_TYPE_DOUBLE:
-    {
-      double doubleval = strtod (prop_value, NULL);
-      g_object_set (G_OBJECT (mcells), property, doubleval, NULL);
-      break;
-    }
-    default:
-      fprintf (stderr, "You gave me something wrong type of data !!! \n");
-      break;
+
+    g_print ("\t%s: %s (%s)\n", pspec->name, s, type_name);
+    g_free (s);
+    g_value_unset (&val);
   }
+
+  g_free (pspecs);
 }
 
-// gst-launch v4l2src ! videoscale ! videorate ! capsfilter "caps=video/x-raw-yuv,width=320,height=240,framerate=10/1" ! videoconvert ! motioncells ! videoconvert ! xvimagesink
 int
 main (int argc, char *argv[])
 {
-  GstElement *pipeline, *source, *videor, *videos, *decodebin, *capsf,
-      *colorsp0, *colorsp1, *mcells, *sink;
+  GstElement *pipeline, *source, *videor, *capsf;
+  GstElement *colorsp0, *colorsp1, *mcells, *sink;
   GstCaps *caps;
-  gchar property[20];
-  gchar prop_value[100];
-  GParamSpec **property_specs;
-  guint num_properties, i;
-  GValue value = { 0, };
-  gboolean found_property = FALSE;
-  int ret;
 
-  // Initialisation //
   gst_init (&argc, &argv);
-  fprintf (stderr, "Usage: %s test or rtsp rtsp://your/cam/address\n", argv[0]);
-  // Create gstreamer elements //
-  pipeline = gst_pipeline_new ("moitoncells-pipeline");
-  if (argc == 2 && (g_strcmp0 (argv[1], "test") == 0))
-    source = gst_element_factory_make ("videotestsrc", "vidsrc");
-  else if (argc == 3 && (g_strcmp0 (argv[1], "rtsp") == 0))
-    source = gst_element_factory_make ("rtspsrc", "rtspsrc0");
-  else if (argc == 1)
-    source = gst_element_factory_make ("v4l2src", "v4l2");
-  else {
-    fprintf (stderr, "Usage: %s test or rtsp rtsp://your/cam/address\n",
-        argv[0]);
+
+  pipeline = gst_pipeline_new ("motioncells-pipeline");
+  if (argc == 2 && strcmp (argv[1], "test") == 0) {
+    source = gst_element_factory_make ("videotestsrc", NULL);
+    gst_util_set_object_arg (G_OBJECT (source), "pattern", "ball");
+  } else if (argc == 1 || strncmp (argv[1], "v4l", 3) == 0) {
+    source = gst_element_factory_make ("v4l2src", NULL);
+  } else {
+    g_printerr ("Usage: %s [v4l2|test]\n", argv[0]);
     exit (-1);
   }
 
-  videor = gst_element_factory_make ("videorate", "videor");
-  videos = gst_element_factory_make ("videoscale", "videos");
-  capsf = gst_element_factory_make ("capsfilter", "capsf");
-  if (argc == 3 && (g_strcmp0 (argv[1], "rtsp") == 0))
-    decodebin = gst_element_factory_make ("decodebin", "decode");
-  else
-    decodebin = NULL;
-  colorsp0 = gst_element_factory_make ("videoconvert", "colorspace0");
-  mcells = gst_element_factory_make ("motioncells", "mcells");
-  colorsp1 = gst_element_factory_make ("videoconvert", "colorspace1");
-  sink = gst_element_factory_make ("xvimagesink", "xv-image-sink");
-  if (!pipeline || !source || !videor || !videos || !capsf || !colorsp0
+  videor = gst_element_factory_make ("videorate", NULL);
+  capsf = gst_element_factory_make ("capsfilter", NULL);
+  colorsp0 = gst_element_factory_make ("videoconvert", NULL);
+  mcells = gst_element_factory_make ("motioncells", NULL);
+  colorsp1 = gst_element_factory_make ("videoconvert", NULL);
+  sink = gst_element_factory_make ("autovideosink", "videosink");
+  if (!pipeline || !source || !videor || !capsf || !colorsp0
       || !mcells || !colorsp1 || !sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
-  if (argc == 3 && (g_strcmp0 (argv[1], "rtsp") == 0) && !decodebin) {
-    g_printerr ("Decodebin could not be created. Exiting.\n");
-    return -1;
-  }
-  if ((g_strcmp0 (argv[1], "rtsp") == 0)) {
-    g_object_set (G_OBJECT (source), "location", argv[2], NULL);
-    g_object_set (G_OBJECT (source), "latency", 1000, NULL);
-  } else if ((g_strcmp0 (argv[1], "test") == 0))
-    g_object_set (G_OBJECT (source), "pattern", 18, NULL);
 
-  caps =
-      gst_caps_from_string
-      ("video/x-raw-yuv,width=320,height=240,framerate=10/1");
+  caps = gst_caps_from_string ("video/x-raw,framerate=10/1");
   g_object_set (G_OBJECT (capsf), "caps", caps, NULL);
-  //g_object_set (G_OBJECT (sink), "sync",FALSE,NULL);
 
-  if (argc > 1) {
-    if (g_strcmp0 (argv[1], "test") == 0) {
-      gst_bin_add_many (GST_BIN (pipeline),
-          source, videor, videos, capsf, colorsp0, mcells, colorsp1, sink,
-          NULL);
+  gst_bin_add_many (GST_BIN (pipeline), source, videor, capsf, colorsp0, mcells,
+      colorsp1, sink, NULL);
 
-      gst_element_link_many (source, videor, videos, capsf, colorsp0, mcells,
-          colorsp1, sink, NULL);
-    } else if (g_strcmp0 (argv[1], "rtsp") == 0) {
-      gst_bin_add_many (GST_BIN (pipeline),
-          source, videor, videos, capsf, decodebin, colorsp0, mcells, colorsp1,
-          sink, NULL);
+  gst_element_link_many (source, videor, capsf, colorsp0, mcells, colorsp1,
+      sink, NULL);
 
-      gst_element_link_many (source, videor, videos, capsf, decodebin, colorsp0,
-          mcells, colorsp1, sink, NULL);
-    }
-  } else {                      //default
-    gst_bin_add_many (GST_BIN (pipeline),
-        source, videor, videos, capsf, colorsp0, mcells, colorsp1, sink, NULL);
-
-    gst_element_link_many (source, videor, videos, capsf, colorsp0, mcells,
-        colorsp1, sink, NULL);
-  }
-
-  g_print ("Now playing\n");
+  g_print ("Going to playing..\n");
   gst_element_set_state (pipeline, GST_STATE_PLAYING);
-  g_print ("Running...\n");
-  g_print ("You can use these properties : \n");
-  gst_element_print_properties (mcells);
-  g_print ("change property here: example  some_property property_value \n");
-  g_print ("Quit with 'q' \n");
-  //get all properties
-  property_specs = g_object_class_list_properties (G_OBJECT_GET_CLASS (mcells),
-      &num_properties);
+
+  g_print ("You can use these properties: \n\n");
+
+  print_element_properties (mcells);
+
+  g_print ("\nSee 'gst-inspect-1.0 motioncells' for all the details.\n");
+  g_print ("Change properties like this: propertyname=value\n");
+  g_print ("Quit with 'q'\n");
+
+  /* Read command line input */
   while (TRUE) {
-    found_property = FALSE;
-    i = 0;
+    gchar *prop_name, *prop_value;
+    gchar input_buf[1024];
 
-    ret = scanf ("%19s %99s", property, prop_value);
-
-    if (ret < 1)
-      g_printerr ("Error parsing command.\n");
-
-    if ((g_strcmp0 (property, "q") == 0) || (g_strcmp0 (prop_value, "q") == 0))
+    memset (input_buf, 0, sizeof (input_buf));
+    if (fgets (input_buf, sizeof (input_buf), stdin) == NULL)
       break;
-    printf ("property: %s -> value: %s \n", property, prop_value);
-    for (i = 0; i < num_properties; i++) {
-      GParamSpec *param = property_specs[i];
-      g_value_init (&value, param->value_type);
-      g_object_get_property (G_OBJECT (mcells), param->name, &value);
-      //fprintf(stderr,"property: %s and param name: %s and property value: %s \n",property,param->name,prop_value);
-      if ((g_strcmp0 (property, param->name) == 0) && !found_property &&
-          (g_strcmp0 (prop_value, "") != 0)
-          && (g_strcmp0 (prop_value, "\"") != 0)
-          && (g_strcmp0 (prop_value, "\'") != 0)) {
-        GType type;
-        found_property = TRUE;
-        type = param->value_type;
-        setProperty (mcells, property, prop_value, type, &value);
-      }
-      g_value_unset (&value);
-      if (found_property)
-        break;
+
+    /* strip off trailing newline */
+    g_strdelimit (input_buf, "\n", '\0');
+
+    if (strcmp (input_buf, "q") == 0 || strcmp (input_buf, "quit") == 0)
+      break;
+
+    prop_value = strchr (input_buf, '=');
+    if (prop_value == NULL) {
+      g_printerr ("Please enter either 'property=value' or 'quit'.\n");
+      continue;
     }
+    *prop_value++ = '\0';
+    prop_name = input_buf;
+
+    gst_util_set_object_arg (G_OBJECT (mcells), prop_name, prop_value);
   }
 
   gst_element_set_state (pipeline, GST_STATE_NULL);

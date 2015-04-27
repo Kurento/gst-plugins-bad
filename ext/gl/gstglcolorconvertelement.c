@@ -35,7 +35,6 @@ G_DEFINE_TYPE_WITH_CODE (GstGLColorConvertElement, gst_gl_color_convert_element,
         "glconvertelement", 0, "convert");
     );
 
-static void gst_gl_color_convert_element_finalize (GObject * object);
 static gboolean gst_gl_color_convert_element_set_caps (GstBaseTransform * bt,
     GstCaps * in_caps, GstCaps * out_caps);
 static GstCaps *gst_gl_color_convert_element_transform_caps (GstBaseTransform *
@@ -49,6 +48,8 @@ gst_gl_color_convert_element_prepare_output_buffer (GstBaseTransform * bt,
     GstBuffer * inbuf, GstBuffer ** outbuf);
 static GstFlowReturn gst_gl_color_convert_element_transform (GstBaseTransform *
     bt, GstBuffer * inbuf, GstBuffer * outbuf);
+static GstCaps *gst_gl_color_convert_element_fixate_caps (GstBaseTransform *
+    bt, GstPadDirection direction, GstCaps * caps, GstCaps * othercaps);
 
 static GstStaticPadTemplate gst_gl_color_convert_element_src_pad_template =
 GST_STATIC_PAD_TEMPLATE ("src",
@@ -61,6 +62,24 @@ GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_GL_COLOR_CONVERT_VIDEO_CAPS));
+
+static gboolean
+gst_gl_color_convert_element_stop (GstBaseTransform * bt)
+{
+  GstGLColorConvertElement *convert = GST_GL_COLOR_CONVERT_ELEMENT (bt);
+
+  if (convert->convert) {
+    gst_object_unref (convert->convert);
+    convert->convert = NULL;
+  }
+
+  gst_caps_replace (&convert->in_caps, NULL);
+  gst_caps_replace (&convert->out_caps, NULL);
+
+  return
+      GST_BASE_TRANSFORM_CLASS (gst_gl_color_convert_element_parent_class)->stop
+      (bt);
+}
 
 static void
 gst_gl_color_convert_element_class_init (GstGLColorConvertElementClass * klass)
@@ -75,6 +94,8 @@ gst_gl_color_convert_element_class_init (GstGLColorConvertElementClass * klass)
   bt_class->prepare_output_buffer =
       gst_gl_color_convert_element_prepare_output_buffer;
   bt_class->transform = gst_gl_color_convert_element_transform;
+  bt_class->stop = gst_gl_color_convert_element_stop;
+  bt_class->fixate_caps = gst_gl_color_convert_element_fixate_caps;
 
   bt_class->passthrough_on_same_caps = TRUE;
 
@@ -89,8 +110,6 @@ gst_gl_color_convert_element_class_init (GstGLColorConvertElementClass * klass)
       "OpenGL color converter", "Filter/Converter/Video",
       "Converts between color spaces using OpenGL shaders",
       "Matthew Waters <matthew@centricular.com>");
-
-  G_OBJECT_CLASS (klass)->finalize = gst_gl_color_convert_element_finalize;
 }
 
 static void
@@ -98,17 +117,6 @@ gst_gl_color_convert_element_init (GstGLColorConvertElement * convert)
 {
   gst_base_transform_set_prefer_passthrough (GST_BASE_TRANSFORM (convert),
       TRUE);
-}
-
-static void
-gst_gl_color_convert_element_finalize (GObject * object)
-{
-  GstGLColorConvertElement *convert = GST_GL_COLOR_CONVERT_ELEMENT (object);
-
-  gst_caps_replace (&convert->in_caps, NULL);
-  gst_caps_replace (&convert->out_caps, NULL);
-
-  G_OBJECT_CLASS (gst_gl_color_convert_element_parent_class)->finalize (object);
 }
 
 static gboolean
@@ -205,4 +213,24 @@ gst_gl_color_convert_element_transform (GstBaseTransform * bt,
     GstBuffer * inbuf, GstBuffer * outbuf)
 {
   return GST_FLOW_OK;
+}
+
+static GstCaps *
+gst_gl_color_convert_element_fixate_caps (GstBaseTransform *
+    bt, GstPadDirection direction, GstCaps * caps, GstCaps * othercaps)
+{
+  GstCaps *ret;
+
+  ret =
+      GST_BASE_TRANSFORM_CLASS
+      (gst_gl_color_convert_element_parent_class)->fixate_caps (bt, direction,
+      caps, othercaps);
+
+  if (direction == GST_PAD_SINK) {
+    if (gst_caps_is_subset (caps, ret)) {
+      gst_caps_replace (&ret, caps);
+    }
+  }
+
+  return ret;
 }

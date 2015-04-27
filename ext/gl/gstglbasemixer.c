@@ -41,7 +41,6 @@ static void gst_gl_base_mixer_pad_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 static void gst_gl_base_mixer_pad_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
-static void gst_gl_base_mixer_pad_finalize (GObject * object);
 
 static void gst_gl_base_mixer_set_context (GstElement * element,
     GstContext * context);
@@ -81,17 +80,9 @@ gst_gl_base_mixer_pad_class_init (GstGLBaseMixerPadClass * klass)
   gobject_class->set_property = gst_gl_base_mixer_pad_set_property;
   gobject_class->get_property = gst_gl_base_mixer_pad_get_property;
 
-  gobject_class->finalize = gst_gl_base_mixer_pad_finalize;
-
   vaggpad_class->set_info = NULL;
   vaggpad_class->prepare_frame = NULL;
   vaggpad_class->clean_frame = NULL;
-}
-
-static void
-gst_gl_base_mixer_pad_finalize (GObject * object)
-{
-  G_OBJECT_CLASS (gst_gl_base_mixer_pad_parent_class)->finalize (object);
 }
 
 static void
@@ -256,8 +247,6 @@ static gboolean gst_gl_base_mixer_set_allocation (GstGLBaseMixer * mix,
     GstBufferPool * pool, GstAllocator * allocator,
     GstAllocationParams * params, GstQuery * query);
 
-static void gst_gl_base_mixer_finalize (GObject * object);
-
 static void
 gst_gl_base_mixer_class_init (GstGLBaseMixerClass * klass)
 {
@@ -274,8 +263,6 @@ gst_gl_base_mixer_class_init (GstGLBaseMixerClass * klass)
   element_class = GST_ELEMENT_CLASS (klass);
 
   g_type_class_add_private (klass, sizeof (GstGLBaseMixerPrivate));
-
-  gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_gl_base_mixer_finalize);
 
   gobject_class->get_property = gst_gl_base_mixer_get_property;
   gobject_class->set_property = gst_gl_base_mixer_set_property;
@@ -320,19 +307,6 @@ gst_gl_base_mixer_init (GstGLBaseMixer * mix)
   mix->priv = GST_GL_BASE_MIXER_GET_PRIVATE (mix);
 
   gst_gl_base_mixer_reset (mix);
-}
-
-static void
-gst_gl_base_mixer_finalize (GObject * object)
-{
-  GstGLBaseMixer *mix = GST_GL_BASE_MIXER (object);
-
-  if (mix->priv->other_context) {
-    gst_object_unref (mix->priv->other_context);
-    mix->priv->other_context = NULL;
-  }
-
-  G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
 static void
@@ -493,6 +467,7 @@ gst_gl_base_mixer_decide_allocation (GstGLBaseMixer * mix, GstQuery * query)
   _find_local_gl_context (mix);
 
   if (!mix->context) {
+    GST_OBJECT_LOCK (mix->display);
     do {
       if (mix->context)
         gst_object_unref (mix->context);
@@ -506,6 +481,7 @@ gst_gl_base_mixer_decide_allocation (GstGLBaseMixer * mix, GstQuery * query)
           goto context_error;
       }
     } while (!gst_gl_display_add_context (mix->display, mix->context));
+    GST_OBJECT_UNLOCK (mix->display);
   }
 
   if (mix_class->decide_allocation)
@@ -681,11 +657,6 @@ gst_gl_base_mixer_stop (GstAggregator * agg)
     mix->priv->pool = NULL;
   }
 
-  if (mix->display) {
-    gst_object_unref (mix->display);
-    mix->display = NULL;
-  }
-
   if (mix->context) {
     gst_object_unref (mix->context);
     mix->context = NULL;
@@ -724,6 +695,17 @@ gst_gl_base_mixer_change_state (GstElement * element, GstStateChange transition)
     return ret;
 
   switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      if (mix->priv->other_context) {
+        gst_object_unref (mix->priv->other_context);
+        mix->priv->other_context = NULL;
+      }
+
+      if (mix->display) {
+        gst_object_unref (mix->display);
+        mix->display = NULL;
+      }
+      break;
     default:
       break;
   }

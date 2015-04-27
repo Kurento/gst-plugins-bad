@@ -192,7 +192,7 @@ const gchar *fisheye_fragment_source_opengl =
   "  vec2 normcoord;"
   "  normcoord = texturecoord - 0.5;"
   "  float r = length (normcoord);"
-  "  normcoord *= r * sqrt(2);"
+  "  normcoord *= r * sqrt(2.0);"
   "  texturecoord = normcoord + 0.5;"
   "  vec4 color = texture2D (tex, texturecoord);"
   "  gl_FragColor = color;"
@@ -801,6 +801,68 @@ const gchar *difference_fragment_source =
   "vec4 savedcolor = texture2D (saved, gl_TexCoord[0].st);"
   "vec4 currentcolor = texture2D (current, gl_TexCoord[0].st);"
   "gl_FragColor = vec4 (step (0.12, length (savedcolor - currentcolor)));"
+  "}";
+
+/* This filter is meant as a demo of gst-plugins-gl + glsl
+   capabilities. So I'm keeping this shader readable enough. If and
+   when this shader will be used in production be careful to hard code
+   kernel into the shader and remove unneeded zero multiplications in
+   the convolution */
+const gchar *conv9_fragment_source_opengl =
+  "uniform sampler2D tex;"
+  "uniform float kernel[9];"
+  "uniform float width, height;"
+  "uniform bool invert;"
+  "void main () {"
+  "  float w = 1.0 / width;"
+  "  float h = 1.0 / height;"
+  "  vec2 texturecoord[9];"
+  "  texturecoord[4] = gl_TexCoord[0].st;"                /*  0  0 */
+  "  texturecoord[5] = texturecoord[4] + vec2(w,   0.0);" /*  1  0 */
+  "  texturecoord[2] = texturecoord[5] - vec2(0.0, h);"   /*  1 -1 */
+  "  texturecoord[1] = texturecoord[2] - vec2(w,   0.0);" /*  0 -1 */
+  "  texturecoord[0] = texturecoord[1] - vec2(w,   0.0);" /* -1 -1 */
+  "  texturecoord[3] = texturecoord[0] + vec2(0.0, h);"   /* -1  0 */
+  "  texturecoord[6] = texturecoord[3] + vec2(0.0, h);"   /* -1  1 */
+  "  texturecoord[7] = texturecoord[6] + vec2(w,   0.0);" /*  0  1 */
+  "  texturecoord[8] = texturecoord[7] + vec2(w,   0.0);" /*  1  1 */
+  "  int i;"
+  "  vec3 sum = vec3 (0.0);"
+  "  for (i = 0; i < 9; i++) { "
+  "    vec4 neighbor = texture2D (tex, texturecoord[i]);"
+  "    sum += neighbor.xyz * kernel[i];"
+  "  }"
+  "  gl_FragColor = vec4 (abs(sum - vec3(float(invert))), 1.0);"
+  "}";
+
+const gchar *conv9_fragment_source_gles2 =
+  "#ifdef GL_ES\n"
+  "precision mediump float;\n"
+  "#endif\n"
+  "varying vec2 v_texcoord;"
+  "uniform sampler2D tex;"
+  "uniform float kernel[9];"
+  "uniform float width, height;"
+  "void main () {"
+  "  float w = 1.0 / width;"
+  "  float h = 1.0 / height;"
+  "  vec2 texturecoord[9];"
+  "  texturecoord[4] = v_texcoord.xy;"                    /*  0  0 */
+  "  texturecoord[5] = texturecoord[4] + vec2(w,   0.0);" /*  1  0 */
+  "  texturecoord[2] = texturecoord[5] - vec2(0.0, h);"   /*  1 -1 */
+  "  texturecoord[1] = texturecoord[2] - vec2(w,   0.0);" /*  0 -1 */
+  "  texturecoord[0] = texturecoord[1] - vec2(w,   0.0);" /* -1 -1 */
+  "  texturecoord[3] = texturecoord[0] + vec2(0.0, h);"   /* -1  0 */
+  "  texturecoord[6] = texturecoord[3] + vec2(0.0, h);"   /* -1  1 */
+  "  texturecoord[7] = texturecoord[6] + vec2(w,   0.0);" /*  0  1 */
+  "  texturecoord[8] = texturecoord[7] + vec2(w,   0.0);" /*  1  1 */
+  "  int i;"
+  "  vec3 sum = vec3 (0.0);"
+  "  for (i = 0; i < 9; i++) { "
+  "    vec4 neighbor = texture2D (tex, texturecoord[i]);"
+  "    sum += neighbor.xyz * kernel[i];"
+  "  }"
+  "  gl_FragColor = vec4 (abs(sum - vec3(float(invert))), 1.0);"
   "}";
 
 /* *INDENT-ON* */

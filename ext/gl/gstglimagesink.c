@@ -325,8 +325,6 @@ static void gst_glimage_sink_set_property (GObject * object, guint prop_id,
 static void gst_glimage_sink_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * param_spec);
 
-static gboolean gst_glimage_sink_stop (GstBaseSink * bsink);
-
 static gboolean gst_glimage_sink_query (GstBaseSink * bsink, GstQuery * query);
 static void gst_glimage_sink_set_context (GstElement * element,
     GstContext * context);
@@ -547,7 +545,6 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
   gstbasesink_class->get_times = gst_glimage_sink_get_times;
   gstbasesink_class->prepare = gst_glimage_sink_prepare;
   gstbasesink_class->propose_allocation = gst_glimage_sink_propose_allocation;
-  gstbasesink_class->stop = gst_glimage_sink_stop;
 
   gstvideosink_class->show_frame =
       GST_DEBUG_FUNCPTR (gst_glimage_sink_show_frame);
@@ -624,11 +621,6 @@ gst_glimage_sink_finalize (GObject * object)
 
   g_mutex_clear (&glimage_sink->drawing_lock);
 
-  if (glimage_sink->other_context) {
-    gst_object_unref (glimage_sink->other_context);
-    glimage_sink->other_context = NULL;
-  }
-
   g_free (glimage_sink->display_name);
 
   GST_DEBUG ("finalized");
@@ -698,6 +690,7 @@ _ensure_gl_setup (GstGLImageSink * gl_sink)
   GST_DEBUG_OBJECT (gl_sink, "Ensuring setup");
 
   if (!gl_sink->context) {
+    GST_OBJECT_LOCK (gl_sink->display);
     do {
       GstGLContext *other_context;
       GstGLWindow *window;
@@ -770,6 +763,7 @@ _ensure_gl_setup (GstGLImageSink * gl_sink)
         gst_object_unref (other_context);
       gst_object_unref (window);
     } while (!gst_gl_display_add_context (gl_sink->display, gl_sink->context));
+    GST_OBJECT_UNLOCK (gl_sink->display);
   } else
     GST_DEBUG_OBJECT (gl_sink, "Already have a context");
 
@@ -862,19 +856,6 @@ gst_glimage_sink_query (GstBaseSink * bsink, GstQuery * query)
   return res;
 }
 
-static gboolean
-gst_glimage_sink_stop (GstBaseSink * bsink)
-{
-  GstGLImageSink *glimage_sink = GST_GLIMAGE_SINK (bsink);
-
-  if (glimage_sink->pool) {
-    gst_object_unref (glimage_sink->pool);
-    glimage_sink->pool = NULL;
-  }
-
-  return TRUE;
-}
-
 static void
 gst_glimage_sink_set_context (GstElement * element, GstContext * context)
 {
@@ -908,6 +889,9 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
       gst_gl_display_filter_gl_api (glimage_sink->display, SUPPORTED_GL_APIS);
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
+      if (!_ensure_gl_setup (glimage_sink))
+        return GST_STATE_CHANGE_FAILURE;
+
       g_atomic_int_set (&glimage_sink->to_quit, 0);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
@@ -942,6 +926,13 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
 
       GST_VIDEO_SINK_WIDTH (glimage_sink) = 1;
       GST_VIDEO_SINK_HEIGHT (glimage_sink) = 1;
+
+      /* we're losing the context, this pool is no use anymore */
+      if (glimage_sink->pool) {
+        gst_object_unref (glimage_sink->pool);
+        glimage_sink->pool = NULL;
+      }
+
       if (glimage_sink->context) {
         GstGLWindow *window = gst_gl_context_get_window (glimage_sink->context);
 
@@ -963,14 +954,18 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         gst_object_unref (glimage_sink->context);
         glimage_sink->context = NULL;
       }
+      break;
+    }
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      if (glimage_sink->other_context) {
+        gst_object_unref (glimage_sink->other_context);
+        glimage_sink->other_context = NULL;
+      }
 
       if (glimage_sink->display) {
         gst_object_unref (glimage_sink->display);
         glimage_sink->display = NULL;
       }
-      break;
-    }
-    case GST_STATE_CHANGE_READY_TO_NULL:
       break;
     default:
       break;

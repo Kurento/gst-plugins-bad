@@ -273,16 +273,6 @@ gst_gl_base_filter_reset (GstGLBaseFilter * filter)
     gst_object_unref (filter->context);
     filter->context = NULL;
   }
-
-  if (filter->display) {
-    gst_object_unref (filter->display);
-    filter->display = NULL;
-  }
-
-  if (filter->priv->other_context) {
-    gst_object_unref (filter->priv->other_context);
-    filter->priv->other_context = NULL;
-  }
 }
 
 static gboolean
@@ -334,6 +324,7 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
   _find_local_gl_context (filter);
 
   if (!filter->context) {
+    GST_OBJECT_LOCK (filter->display);
     do {
       if (filter->context)
         gst_object_unref (filter->context);
@@ -342,11 +333,15 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
           gst_gl_display_get_gl_context_for_thread (filter->display, NULL);
       if (!filter->context) {
         filter->context = gst_gl_context_new (filter->display);
+        if (!filter->context)
+          goto context_null_error;
+
         if (!gst_gl_context_create (filter->context,
                 filter->priv->other_context, &error))
           goto context_error;
       }
     } while (!gst_gl_display_add_context (filter->display, filter->context));
+    GST_OBJECT_UNLOCK (filter->display);
   }
 
   gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_start,
@@ -360,6 +355,12 @@ context_error:
   {
     GST_ELEMENT_ERROR (trans, RESOURCE, NOT_FOUND, ("%s", error->message),
         (NULL));
+    return FALSE;
+  }
+context_null_error:
+  {
+    GST_ELEMENT_ERROR (trans, RESOURCE, FAILED,
+        ("Failed to create context."), (NULL));
     return FALSE;
   }
 error:
@@ -407,6 +408,17 @@ gst_gl_base_filter_change_state (GstElement * element,
     return ret;
 
   switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      if (filter->priv->other_context) {
+        gst_object_unref (filter->priv->other_context);
+        filter->priv->other_context = NULL;
+      }
+
+      if (filter->display) {
+        gst_object_unref (filter->display);
+        filter->display = NULL;
+      }
+      break;
     default:
       break;
   }

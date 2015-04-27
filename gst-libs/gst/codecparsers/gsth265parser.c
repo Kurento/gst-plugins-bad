@@ -131,6 +131,24 @@ static const guint8 default_scaling_list2[64] = {
   54, 71, 71, 91
 };
 
+static const guint8 zigzag_4x4[16] = {
+  0, 1, 4, 8,
+  5, 2, 3, 6,
+  9, 12, 13, 10,
+  7, 11, 14, 15,
+};
+
+static const guint8 zigzag_8x8[64] = {
+  0, 1, 8, 16, 9, 2, 3, 10,
+  17, 24, 32, 25, 18, 11, 4, 5,
+  12, 19, 26, 33, 40, 48, 41, 34,
+  27, 20, 13, 6, 7, 14, 21, 28,
+  35, 42, 49, 56, 57, 50, 43, 36,
+  29, 22, 15, 23, 30, 37, 44, 51,
+  58, 59, 52, 45, 38, 31, 39, 46,
+  53, 60, 61, 54, 47, 55, 62, 63
+};
+
 typedef struct
 {
   guint par_n, par_d;
@@ -747,9 +765,6 @@ gst_h265_parser_parse_short_term_ref_pic_sets (GstH265ShortTermRefPicSet *
       READ_UINT8 (nr, used_by_curr_pic_flag[j], 1);
       if (!used_by_curr_pic_flag[j])
         READ_UINT8 (nr, use_delta_flag[j], 1);
-
-      if (used_by_curr_pic_flag[j] || use_delta_flag[j])
-        stRPS->NumDeltaPocs++;
     }
 
     /* 7-47: calcuate NumNegativePics, DeltaPocS0 and UsedByCurrPicS0 */
@@ -839,9 +854,11 @@ gst_h265_parser_parse_short_term_ref_pic_sets (GstH265ShortTermRefPicSet *
       }
     }
 
-    /* 7-57 */
-    stRPS->NumDeltaPocs = stRPS->NumPositivePics + stRPS->NumNegativePics;
   }
+
+  /* 7-57 */
+  stRPS->NumDeltaPocs = stRPS->NumPositivePics + stRPS->NumNegativePics;
+
   return TRUE;
 
 error:
@@ -1222,7 +1239,7 @@ gst_h265_parser_identify_nalu_unchecked (GstH265Parser * parser,
 
   if (nalu->type == GST_H265_NAL_EOS || nalu->type == GST_H265_NAL_EOB) {
     GST_DEBUG ("end-of-seq or end-of-stream nal found");
-    nalu->size = 0;
+    nalu->size = 2;
     return GST_H265_PARSER_OK;
   }
 
@@ -2075,24 +2092,25 @@ gst_h265_parser_parse_slice_hdr (GstH265Parser * parser,
             pps->num_ref_idx_l1_default_active_minus1;
       }
 
+      /* calculate NumPocTotalCurr */
+      if (slice->short_term_ref_pic_set_sps_flag)
+        CurrRpsIdx = slice->short_term_ref_pic_set_idx;
+      else
+        CurrRpsIdx = sps->num_short_term_ref_pic_sets;
+      stRPS = &sps->short_term_ref_pic_set[CurrRpsIdx];
+      for (i = 0; i < stRPS->NumNegativePics; i++)
+        if (stRPS->UsedByCurrPicS0[i])
+          NumPocTotalCurr++;
+      for (i = 0; i < stRPS->NumPositivePics; i++)
+        if (stRPS->UsedByCurrPicS1[i])
+          NumPocTotalCurr++;
+      for (i = 0;
+          i < (slice->num_long_term_sps + slice->num_long_term_pics); i++)
+        if (UsedByCurrPicLt[i])
+          NumPocTotalCurr++;
+      slice->NumPocTotalCurr = NumPocTotalCurr;
+
       if (pps->lists_modification_present_flag) {
-        /* calculate NumPocTotalCurr */
-        if (slice->short_term_ref_pic_set_sps_flag)
-          CurrRpsIdx = slice->short_term_ref_pic_set_idx;
-        else
-          CurrRpsIdx = sps->num_short_term_ref_pic_sets;
-        stRPS = &sps->short_term_ref_pic_set[CurrRpsIdx];
-        for (i = 0; i < stRPS->NumNegativePics; i++)
-          if (stRPS->UsedByCurrPicS0[i])
-            NumPocTotalCurr++;
-        for (i = 0; i < stRPS->NumPositivePics; i++)
-          if (stRPS->UsedByCurrPicS1[i])
-            NumPocTotalCurr++;
-        for (i = 0;
-            i < (slice->num_long_term_sps + slice->num_long_term_pics); i++)
-          if (UsedByCurrPicLt[i])
-            NumPocTotalCurr++;
-        slice->NumPocTotalCurr = NumPocTotalCurr;
         if (NumPocTotalCurr > 1)
           if (!gst_h265_slice_parse_ref_pic_list_modification (slice, &nr,
                   NumPocTotalCurr))
@@ -2183,6 +2201,14 @@ gst_h265_parser_parse_slice_hdr (GstH265Parser * parser,
     for (i = 0; i < slice_segment_header_extension_length; i++)
       if (!nal_reader_skip (&nr, 8))
         goto error;
+  }
+
+  /* Skip the byte alignment bits */
+  if (!nal_reader_skip (&nr, 1))
+    goto error;
+  while (!nal_reader_is_byte_aligned (&nr)) {
+    if (!nal_reader_skip (&nr, 1))
+      goto error;
   }
 
   slice->header_size = nal_reader_get_pos (&nr);
@@ -2376,4 +2402,104 @@ gst_h265_sei_free (GstH265SEIMessage * sei)
     pic_timing->num_nalus_in_du_minus1 = 0;
     pic_timing->du_cpb_removal_delay_increment_minus1 = 0;
   }
+}
+
+/**
+ * gst_h265_quant_matrix_4x4_get_zigzag_from_raster:
+ * @out_quant: (out): The resulting quantization matrix
+ * @quant: The source quantization matrix
+ *
+ * Converts quantization matrix @quant from raster scan order to
+ * zigzag scan order and store the resulting factors into @out_quant.
+ *
+ * Note: it is an error to pass the same table in both @quant and
+ * @out_quant arguments.
+ *
+ * Since: 1.6
+ */
+void
+gst_h265_quant_matrix_4x4_get_zigzag_from_raster (guint8 out_quant[16],
+    const guint8 quant[16])
+{
+  guint i;
+
+  g_return_if_fail (out_quant != quant);
+
+  for (i = 0; i < 16; i++)
+    out_quant[i] = quant[zigzag_4x4[i]];
+}
+
+/**
+ * gst_h265_quant_matrix_4x4_get_raster_from_zigzag:
+ * @out_quant: (out): The resulting quantization matrix
+ * @quant: The source quantization matrix
+ *
+ * Converts quantization matrix @quant from zigzag scan order to
+ * raster scan order and store the resulting factors into @out_quant.
+ *
+ * Note: it is an error to pass the same table in both @quant and
+ * @out_quant arguments.
+ *
+ * Since: 1.6
+ */
+void
+gst_h265_quant_matrix_4x4_get_raster_from_zigzag (guint8 out_quant[16],
+    const guint8 quant[16])
+{
+  guint i;
+
+  g_return_if_fail (out_quant != quant);
+
+  for (i = 0; i < 16; i++)
+    out_quant[zigzag_4x4[i]] = quant[i];
+}
+
+/**
+ * gst_h265_quant_matrix_8x8_get_zigzag_from_raster:
+ * @out_quant: (out): The resulting quantization matrix
+ * @quant: The source quantization matrix
+ *
+ * Converts quantization matrix @quant from raster scan order to
+ * zigzag scan order and store the resulting factors into @out_quant.
+ *
+ * Note: it is an error to pass the same table in both @quant and
+ * @out_quant arguments.
+ *
+ * Since: 1.6
+ */
+void
+gst_h265_quant_matrix_8x8_get_zigzag_from_raster (guint8 out_quant[64],
+    const guint8 quant[64])
+{
+  guint i;
+
+  g_return_if_fail (out_quant != quant);
+
+  for (i = 0; i < 64; i++)
+    out_quant[i] = quant[zigzag_8x8[i]];
+}
+
+/**
+ * gst_h265_quant_matrix_8x8_get_raster_from_zigzag:
+ * @out_quant: (out): The resulting quantization matrix
+ * @quant: The source quantization matrix
+ *
+ * Converts quantization matrix @quant from zigzag scan order to
+ * raster scan order and store the resulting factors into @out_quant.
+ *
+ * Note: it is an error to pass the same table in both @quant and
+ * @out_quant arguments.
+ *
+ * Since: 1.6
+ */
+void
+gst_h265_quant_matrix_8x8_get_raster_from_zigzag (guint8 out_quant[64],
+    const guint8 quant[64])
+{
+  guint i;
+
+  g_return_if_fail (out_quant != quant);
+
+  for (i = 0; i < 64; i++)
+    out_quant[zigzag_8x8[i]] = quant[i];
 }

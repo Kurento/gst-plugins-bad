@@ -100,8 +100,7 @@ static gint64 gst_hls_demux_get_manifest_update_interval (GstAdaptiveDemux *
     demux);
 static gboolean gst_hls_demux_process_manifest (GstAdaptiveDemux * demux,
     GstBuffer * buf);
-static GstFlowReturn gst_hls_demux_update_manifest (GstAdaptiveDemux * demux,
-    GstBuffer * buf);
+static GstFlowReturn gst_hls_demux_update_manifest (GstAdaptiveDemux * demux);
 static gboolean gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek);
 static gboolean
 gst_hls_demux_start_fragment (GstAdaptiveDemux * demux,
@@ -129,11 +128,6 @@ static void
 gst_hls_demux_dispose (GObject * obj)
 {
   GstHLSDemux *demux = GST_HLS_DEMUX (obj);
-
-  if (demux->downloader != NULL) {
-    g_object_unref (demux->downloader);
-    demux->downloader = NULL;
-  }
 
   gst_hls_demux_reset (GST_ADAPTIVE_DEMUX_CAST (demux));
   gst_m3u8_client_free (demux->client);
@@ -207,11 +201,7 @@ gst_hls_demux_class_init (GstHLSDemuxClass * klass)
 static void
 gst_hls_demux_init (GstHLSDemux * demux)
 {
-  /* Downloader */
-  demux->downloader = gst_uri_downloader_new ();
-
   demux->do_typefind = TRUE;
-
 }
 
 static void
@@ -250,7 +240,6 @@ gst_hls_demux_change_state (GstElement * element, GstStateChange transition)
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       gst_hls_demux_reset (GST_ADAPTIVE_DEMUX_CAST (demux));
-      gst_uri_downloader_reset (demux->downloader);
       break;
     default:
       break;
@@ -307,7 +296,7 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
   GstSeekType start_type, stop_type;
   gint64 start, stop;
   gdouble rate;
-  GList *walk;
+  GList *walk, *current_file = NULL;
   GstClockTime current_pos, target_pos;
   gint64 current_sequence;
   GstM3U8MediaFile *file;
@@ -335,7 +324,7 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
     GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
     gst_m3u8_client_set_current (hlsdemux->client,
         hlsdemux->client->main->iframe_lists->data);
-    gst_uri_downloader_reset (hlsdemux->downloader);
+    gst_uri_downloader_reset (demux->downloader);
     if (!gst_hls_demux_update_playlist (hlsdemux, FALSE, &err)) {
       GST_ELEMENT_ERROR_FROM_ERROR (hlsdemux, "Could not switch playlist", err);
       return FALSE;
@@ -354,7 +343,7 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
     GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
     gst_m3u8_client_set_current (hlsdemux->client,
         hlsdemux->client->main->lists->data);
-    gst_uri_downloader_reset (hlsdemux->downloader);
+    gst_uri_downloader_reset (demux->downloader);
     if (!gst_hls_demux_update_playlist (hlsdemux, FALSE, &err)) {
       GST_ELEMENT_ERROR_FROM_ERROR (hlsdemux, "Could not switch playlist", err);
       return FALSE;
@@ -376,22 +365,23 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
     file = walk->data;
 
     current_sequence = file->sequence;
+    current_file = walk;
     if (current_pos <= target_pos && target_pos < current_pos + file->duration) {
       break;
     }
     current_pos += file->duration;
   }
-  GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
 
   if (walk == NULL) {
     GST_DEBUG_OBJECT (demux, "seeking further than track duration");
     current_sequence++;
   }
 
-  GST_M3U8_CLIENT_LOCK (hlsdemux->client);
   GST_DEBUG_OBJECT (demux, "seeking to sequence %u", (guint) current_sequence);
   hlsdemux->reset_pts = TRUE;
   hlsdemux->client->sequence = current_sequence;
+  hlsdemux->client->current_file =
+      current_file ? current_file : hlsdemux->client->current->files;
   hlsdemux->client->sequence_position = current_pos;
   GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
 
@@ -399,7 +389,7 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
 }
 
 static GstFlowReturn
-gst_hls_demux_update_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
+gst_hls_demux_update_manifest (GstAdaptiveDemux * demux)
 {
   GstHLSDemux *hlsdemux = GST_HLS_DEMUX_CAST (demux);
   if (!gst_hls_demux_update_playlist (hlsdemux, TRUE, NULL))
@@ -514,7 +504,7 @@ gst_hls_demux_start_fragment (GstAdaptiveDemux * demux,
 
       GST_INFO_OBJECT (demux, "Fetching key %s", hlsdemux->current_key);
       key_fragment =
-          gst_uri_downloader_fetch_uri (hlsdemux->downloader,
+          gst_uri_downloader_fetch_uri (demux->downloader,
           hlsdemux->current_key, hlsdemux->client->main ?
           hlsdemux->client->main->uri : NULL, FALSE, FALSE,
           hlsdemux->client->current ? hlsdemux->client->current->
@@ -544,10 +534,71 @@ key_failed:
 }
 
 static GstFlowReturn
+gst_hls_demux_handle_buffer (GstAdaptiveDemux * demux,
+    GstAdaptiveDemuxStream * stream, GstBuffer * buffer, gboolean force)
+{
+  GstHLSDemux *hlsdemux = GST_HLS_DEMUX_CAST (demux);
+
+  if (G_UNLIKELY (hlsdemux->do_typefind && buffer != NULL)) {
+    GstCaps *caps = NULL;
+    GstMapInfo info;
+    guint buffer_size;
+    GstTypeFindProbability prob = GST_TYPE_FIND_NONE;
+
+    gst_buffer_map (buffer, &info, GST_MAP_READ);
+    buffer_size = info.size;
+
+    /* Typefind could miss if buffer is too small. In this case we
+     * will retry later */
+    if (buffer_size >= (2 * 1024)) {
+      caps =
+          gst_type_find_helper_for_data (GST_OBJECT_CAST (hlsdemux), info.data,
+          info.size, &prob);
+    }
+    gst_buffer_unmap (buffer, &info);
+
+    if (G_UNLIKELY (!caps)) {
+      /* Only fail typefinding if we already a good amount of data
+       * and we still don't know the type */
+      if (buffer_size > (2 * 1024 * 1024) || force) {
+        GST_ELEMENT_ERROR (hlsdemux, STREAM, TYPE_NOT_FOUND,
+            ("Could not determine type of stream"), (NULL));
+        gst_buffer_unref (buffer);
+        return GST_FLOW_NOT_NEGOTIATED;
+      } else {
+        if (hlsdemux->pending_buffer)
+          hlsdemux->pending_buffer =
+              gst_buffer_append (buffer, hlsdemux->pending_buffer);
+        else
+          hlsdemux->pending_buffer = buffer;
+        return GST_FLOW_OK;
+      }
+    }
+
+    GST_DEBUG_OBJECT (hlsdemux, "Typefind result: %" GST_PTR_FORMAT " prob:%d",
+        caps, prob);
+
+    if (!hlsdemux->input_caps
+        || !gst_caps_is_equal (caps, hlsdemux->input_caps)) {
+      gst_caps_replace (&hlsdemux->input_caps, caps);
+      GST_INFO_OBJECT (demux, "Input source caps: %" GST_PTR_FORMAT,
+          hlsdemux->input_caps);
+    }
+    gst_adaptive_demux_stream_set_caps (stream, caps);
+    hlsdemux->do_typefind = FALSE;
+  }
+
+  if (buffer)
+    return gst_adaptive_demux_stream_push_buffer (stream, buffer);
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
 gst_hls_demux_finish_fragment (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream)
 {
   GstHLSDemux *hlsdemux = GST_HLS_DEMUX_CAST (demux);
+  GstFlowReturn ret = GST_FLOW_OK;
 
   if (hlsdemux->current_key)
     gst_hls_demux_decrypt_end (hlsdemux);
@@ -558,20 +609,24 @@ gst_hls_demux_finish_fragment (GstAdaptiveDemux * demux,
       ": %" G_GSIZE_FORMAT, gst_adapter_available (stream->adapter));
   gst_adapter_clear (stream->adapter);
 
-  /* pending buffer is only used for encrypted streams */
   if (stream->last_ret == GST_FLOW_OK) {
     if (hlsdemux->pending_buffer) {
-      GstMapInfo info;
-      gsize unpadded_size;
+      if (hlsdemux->current_key) {
+        GstMapInfo info;
+        gssize unpadded_size;
 
-      /* Handle pkcs7 unpadding here */
-      gst_buffer_map (hlsdemux->pending_buffer, &info, GST_MAP_READ);
-      unpadded_size = info.size - info.data[info.size - 1];
-      gst_buffer_unmap (hlsdemux->pending_buffer, &info);
+        /* Handle pkcs7 unpadding here */
+        gst_buffer_map (hlsdemux->pending_buffer, &info, GST_MAP_READ);
+        unpadded_size = info.size - info.data[info.size - 1];
+        gst_buffer_unmap (hlsdemux->pending_buffer, &info);
 
-      gst_buffer_resize (hlsdemux->pending_buffer, 0, unpadded_size);
+        gst_buffer_resize (hlsdemux->pending_buffer, 0, unpadded_size);
+      }
 
-      gst_adaptive_demux_stream_push_buffer (stream, hlsdemux->pending_buffer);
+      ret =
+          gst_hls_demux_handle_buffer (demux, stream, hlsdemux->pending_buffer,
+          TRUE);
+      hlsdemux->pending_buffer = NULL;
     }
   } else {
     if (hlsdemux->pending_buffer)
@@ -579,8 +634,10 @@ gst_hls_demux_finish_fragment (GstAdaptiveDemux * demux,
     hlsdemux->pending_buffer = NULL;
   }
 
-  return gst_adaptive_demux_stream_advance_fragment (demux, stream,
-      stream->fragment.duration);
+  if (ret == GST_FLOW_OK || ret == GST_FLOW_NOT_LINKED)
+    return gst_adaptive_demux_stream_advance_fragment (demux, stream,
+        stream->fragment.duration);
+  return ret;
 }
 
 static GstFlowReturn
@@ -625,59 +682,7 @@ gst_hls_demux_data_received (GstAdaptiveDemux * demux,
     }
   }
 
-  if (G_UNLIKELY (hlsdemux->do_typefind && buffer != NULL)) {
-    GstCaps *caps = NULL;
-    GstMapInfo info;
-    guint buffer_size;
-    GstTypeFindProbability prob = GST_TYPE_FIND_NONE;
-
-    gst_buffer_map (buffer, &info, GST_MAP_READ);
-    buffer_size = info.size;
-
-    /* Typefind could miss if buffer is too small. In this case we
-     * will retry later */
-    if (buffer_size >= (2 * 1024)) {
-      caps =
-          gst_type_find_helper_for_data (GST_OBJECT_CAST (hlsdemux), info.data,
-          info.size, &prob);
-    }
-    gst_buffer_unmap (buffer, &info);
-
-    if (G_UNLIKELY (!caps)) {
-      /* Only fail typefinding if we already a good amount of data
-       * and we still don't know the type */
-      if (buffer_size > (2 * 1024 * 1024)) {
-        GST_ELEMENT_ERROR (hlsdemux, STREAM, TYPE_NOT_FOUND,
-            ("Could not determine type of stream"), (NULL));
-        gst_buffer_unref (buffer);
-        return GST_FLOW_NOT_NEGOTIATED;
-      } else {
-        if (hlsdemux->pending_buffer)
-          hlsdemux->pending_buffer =
-              gst_buffer_append (buffer, hlsdemux->pending_buffer);
-        else
-          hlsdemux->pending_buffer = buffer;
-        return GST_FLOW_OK;
-      }
-    }
-
-    GST_DEBUG_OBJECT (hlsdemux, "Typefind result: %" GST_PTR_FORMAT " prob:%d",
-        caps, prob);
-
-    if (!hlsdemux->input_caps
-        || !gst_caps_is_equal (caps, hlsdemux->input_caps)) {
-      gst_caps_replace (&hlsdemux->input_caps, caps);
-      GST_INFO_OBJECT (demux, "Input source caps: %" GST_PTR_FORMAT,
-          hlsdemux->input_caps);
-    }
-    gst_adaptive_demux_stream_set_caps (stream, caps);
-    hlsdemux->do_typefind = FALSE;
-  }
-
-  if (buffer) {
-    return gst_adaptive_demux_stream_push_buffer (stream, buffer);
-  }
-  return GST_FLOW_OK;
+  return gst_hls_demux_handle_buffer (demux, stream, buffer, FALSE);
 }
 
 static gboolean
@@ -852,6 +857,7 @@ static gboolean
 gst_hls_demux_update_playlist (GstHLSDemux * demux, gboolean update,
     GError ** err)
 {
+  GstAdaptiveDemux *adaptive_demux = GST_ADAPTIVE_DEMUX (demux);
   GstFragment *download;
   GstBuffer *buf;
   gchar *playlist;
@@ -862,7 +868,7 @@ retry:
   uri = gst_m3u8_client_get_current_uri (demux->client);
   main_uri = gst_m3u8_client_get_uri (demux->client);
   download =
-      gst_uri_downloader_fetch_uri (demux->downloader, uri, main_uri,
+      gst_uri_downloader_fetch_uri (adaptive_demux->downloader, uri, main_uri,
       TRUE, TRUE, TRUE, err);
   g_free (main_uri);
   if (download == NULL) {
@@ -875,7 +881,7 @@ retry:
           "Updating playlist %s failed, attempt to refresh variant playlist %s",
           uri, main_uri);
       download =
-          gst_uri_downloader_fetch_uri (demux->downloader,
+          gst_uri_downloader_fetch_uri (adaptive_demux->downloader,
           main_uri, NULL, TRUE, TRUE, TRUE, &err2);
       g_free (main_uri);
       g_clear_error (&err2);

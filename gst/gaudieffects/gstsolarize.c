@@ -88,7 +88,6 @@ enum
   PROP_THRESHOLD,
   PROP_START,
   PROP_END,
-  PROP_SILENT
 };
 
 /* Initializations */
@@ -168,10 +167,6 @@ gst_solarize_class_init (GstSolarizeClass * klass)
           "End parameter", 0, 256, DEFAULT_END,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_CONTROLLABLE));
 
-  g_object_class_install_property (gobject_class, PROP_SILENT,
-      g_param_spec_boolean ("silent", "Silent", "Produce verbose output ?",
-          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
   vfilter_class->transform_frame =
       GST_DEBUG_FUNCPTR (gst_solarize_transform_frame);
 }
@@ -187,7 +182,6 @@ gst_solarize_init (GstSolarize * filter)
   filter->threshold = DEFAULT_THRESHOLD;
   filter->start = DEFAULT_START;
   filter->end = DEFAULT_END;
-  filter->silent = FALSE;
 }
 
 static void
@@ -197,9 +191,6 @@ gst_solarize_set_property (GObject * object, guint prop_id,
   GstSolarize *filter = GST_SOLARIZE (object);
 
   switch (prop_id) {
-    case PROP_SILENT:
-      filter->silent = g_value_get_boolean (value);
-      break;
     case PROP_THRESHOLD:
       filter->threshold = g_value_get_uint (value);
       break;
@@ -223,9 +214,6 @@ gst_solarize_get_property (GObject * object, guint prop_id,
 
   GST_OBJECT_LOCK (filter);
   switch (prop_id) {
-    case PROP_SILENT:
-      g_value_set_boolean (value, filter->silent);
-      break;
     case PROP_THRESHOLD:
       g_value_set_uint (value, filter->threshold);
       break;
@@ -315,10 +303,7 @@ transform (guint32 * src, guint32 * dest, gint video_area,
   gint period = 1, up_length = 1, down_length = 1;
   gint x, c;
   gint param;
-  static const guint floor = 0;
   static const guint ceiling = 255;
-
-
 
   if (end != start)
     period = end - start;
@@ -347,12 +332,10 @@ transform (guint32 * src, guint32 * dest, gint video_area,
       if (param < up_length) {
         color[c] = param * ceiling;
         color[c] /= up_length;
-        color[c] += floor;
       } else {
         color[c] = down_length - (param - up_length);
         color[c] *= ceiling;
         color[c] /= down_length;
-        color[c] += floor;
       }
     }
 

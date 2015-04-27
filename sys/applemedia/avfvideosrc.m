@@ -83,6 +83,7 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
   AVCaptureInput *input;
   AVCaptureVideoDataOutput *output;
   AVCaptureDevice *device;
+  AVCaptureConnection *connection;
   CMClockRef inputClock;
 
   dispatch_queue_t mainQueue;
@@ -92,12 +93,11 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
   BOOL stopRequest;
 
   GstCaps *caps;
+  GstVideoFormat internalFormat;
   GstVideoFormat format;
   gint width, height;
   GstClockTime latency;
   guint64 offset;
-  GstClockTime startAVFTimestamp;
-  GstClockTime startTimestamp;
 
   GstClockTime lastSampling;
   guint count;
@@ -298,6 +298,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     [session addInput:input];
     [session addOutput:output];
 
+    /* retained by session */
+    connection = [[output connections] firstObject];
+    inputClock = ((AVCaptureInputPort *)connection.inputPorts[0]).clock;
+
     *successPtr = YES;
   });
 
@@ -312,6 +316,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
   dispatch_sync (mainQueue, ^{
     g_assert (![session isRunning]);
+
+    connection = nil;
+    inputClock = nil;
 
     [session removeInput:input];
     [session removeOutput:output];
@@ -458,7 +465,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
           gdouble max_frame_rate;
 
           [[rate valueForKey:@"maxFrameRate"] getValue:&max_frame_rate];
-          if (abs (framerate - max_frame_rate) < 0.00001) {
+          if (fabs (framerate - max_frame_rate) < 0.00001) {
             NSValue *min_frame_duration, *max_frame_duration;
 
             found_framerate = TRUE;
@@ -619,6 +626,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   width = info.width;
   height = info.height;
   format = info.finfo->format;
+  internalFormat = GST_VIDEO_FORMAT_UNKNOWN;
   latency = gst_util_uint64_scale (GST_SECOND, info.fps_d, info.fps_n);
 
   dispatch_sync (mainQueue, ^{
@@ -658,22 +666,28 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
       }
     }
 
+    internalFormat = format;
     switch (format) {
       case GST_VIDEO_FORMAT_NV12:
         newformat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         break;
       case GST_VIDEO_FORMAT_UYVY:
-         newformat = kCVPixelFormatType_422YpCbCr8;
+        newformat = kCVPixelFormatType_422YpCbCr8;
         break;
       case GST_VIDEO_FORMAT_YUY2:
-         newformat = kCVPixelFormatType_422YpCbCr8_yuvs;
+        newformat = kCVPixelFormatType_422YpCbCr8_yuvs;
         break;
       case GST_VIDEO_FORMAT_RGBA:
-        /* In order to do RGBA, we negotiate BGRA (since RGBA is not supported
-         * if not in textures) and then we get RGBA textures via
-         * CVOpenGL*TextureCacheCreateTextureFromImage. Computers. */
+#if !HAVE_IOS
+        newformat = kCVPixelFormatType_422YpCbCr8;
+        internalFormat = GST_VIDEO_FORMAT_UYVY;
+#else
+        newformat = kCVPixelFormatType_32BGRA;
+        internalFormat = GST_VIDEO_FORMAT_BGRA;
+#endif
+        break;
       case GST_VIDEO_FORMAT_BGRA:
-         newformat = kCVPixelFormatType_32BGRA;
+        newformat = kCVPixelFormatType_32BGRA;
         break;
       default:
         *successPtr = NO;
@@ -682,10 +696,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         return;
     }
 
-    GST_DEBUG_OBJECT(element,
-       "Width: %d Height: %d Format: %" GST_FOURCC_FORMAT,
-       width, height,
-       GST_FOURCC_ARGS (gst_video_format_to_fourcc (format)));
+    GST_INFO_OBJECT(element,
+        "width: %d height: %d format: %s internalFormat: %s", width, height,
+        gst_video_format_to_string (format),
+        gst_video_format_to_string (internalFormat));
 
     output.videoSettings = [NSDictionary
         dictionaryWithObject:[NSNumber numberWithInt:newformat]
@@ -712,9 +726,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
   offset = 0;
   latency = GST_CLOCK_TIME_NONE;
-  startAVFTimestamp = GST_CLOCK_TIME_NONE;
-  startTimestamp = GST_CLOCK_TIME_NONE;
-  inputClock = nil;
 
   lastSampling = GST_CLOCK_TIME_NONE;
   count = 0;
@@ -732,7 +743,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   bufQueueLock = nil;
   [bufQueue release];
   bufQueue = nil;
-  inputClock = nil;
 
   if (textureCache)
       gst_core_video_texture_cache_free (textureCache);
@@ -769,28 +779,34 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   useVideoMeta = gst_query_find_allocation_meta (query,
       GST_VIDEO_META_API_TYPE, NULL);
 
-  guint idx;
-  if (gst_query_find_allocation_meta (query,
-        GST_VIDEO_GL_TEXTURE_UPLOAD_META_API_TYPE, &idx)) {
-    GstGLContext *context;
-    const GstStructure *upload_meta_params;
+  /* determine whether we can pass GL textures to downstream element */
+  GstCapsFeatures *features = gst_caps_get_features (caps, 0);
+  if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
+    GstGLContext *glContext = NULL;
 
-    gst_query_parse_nth_allocation_meta (query, idx, &upload_meta_params);
-    if (gst_structure_get (upload_meta_params, "gst.gl.GstGLContext",
-          GST_GL_TYPE_CONTEXT, &context, NULL) && context) {
-      GstCaps *query_caps;
-      GstCapsFeatures *features;
-
-      gst_query_parse_allocation (query, &query_caps, NULL);
-      features = gst_caps_get_features (query_caps, 0);
-      if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
-        textureCache = gst_core_video_texture_cache_new (context);
-        gst_core_video_texture_cache_set_format (textureCache,
-            "NV12", query_caps);
+    /* get GL context from downstream element */
+    GstQuery *query = gst_query_new_context ("gst.gl.local_context");
+    if (gst_pad_peer_query (GST_BASE_SRC_PAD (element), query)) {
+      GstContext *context;
+      gst_query_parse_context (query, &context);
+      if (context) {
+        const GstStructure *s = gst_context_get_structure (context);
+        gst_structure_get (s, "context", GST_GL_TYPE_CONTEXT, &glContext,
+            NULL);
       }
-      gst_object_unref (context);
     }
-  }
+    gst_query_unref (query);
+
+    if (glContext) {
+      GST_INFO_OBJECT (element, "pushing textures. Internal format %s, context %p",
+          gst_video_format_to_string (internalFormat), glContext);
+      textureCache = gst_core_video_texture_cache_new (glContext);
+      gst_core_video_texture_cache_set_format (textureCache, internalFormat, caps);
+      gst_object_unref (glContext);
+    } else {
+      GST_WARNING_OBJECT (element, "got memory:GLMemory caps but not GL context from downstream element");
+    }
+  } 
 
   return YES;
 }
@@ -832,7 +848,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
 - (void)captureOutput:(AVCaptureOutput *)captureOutput
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
-       fromConnection:(AVCaptureConnection *)connection
+       fromConnection:(AVCaptureConnection *)aConnection
 {
   GstClockTime timestamp, duration;
 
@@ -843,9 +859,12 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     return;
   }
 
-  if (inputClock == nil)
-    inputClock = ((AVCaptureInputPort *)connection.inputPorts[0]).clock;
   [self getSampleBuffer:sampleBuffer timestamp:&timestamp duration:&duration];
+
+  if (timestamp == GST_CLOCK_TIME_NONE) {
+    [bufQueueLock unlock];
+    return;
+  }
 
   if ([bufQueue count] == BUFFER_QUEUE_SIZE)
     [bufQueue removeLastObject];
@@ -903,6 +922,11 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   }
 
   *buf = gst_core_media_buffer_new (sbuf, useVideoMeta, textureCache == NULL);
+  if (*buf == NULL) {
+    CFRelease (sbuf);
+    return GST_FLOW_ERROR;
+  }
+
   if (format == GST_VIDEO_FORMAT_RGBA) {
     /* So now buf contains BGRA data (!) . Since downstream is actually going to
      * use the GL upload meta to get RGBA textures (??), we need to override the
@@ -914,8 +938,11 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   }
   CFRelease (sbuf);
 
-  if (textureCache != NULL)
+  if (textureCache != NULL) {
     *buf = gst_core_video_texture_cache_get_gl_buffer (textureCache, *buf);
+    if (*buf == NULL)
+      return GST_FLOW_ERROR;
+  }
 
   GST_BUFFER_OFFSET (*buf) = offset++;
   GST_BUFFER_OFFSET_END (*buf) = GST_BUFFER_OFFSET (*buf) + 1;
@@ -933,7 +960,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                duration:(GstClockTime *)outDuration
 {
   CMSampleTimingInfo time_info;
-  GstClockTime timestamp, duration, inputClockNow, running_time;
+  GstClockTime timestamp, avf_timestamp, duration, input_clock_now, input_clock_diff, running_time;
   CMItemCount num_timings;
   GstClock *clock;
   CMTime now;
@@ -941,7 +968,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   timestamp = GST_CLOCK_TIME_NONE;
   duration = GST_CLOCK_TIME_NONE;
   if (CMSampleBufferGetOutputSampleTimingInfoArray(sbuf, 1, &time_info, &num_timings) == noErr) {
-    timestamp = gst_util_uint64_scale (GST_SECOND,
+    avf_timestamp = gst_util_uint64_scale (GST_SECOND,
             time_info.presentationTimeStamp.value, time_info.presentationTimeStamp.timescale);
 
     if (CMTIME_IS_VALID (time_info.duration) && time_info.duration.timescale != 0)
@@ -949,13 +976,34 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
           time_info.duration.value, time_info.duration.timescale);
 
     now = CMClockGetTime(inputClock);
-    inputClockNow = gst_util_uint64_scale (GST_SECOND,
+    input_clock_now = gst_util_uint64_scale (GST_SECOND,
         now.value, now.timescale);
+    input_clock_diff = input_clock_now - avf_timestamp;
 
     GST_OBJECT_LOCK (element);
     clock = GST_ELEMENT_CLOCK (element);
-    running_time = gst_clock_get_time (clock) - element->base_time;
-    timestamp = running_time + (inputClockNow - timestamp);
+    if (clock) {
+      running_time = gst_clock_get_time (clock) - element->base_time;
+      /* We use presentationTimeStamp to determine how much time it took
+       * between capturing and receiving the frame in our delegate
+       * (e.g. how long it spent in AVF queues), then we subtract that time
+       * from our running time to get the actual timestamp.
+       */
+      if (running_time >= input_clock_diff)
+        timestamp = running_time - input_clock_diff;
+      else
+        timestamp = running_time;
+
+      GST_DEBUG_OBJECT (element, "AVF clock: %"GST_TIME_FORMAT ", AVF PTS: %"GST_TIME_FORMAT
+          ", AVF clock diff: %"GST_TIME_FORMAT
+          ", running time: %"GST_TIME_FORMAT ", out PTS: %"GST_TIME_FORMAT,
+          GST_TIME_ARGS (input_clock_now), GST_TIME_ARGS (avf_timestamp),
+          GST_TIME_ARGS (input_clock_diff),
+          GST_TIME_ARGS (running_time), GST_TIME_ARGS (timestamp));
+    } else {
+      /* no clock, can't set timestamps */
+      timestamp = GST_CLOCK_TIME_NONE;
+    }
     GST_OBJECT_UNLOCK (element);
   }
 

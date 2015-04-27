@@ -26,7 +26,6 @@
 
 G_BEGIN_DECLS
 
-
 #define GST_TYPE_GL_EFFECTS            (gst_gl_effects_get_type())
 #define GST_GL_EFFECTS(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_GL_EFFECTS,GstGLEffects))
 #define GST_IS_GL_EFFECTS(obj)         (G_TYPE_CHECK_INSTANCE_TYPE((obj), GST_TYPE_GL_EFFECTS))
@@ -42,6 +41,12 @@ G_BEGIN_DECLS
 
 typedef struct _GstGLEffects GstGLEffects;
 typedef struct _GstGLEffectsClass GstGLEffectsClass;
+
+typedef struct {
+  gint effect;
+  guint supported_properties;
+  const gchar *filter_name;
+} GstGLEffectsFilterDescriptor;
 
 typedef void (* GstGLEffectProcessFunc) (GstGLEffects *effects);
 
@@ -72,22 +77,17 @@ struct _GstGLEffects
   GHashTable *shaderstable;
 
   gboolean horizontal_swap; /* switch left to right */
+  gboolean invert; /* colours */
 };
 
 struct _GstGLEffectsClass
 {
   GstGLFilterClass filter_class;
+  const GstGLEffectsFilterDescriptor *filter_descriptor;
 };
-
-enum
-{
-  PROP_0,
-  PROP_EFFECT,
-  PROP_HSWAP
-};
-
 
 GType gst_gl_effects_get_type (void);
+gboolean gst_gl_effects_register_filters (GstPlugin *, GstRank);
 GstGLShader* gst_gl_effects_get_fragment_shader (GstGLEffects *effects,
     const gchar * shader_name, const gchar * shader_source_gles2, const gchar * shader_source_opengl);
 
@@ -107,6 +107,9 @@ void gst_gl_effects_xray (GstGLEffects *effects);
 void gst_gl_effects_luma_xpro (GstGLEffects *effects);
 void gst_gl_effects_sin (GstGLEffects *effects);
 void gst_gl_effects_glow (GstGLEffects *effects);
+void gst_gl_effects_sobel (GstGLEffects *effects);
+void gst_gl_effects_blur (GstGLEffects *effects);
+void gst_gl_effects_laplacian (GstGLEffects *effects);
 
 G_END_DECLS
 

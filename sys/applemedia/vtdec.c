@@ -198,37 +198,48 @@ static gboolean
 gst_vtdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
 {
   gboolean ret;
+  GstCaps *caps;
+  GstCapsFeatures *features;
   GstVtdec *vtdec = GST_VTDEC (decoder);
 
   ret =
       GST_VIDEO_DECODER_CLASS (gst_vtdec_parent_class)->decide_allocation
       (decoder, query);
-  if (ret) {
-    GstCaps *caps;
-    GstCapsFeatures *features;
-    guint idx;
+  if (!ret)
+    goto out;
 
-    gst_query_parse_allocation (query, &caps, NULL);
-    if (caps) {
-      features = gst_caps_get_features (caps, 0);
+  gst_query_parse_allocation (query, &caps, NULL);
+  if (caps) {
+    GstGLContext *gl_context = NULL;
+    features = gst_caps_get_features (caps, 0);
 
-      if (gst_caps_features_contains (features,
-              GST_CAPS_FEATURE_MEMORY_GL_MEMORY)
-          && gst_query_find_allocation_meta (query,
-              GST_VIDEO_GL_TEXTURE_UPLOAD_META_API_TYPE, &idx)) {
-        GstGLContext *context;
-        const GstStructure *upload_meta_params;
+    if (gst_caps_features_contains (features,
+            GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
+      GstContext *context = NULL;
+      GstQuery *query = gst_query_new_context ("gst.gl.local_context");
+      if (gst_pad_peer_query (GST_VIDEO_DECODER_SRC_PAD (decoder), query)) {
 
-        gst_query_parse_nth_allocation_meta (query, idx, &upload_meta_params);
-        if (gst_structure_get (upload_meta_params, "gst.gl.GstGLContext",
-                GST_GL_TYPE_CONTEXT, &context, NULL) && context) {
-          vtdec->texture_cache = gst_core_video_texture_cache_new (context);
-          gst_object_unref (context);
+        gst_query_parse_context (query, &context);
+        if (context) {
+          const GstStructure *s = gst_context_get_structure (context);
+          gst_structure_get (s, "context", GST_GL_TYPE_CONTEXT, &gl_context,
+              NULL);
         }
+      }
+      gst_query_unref (query);
+
+      if (context) {
+        GST_INFO_OBJECT (decoder, "pushing textures. GL context %p", context);
+        vtdec->texture_cache = gst_core_video_texture_cache_new (gl_context);
+        gst_object_unref (gl_context);
+      } else {
+        GST_WARNING_OBJECT (decoder,
+            "got memory:GLMemory caps but not GL context from downstream element");
       }
     }
   }
 
+out:
   return ret;
 }
 
@@ -302,7 +313,6 @@ gst_vtdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   vtdec->format_description = format_description;
 
   output_format = gst_vtdec_negotiate_output_format (vtdec);
-
   if (!gst_vtdec_create_session (vtdec, output_format))
     return FALSE;
 
@@ -699,10 +709,17 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
   if (gst_pad_check_reconfigure (decoder->srcpad)) {
     gst_video_decoder_negotiate (decoder);
     if (vtdec->texture_cache) {
+      GstVideoFormat internal_format;
       GstVideoCodecState *output_state =
           gst_video_decoder_get_output_state (decoder);
+
+#ifdef HAVE_IOS
+      internal_format = GST_VIDEO_FORMAT_NV12;
+#else
+      internal_format = GST_VIDEO_FORMAT_UYVY;
+#endif
       gst_core_video_texture_cache_set_format (vtdec->texture_cache,
-          GST_VTDEC_VIDEO_FORMAT_STR, output_state->caps);
+          internal_format, output_state->caps);
       gst_video_codec_state_unref (output_state);
     }
   }
