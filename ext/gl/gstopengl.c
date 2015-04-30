@@ -112,7 +112,7 @@ plugin_init (GstPlugin * plugin)
 #endif
 
   if (!gst_element_register (plugin, "glimagesink",
-          GST_RANK_SECONDARY, gst_gl_image_sink_bin_get_type ())) {
+          GST_RANK_SECONDARY, GST_TYPE_GLIMAGE_SINK)) {
     return FALSE;
   }
 
@@ -172,7 +172,7 @@ plugin_init (GstPlugin * plugin)
   }
 
   if (!gst_element_register (plugin, "glvideomixer",
-          GST_RANK_NONE, gst_gl_video_mixer_bin_get_type ())) {
+          GST_RANK_NONE, GST_TYPE_GL_VIDEO_MIXER)) {
     return FALSE;
   }
 

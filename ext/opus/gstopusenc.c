@@ -44,7 +44,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include <opus/opus.h>
+#include <opus.h>
 
 #include <gst/gsttagsetter.h>
 #include <gst/audio/audio.h>
@@ -918,7 +918,9 @@ gst_opus_enc_encode (GstOpusEnc * enc, GstBuffer * buf)
 
   g_assert (size == bytes);
 
-  outbuf = gst_buffer_new_and_alloc (max_payload_size * enc->n_channels);
+  outbuf =
+      gst_audio_encoder_allocate_output_buffer (GST_AUDIO_ENCODER (enc),
+      max_payload_size * enc->n_channels);
   if (!outbuf)
     goto done;
 

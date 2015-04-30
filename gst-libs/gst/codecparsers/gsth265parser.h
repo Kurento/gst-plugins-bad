@@ -763,6 +763,8 @@ struct _GstH265SPS
   /* calculated values */
   guint8 chroma_array_type;
   gint width, height;
+  gint crop_rect_width, crop_rect_height;
+  gint crop_rect_x, crop_rect_y;
   gint fps_num, fps_den;
   gboolean valid;
 };
@@ -1035,7 +1037,7 @@ GstH265ParserResult gst_h265_parser_parse_pps       (GstH265Parser   * parser,
 
 GstH265ParserResult gst_h265_parser_parse_sei       (GstH265Parser   * parser,
                                                      GstH265NalUnit  * nalu,
-                                                     GstH265SEIMessage * sei);
+                                                     GArray **messages);
 
 void                gst_h265_parser_free            (GstH265Parser  * parser);
 

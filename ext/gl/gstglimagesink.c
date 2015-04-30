@@ -3,7 +3,6 @@
  * Copyright (C) 2003 Julien Moutte <julien@moutte.net>
  * Copyright (C) 2005,2006,2007 David A. Schleef <ds@schleef.org>
  * Copyright (C) 2008 Julien Isorce <julien.isorce@gmail.com>
- * Copyright (C) 2015 Matthew Waters <matthew@centricular.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -91,7 +90,6 @@
 #include <gst/video/navigation.h>
 
 #include "gstglimagesink.h"
-#include "gstglsinkbin.h"
 
 #if GST_GL_HAVE_PLATFORM_EGL
 #include <gst/gl/egl/gsteglimagememory.h>
@@ -99,202 +97,6 @@
 
 GST_DEBUG_CATEGORY (gst_debug_glimage_sink);
 #define GST_CAT_DEFAULT gst_debug_glimage_sink
-
-#define DEFAULT_SHOW_PREROLL_FRAME  TRUE
-#define DEFAULT_SYNC                TRUE
-#define DEFAULT_MAX_LATENESS        -1
-#define DEFAULT_QOS                 FALSE
-#define DEFAULT_ASYNC               TRUE
-#define DEFAULT_TS_OFFSET           0
-#define DEFAULT_BLOCKSIZE           4096
-#define DEFAULT_RENDER_DELAY        0
-#define DEFAULT_ENABLE_LAST_SAMPLE  TRUE
-#define DEFAULT_THROTTLE_TIME       0
-#define DEFAULT_MAX_BITRATE         0
-#define DEFAULT_HANDLE_EVENTS       TRUE
-#define DEFAULT_FORCE_ASPECT_RATIO  TRUE
-
-typedef GstGLSinkBin GstGLImageSinkBin;
-typedef GstGLSinkBinClass GstGLImageSinkBinClass;
-
-G_DEFINE_TYPE (GstGLImageSinkBin, gst_gl_image_sink_bin, GST_TYPE_GL_SINK_BIN);
-
-enum
-{
-  PROP_BIN_0,
-  PROP_BIN_FORCE_ASPECT_RATIO,
-  PROP_BIN_PIXEL_ASPECT_RATIO,
-  PROP_BIN_HANDLE_EVENTS,
-  PROP_BIN_CONTEXT,
-  PROP_BIN_SHOW_PREROLL_FRAME,
-  PROP_BIN_SYNC,
-  PROP_BIN_MAX_LATENESS,
-  PROP_BIN_QOS,
-  PROP_BIN_ASYNC,
-  PROP_BIN_TS_OFFSET,
-  PROP_BIN_ENABLE_LAST_SAMPLE,
-  PROP_BIN_LAST_SAMPLE,
-  PROP_BIN_BLOCKSIZE,
-  PROP_BIN_RENDER_DELAY,
-  PROP_BIN_THROTTLE_TIME,
-  PROP_BIN_MAX_BITRATE,
-};
-
-enum
-{
-  SIGNAL_BIN_0,
-  SIGNAL_BIN_CLIENT_DRAW,
-  SIGNAL_BIN_CLIENT_RESHAPE,
-  SIGNAL_BIN_LAST,
-};
-
-static guint gst_gl_image_sink_bin_signals[SIGNAL_BIN_LAST] = { 0 };
-
-static void
-gst_gl_image_sink_bin_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * param_spec)
-{
-  g_object_set_property (G_OBJECT (GST_GL_SINK_BIN (object)->sink),
-      param_spec->name, value);
-}
-
-static void
-gst_gl_image_sink_bin_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * param_spec)
-{
-  g_object_get_property (G_OBJECT (GST_GL_SINK_BIN (object)->sink),
-      param_spec->name, value);
-}
-
-static gboolean
-_on_client_reshape (GstGLImageSink * sink, GstGLContext * context,
-    guint width, guint height, gpointer data)
-{
-  gboolean ret;
-
-  g_signal_emit (data, gst_gl_image_sink_bin_signals[SIGNAL_BIN_CLIENT_RESHAPE],
-      0, context, width, height, &ret);
-
-  return ret;
-}
-
-static gboolean
-_on_client_draw (GstGLImageSink * sink, GstGLContext * context,
-    GstSample * sample, gpointer data)
-{
-  gboolean ret;
-
-  g_signal_emit (data, gst_gl_image_sink_bin_signals[SIGNAL_BIN_CLIENT_DRAW], 0,
-      context, sample, &ret);
-
-  return ret;
-}
-
-static void
-gst_gl_image_sink_bin_init (GstGLImageSinkBin * self)
-{
-  GstGLImageSink *sink = g_object_new (GST_TYPE_GLIMAGE_SINK, NULL);
-
-  g_signal_connect (sink, "client-reshape", (GCallback) _on_client_reshape,
-      self);
-  g_signal_connect (sink, "client-draw", (GCallback) _on_client_draw, self);
-
-  gst_gl_sink_bin_finish_init_with_element (GST_GL_SINK_BIN (self),
-      GST_ELEMENT (sink));
-}
-
-static void
-gst_gl_image_sink_bin_class_init (GstGLImageSinkBinClass * klass)
-{
-  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
-
-  gobject_class->get_property = gst_gl_image_sink_bin_get_property;
-  gobject_class->set_property = gst_gl_image_sink_bin_set_property;
-
-  /* gl sink */
-  g_object_class_install_property (gobject_class, PROP_BIN_FORCE_ASPECT_RATIO,
-      g_param_spec_boolean ("force-aspect-ratio",
-          "Force aspect ratio",
-          "When enabled, scaling will respect original aspect ratio",
-          DEFAULT_FORCE_ASPECT_RATIO,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_HANDLE_EVENTS,
-      g_param_spec_boolean ("ignore-alpha", "Ignore Alpha",
-          "When enabled, alpha will be ignored and converted to black",
-          DEFAULT_HANDLE_EVENTS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_CONTEXT,
-      g_param_spec_object ("context", "OpenGL context", "Get OpenGL context",
-          GST_GL_TYPE_CONTEXT, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_PIXEL_ASPECT_RATIO,
-      gst_param_spec_fraction ("pixel-aspect-ratio", "Pixel Aspect Ratio",
-          "The pixel aspect ratio of the device", 0, 1, G_MAXINT, 1, 1, 1,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /* video sink */
-  g_object_class_install_property (gobject_class, PROP_BIN_SHOW_PREROLL_FRAME,
-      g_param_spec_boolean ("show-preroll-frame", "Show preroll frame",
-          "Whether to render video frames during preroll",
-          DEFAULT_SHOW_PREROLL_FRAME,
-          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
-
-  /* base sink */
-  g_object_class_install_property (gobject_class, PROP_BIN_SYNC,
-      g_param_spec_boolean ("sync", "Sync", "Sync on the clock", DEFAULT_SYNC,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_MAX_LATENESS,
-      g_param_spec_int64 ("max-lateness", "Max Lateness",
-          "Maximum number of nanoseconds that a buffer can be late before it "
-          "is dropped (-1 unlimited)", -1, G_MAXINT64, DEFAULT_MAX_LATENESS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_QOS,
-      g_param_spec_boolean ("qos", "Qos",
-          "Generate Quality-of-Service events upstream", DEFAULT_QOS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_ASYNC,
-      g_param_spec_boolean ("async", "Async",
-          "Go asynchronously to PAUSED", DEFAULT_ASYNC,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_TS_OFFSET,
-      g_param_spec_int64 ("ts-offset", "TS Offset",
-          "Timestamp offset in nanoseconds", G_MININT64, G_MAXINT64,
-          DEFAULT_TS_OFFSET, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_ENABLE_LAST_SAMPLE,
-      g_param_spec_boolean ("enable-last-sample", "Enable Last Buffer",
-          "Enable the last-sample property", DEFAULT_ENABLE_LAST_SAMPLE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_LAST_SAMPLE,
-      g_param_spec_boxed ("last-sample", "Last Sample",
-          "The last sample received in the sink", GST_TYPE_SAMPLE,
-          G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_BLOCKSIZE,
-      g_param_spec_uint ("blocksize", "Block size",
-          "Size in bytes to pull per buffer (0 = default)", 0, G_MAXUINT,
-          DEFAULT_BLOCKSIZE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_RENDER_DELAY,
-      g_param_spec_uint64 ("render-delay", "Render Delay",
-          "Additional render delay of the sink in nanoseconds", 0, G_MAXUINT64,
-          DEFAULT_RENDER_DELAY, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_THROTTLE_TIME,
-      g_param_spec_uint64 ("throttle-time", "Throttle time",
-          "The time to keep between rendered buffers (0 = disabled)", 0,
-          G_MAXUINT64, DEFAULT_THROTTLE_TIME,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class, PROP_BIN_MAX_BITRATE,
-      g_param_spec_uint64 ("max-bitrate", "Max Bitrate",
-          "The maximum bits per second to render (0 = disabled)", 0,
-          G_MAXUINT64, DEFAULT_MAX_BITRATE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  gst_gl_image_sink_bin_signals[SIGNAL_BIN_CLIENT_DRAW] =
-      g_signal_new ("client-draw", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_generic,
-      G_TYPE_BOOLEAN, 2, GST_GL_TYPE_CONTEXT, GST_TYPE_SAMPLE);
-
-  gst_gl_image_sink_bin_signals[SIGNAL_BIN_CLIENT_RESHAPE] =
-      g_signal_new ("client-reshape", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_generic,
-      G_TYPE_BOOLEAN, 3, GST_GL_TYPE_CONTEXT, G_TYPE_UINT, G_TYPE_UINT);
-}
 
 #define GST_GLIMAGE_SINK_GET_LOCK(glsink) \
   (GST_GLIMAGE_SINK(glsink)->drawing_lock)
@@ -353,15 +155,6 @@ static void gst_glimage_sink_expose (GstVideoOverlay * overlay);
 static void
 gst_glimage_sink_handle_events (GstVideoOverlay * overlay,
     gboolean handle_events);
-
-static GstStaticPadTemplate gst_glimage_sink_template =
-GST_STATIC_PAD_TEMPLATE ("sink",
-    GST_PAD_SINK,
-    GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
-            "RGBA"))
-    );
 
 enum
 {
@@ -453,6 +246,7 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
   GstBaseSinkClass *gstbasesink_class;
   GstVideoSinkClass *gstvideosink_class;
   GstElementClass *element_class;
+  GstCaps *upload_caps, *elem_caps, *templ;
 
   gobject_class = (GObjectClass *) klass;
   gstelement_class = (GstElementClass *) klass;
@@ -468,9 +262,9 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_FORCE_ASPECT_RATIO,
-      g_param_spec_boolean ("force-aspect-ratio", "Force aspect ratio",
-          "When enabled, scaling will respect original aspect ratio",
-          DEFAULT_FORCE_ASPECT_RATIO,
+      g_param_spec_boolean ("force-aspect-ratio",
+          "Force aspect ratio",
+          "When enabled, scaling will respect original aspect ratio", TRUE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_PIXEL_ASPECT_RATIO,
@@ -479,7 +273,9 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_CONTEXT,
-      g_param_spec_object ("context", "OpenGL context", "Get OpenGL context",
+      g_param_spec_object ("context",
+          "OpenGL context",
+          "Get OpenGL context",
           GST_GL_TYPE_CONTEXT, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_HANDLE_EVENTS,
@@ -487,7 +283,7 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
           "When enabled, XEvents will be selected and handled", TRUE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  g_object_class_install_property (gobject_class, PROP_IGNORE_ALPHA,
+  g_object_class_install_property (gobject_class, PROP_HANDLE_EVENTS,
       g_param_spec_boolean ("ignore-alpha", "Ignore Alpha",
           "When enabled, alpha will be ignored and converted to black", TRUE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
@@ -532,8 +328,14 @@ gst_glimage_sink_class_init (GstGLImageSinkClass * klass)
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_generic,
       G_TYPE_BOOLEAN, 3, GST_GL_TYPE_CONTEXT, G_TYPE_UINT, G_TYPE_UINT);
 
+  elem_caps = gst_caps_from_string ("video/x-raw(ANY),format=RGBA");
+  upload_caps = gst_gl_upload_get_input_template_caps ();
+  templ = gst_caps_intersect (elem_caps, upload_caps);
   gst_element_class_add_pad_template (element_class,
-      gst_static_pad_template_get (&gst_glimage_sink_template));
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, templ));
+  gst_caps_unref (upload_caps);
+  gst_caps_unref (elem_caps);
+  gst_caps_unref (templ);
 
   gobject_class->finalize = gst_glimage_sink_finalize;
 
@@ -795,39 +597,11 @@ gst_glimage_sink_query (GstBaseSink * bsink, GstQuery * query)
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CONTEXT:
     {
-      const gchar *context_type;
-      GstContext *context, *old_context;
-      gboolean ret;
-
-      ret =
+      gboolean ret =
           gst_gl_handle_context_query ((GstElement *) glimage_sink, query,
           &glimage_sink->display, &glimage_sink->other_context);
       if (glimage_sink->display)
         gst_gl_display_filter_gl_api (glimage_sink->display, SUPPORTED_GL_APIS);
-
-      gst_query_parse_context_type (query, &context_type);
-
-      if (g_strcmp0 (context_type, "gst.gl.local_context") == 0) {
-        GstStructure *s;
-
-        gst_query_parse_context (query, &old_context);
-
-        if (old_context)
-          context = gst_context_copy (old_context);
-        else
-          context = gst_context_new ("gst.gl.local_context", FALSE);
-
-        s = gst_context_writable_structure (context);
-        gst_structure_set (s, "context", GST_GL_TYPE_CONTEXT,
-            glimage_sink->context, NULL);
-        gst_query_set_context (query, context);
-        gst_context_unref (context);
-
-        ret = glimage_sink->context != NULL;
-      }
-      GST_DEBUG_OBJECT (glimage_sink, "context query of type %s %i",
-          context_type, ret);
-
       return ret;
     }
     case GST_QUERY_DRAIN:
@@ -844,6 +618,7 @@ gst_glimage_sink_query (GstBaseSink * bsink, GstQuery * query)
         gst_buffer_unref (buf);
 
       gst_buffer_replace (&glimage_sink->next_buffer, NULL);
+      gst_gl_upload_release_buffer (glimage_sink->upload);
 
       res = GST_BASE_SINK_CLASS (parent_class)->query (bsink, query);
       break;
@@ -921,11 +696,21 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
       GST_GLIMAGE_SINK_UNLOCK (glimage_sink);
       gst_buffer_replace (&glimage_sink->next_buffer, NULL);
 
+      if (glimage_sink->upload) {
+        gst_object_unref (glimage_sink->upload);
+        glimage_sink->upload = NULL;
+      }
+
       glimage_sink->window_id = 0;
       /* but do not reset glimage_sink->new_window_id */
 
       GST_VIDEO_SINK_WIDTH (glimage_sink) = 1;
       GST_VIDEO_SINK_HEIGHT (glimage_sink) = 1;
+      /* Clear cached caps */
+      if (glimage_sink->gl_caps) {
+        gst_caps_unref (glimage_sink->gl_caps);
+        glimage_sink->gl_caps = NULL;
+      }
 
       /* we're losing the context, this pool is no use anymore */
       if (glimage_sink->pool) {
@@ -1000,10 +785,17 @@ gst_glimage_sink_get_times (GstBaseSink * bsink, GstBuffer * buf,
 static GstCaps *
 gst_glimage_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
 {
+  GstGLImageSink *gl_sink = GST_GLIMAGE_SINK (bsink);
   GstCaps *tmp = NULL;
   GstCaps *result = NULL;
 
-  tmp = gst_caps_from_string ("video/x-raw(memory:GLMemory),format=RGBA");
+  tmp = gst_pad_get_pad_template_caps (GST_BASE_SINK_PAD (bsink));
+
+  result =
+      gst_gl_upload_transform_caps (gl_sink->context, GST_PAD_SRC, tmp, NULL);
+  gst_caps_unref (tmp);
+  tmp = result;
+  GST_DEBUG_OBJECT (bsink, "transfer returned caps %" GST_PTR_FORMAT, tmp);
 
   if (filter) {
     result = gst_caps_intersect_full (filter, tmp, GST_CAPS_INTERSECT_FIRST);
@@ -1087,7 +879,24 @@ gst_glimage_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
       GST_VIDEO_SINK_HEIGHT (glimage_sink));
 
   glimage_sink->info = vinfo;
+
   if (!_ensure_gl_setup (glimage_sink))
+    return FALSE;
+
+  if (glimage_sink->upload)
+    gst_object_unref (glimage_sink->upload);
+  glimage_sink->upload = gst_gl_upload_new (glimage_sink->context);
+
+  if (glimage_sink->gl_caps)
+    gst_caps_unref (glimage_sink->gl_caps);
+  glimage_sink->gl_caps = gst_caps_copy (caps);
+  gst_caps_set_simple (glimage_sink->gl_caps, "format", G_TYPE_STRING, "RGBA",
+      NULL);
+  gst_caps_set_features (glimage_sink->gl_caps, 0,
+      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY));
+
+  if (!gst_gl_upload_set_caps (glimage_sink->upload, caps,
+          glimage_sink->gl_caps))
     return FALSE;
 
   glimage_sink->caps_change = TRUE;
@@ -1099,7 +908,9 @@ static GstFlowReturn
 gst_glimage_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
 {
   GstGLImageSink *glimage_sink;
+  GstBuffer *next_buffer = NULL;
   GstVideoFrame gl_frame;
+  GstVideoInfo gl_info;
 
   glimage_sink = GST_GLIMAGE_SINK (bsink);
 
@@ -1113,14 +924,22 @@ gst_glimage_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
   if (!_ensure_gl_setup (glimage_sink))
     return GST_FLOW_NOT_NEGOTIATED;
 
-  if (!gst_video_frame_map (&gl_frame, &glimage_sink->info, buf,
+  if (gst_gl_upload_perform_with_buffer (glimage_sink->upload, buf,
+          &next_buffer) != GST_GL_UPLOAD_DONE)
+    goto upload_failed;
+
+  gst_video_info_from_caps (&gl_info, glimage_sink->gl_caps);
+
+  if (!gst_video_frame_map (&gl_frame, &gl_info, next_buffer,
           GST_MAP_READ | GST_MAP_GL)) {
+    gst_buffer_unref (next_buffer);
     goto upload_failed;
   }
 
   glimage_sink->next_tex = *(guint *) gl_frame.data[0];
 
-  gst_buffer_replace (&glimage_sink->next_buffer, buf);
+  gst_buffer_replace (&glimage_sink->next_buffer, next_buffer);
+  gst_buffer_unref (next_buffer);
 
   gst_video_frame_unmap (&gl_frame);
 
@@ -1178,6 +997,7 @@ gst_glimage_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
   if (g_atomic_int_get (&glimage_sink->to_quit) != 0) {
     GST_ELEMENT_ERROR (glimage_sink, RESOURCE, NOT_FOUND,
         ("%s", gst_gl_context_get_error ()), (NULL));
+    gst_gl_upload_release_buffer (glimage_sink->upload);
     return GST_FLOW_ERROR;
   }
 
@@ -1186,11 +1006,13 @@ gst_glimage_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
 /* ERRORS */
 redisplay_failed:
   {
+    gst_gl_upload_release_buffer (glimage_sink->upload);
     GST_ELEMENT_ERROR (glimage_sink, RESOURCE, NOT_FOUND,
         ("%s", gst_gl_context_get_error ()), (NULL));
     return GST_FLOW_ERROR;
   }
 }
+
 
 static void
 gst_glimage_sink_video_overlay_init (GstVideoOverlayInterface * iface)
@@ -1199,6 +1021,7 @@ gst_glimage_sink_video_overlay_init (GstVideoOverlayInterface * iface)
   iface->handle_events = gst_glimage_sink_handle_events;
   iface->expose = gst_glimage_sink_expose;
 }
+
 
 static void
 gst_glimage_sink_set_window_handle (GstVideoOverlay * overlay, guintptr id)
@@ -1307,6 +1130,8 @@ gst_glimage_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
     /* we need at least 2 buffer because we hold on to the last one */
     gst_query_add_allocation_pool (query, glimage_sink->pool, size, 2, 0);
   }
+
+  gst_gl_upload_propose_allocation (glimage_sink->upload, NULL, query);
 
   if (glimage_sink->context->gl_vtable->FenceSync)
     gst_query_add_allocation_meta (query, GST_GL_SYNC_META_API_TYPE, 0);
@@ -1475,7 +1300,6 @@ gst_glimage_sink_on_draw (GstGLImageSink * gl_sink)
   gboolean do_redisplay = FALSE;
   GstGLSyncMeta *sync_meta = NULL;
   GstSample *sample = NULL;
-  GstCaps *caps = NULL;
 
   g_return_if_fail (GST_IS_GLIMAGE_SINK (gl_sink));
 
@@ -1518,15 +1342,12 @@ gst_glimage_sink_on_draw (GstGLImageSink * gl_sink)
 
   gl->BindTexture (GL_TEXTURE_2D, 0);
 
-  caps = gst_video_info_to_caps (&gl_sink->info);
-
   sample = gst_sample_new (gl_sink->stored_buffer,
-      caps, &GST_BASE_SINK (gl_sink)->segment, NULL);
+      gl_sink->gl_caps, &GST_BASE_SINK (gl_sink)->segment, NULL);
 
   g_signal_emit (gl_sink, gst_glimage_sink_signals[CLIENT_DRAW_SIGNAL], 0,
       gl_sink->context, sample, &do_redisplay);
 
-  gst_caps_unref (caps);
   gst_sample_unref (sample);
 
   if (!do_redisplay) {
@@ -1605,9 +1426,8 @@ gst_glimage_sink_redisplay (GstGLImageSink * gl_sink)
     return FALSE;
 
   if (gst_gl_window_is_running (window)) {
-    gulong handler_id =
-        g_signal_handler_find (GST_ELEMENT_PARENT (gl_sink), G_SIGNAL_MATCH_ID,
-        gst_gl_image_sink_bin_signals[SIGNAL_BIN_CLIENT_DRAW], 0,
+    gulong handler_id = g_signal_handler_find (gl_sink, G_SIGNAL_MATCH_ID,
+        gst_glimage_sink_signals[CLIENT_DRAW_SIGNAL], 0,
         NULL, NULL, NULL);
 
     if (G_UNLIKELY (!gl_sink->redisplay_shader) && (!handler_id

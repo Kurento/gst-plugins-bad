@@ -1269,7 +1269,7 @@ gst_h265_parser_identify_nalu (GstH265Parser * parser,
       gst_h265_parser_identify_nalu_unchecked (parser, data, offset, size,
       nalu);
 
-  if (res != GST_H265_PARSER_OK || nalu->size == 0)
+  if (res != GST_H265_PARSER_OK || nalu->size == 2)
     goto beach;
 
   off2 = scan_for_start_codes (data + nalu->offset, size - nalu->offset);
@@ -1286,7 +1286,7 @@ gst_h265_parser_identify_nalu (GstH265Parser * parser,
     off2--;
 
   nalu->size = off2;
-  if (nalu->size < 2)
+  if (nalu->size < 3)
     return GST_H265_PARSER_BROKEN_DATA;
 
   GST_DEBUG ("Complete nal found. Off: %d, Size: %d", nalu->offset, nalu->size);
@@ -1564,6 +1564,8 @@ gst_h265_parse_sps (GstH265Parser * parser, GstH265NalUnit * nalu,
   GstH265VPS *vps;
   guint8 vps_id;
   guint i;
+  guint subwc[] = { 1, 2, 2, 1, 1 };
+  guint subhc[] = { 1, 2, 1, 1, 1 };
   GstH265VUIParams *vui = NULL;
 
   INITIALIZE_DEBUG_CATEGORY;
@@ -1713,7 +1715,20 @@ gst_h265_parse_sps (GstH265Parser * parser, GstH265NalUnit * nalu,
     goto error;
   }
 
-  /* ToDo: Add crop_rectangle dimensions */
+  if (sps->conformance_window_flag) {
+    const guint crop_unit_x = subwc[sps->chroma_format_idc];
+    const guint crop_unit_y = subhc[sps->chroma_format_idc];
+
+    sps->crop_rect_width = sps->width -
+        (sps->conf_win_left_offset + sps->conf_win_right_offset) * crop_unit_x;
+    sps->crop_rect_height = sps->height -
+        (sps->conf_win_top_offset + sps->conf_win_bottom_offset) * crop_unit_y;
+    sps->crop_rect_x = sps->conf_win_left_offset * crop_unit_x;
+    sps->crop_rect_y = sps->conf_win_top_offset * crop_unit_y;
+
+    GST_LOG ("crop_rectangle x=%u y=%u width=%u, height=%u", sps->crop_rect_x,
+        sps->crop_rect_y, sps->crop_rect_width, sps->crop_rect_height);
+  }
 
   sps->fps_num = 0;
   sps->fps_den = 1;
@@ -1821,8 +1836,8 @@ gst_h265_parse_pps (GstH265Parser * parser, GstH265NalUnit * nalu,
   READ_UINT8 (&nr, pps->entropy_coding_sync_enabled_flag, 1);
 
   if (pps->tiles_enabled_flag) {
-    READ_UE_ALLOWED (&nr, pps->num_tile_columns_minus1, 1, 19);
-    READ_UE_ALLOWED (&nr, pps->num_tile_rows_minus1, 1, 21);
+    READ_UE_ALLOWED (&nr, pps->num_tile_columns_minus1, 0, 19);
+    READ_UE_ALLOWED (&nr, pps->num_tile_rows_minus1, 0, 21);
 
     READ_UINT8 (&nr, pps->uniform_spacing_flag, 1);
     if (!pps->uniform_spacing_flag) {
@@ -2224,68 +2239,106 @@ error:
   return GST_H265_PARSER_ERROR;
 }
 
-/**
- * gst_h265_parser_parse_sei:
- * @parser: a #GstH265Parser
- * @nalu: The #GST_H265_NAL_SEI #GstH265NalUnit to parse
- * @sei: The #GstH265SEIMessage to fill.
- *
- * Parses @data, and fills the @sei structures.
- * The resulting @sei  structure shall be deallocated with
- * gst_h265_sei_free() when it is no longer needed
- *
- * Returns: a #GstH265ParserResult
- */
-GstH265ParserResult
-gst_h265_parser_parse_sei (GstH265Parser * parser,
-    GstH265NalUnit * nalu, GstH265SEIMessage * sei)
+static gboolean
+nal_reader_has_more_data_in_payload (NalReader * nr,
+    guint32 payload_start_pos_bit, guint32 payloadSize)
 {
-  NalReader nr;
+  if (nal_reader_is_byte_aligned (nr) &&
+      (nal_reader_get_pos (nr) == (payload_start_pos_bit + 8 * payloadSize)))
+    return FALSE;
+
+  return TRUE;
+}
+
+static GstH265ParserResult
+gst_h265_parser_parse_sei_message (GstH265Parser * parser,
+    guint8 nal_type, NalReader * nr, GstH265SEIMessage * sei)
+{
   guint32 payloadSize;
   guint8 payload_type_byte, payload_size_byte;
-#ifndef GST_DISABLE_GST_DEBUG
   guint remaining, payload_size;
-#endif
-  GstH265ParserResult res;
+  guint32 payload_start_pos_bit;
+  GstH265ParserResult res = GST_H265_PARSER_OK;
+
   GST_DEBUG ("parsing \"Sei message\"");
-  nal_reader_init (&nr, nalu->data + nalu->offset + 1, nalu->size - 1);
-  /* init */
-  memset (sei, 0, sizeof (*sei));
+
   sei->payloadType = 0;
   do {
-    READ_UINT8 (&nr, payload_type_byte, 8);
+    READ_UINT8 (nr, payload_type_byte, 8);
     sei->payloadType += payload_type_byte;
   } while (payload_type_byte == 0xff);
   payloadSize = 0;
   do {
-    READ_UINT8 (&nr, payload_size_byte, 8);
+    READ_UINT8 (nr, payload_size_byte, 8);
     payloadSize += payload_size_byte;
   }
   while (payload_size_byte == 0xff);
-#ifndef GST_DISABLE_GST_DEBUG
-  remaining = nal_reader_get_remaining (&nr) * 8;
-  payload_size = payloadSize < remaining ? payloadSize : remaining;
+
+  remaining = nal_reader_get_remaining (nr);
+  payload_size = payloadSize * 8 < remaining ? payloadSize * 8 : remaining;
+
+  payload_start_pos_bit = nal_reader_get_pos (nr);
   GST_DEBUG
       ("SEI message received: payloadType  %u, payloadSize = %u bytes",
       sei->payloadType, payload_size);
-#endif
-  if (sei->payloadType == GST_H265_SEI_BUF_PERIOD) {
-    /* size not set; might depend on emulation_prevention_three_byte */
-    res = gst_h265_parser_parse_buffering_period (parser,
-        &sei->payload.buffering_period, &nr);
-  } else if (sei->payloadType == GST_H265_SEI_PIC_TIMING) {
-    /* size not set; might depend on emulation_prevention_three_byte */
-    res = gst_h265_parser_parse_pic_timing (parser,
-        &sei->payload.pic_timing, &nr);
-  } else
-    res = GST_H265_PARSER_OK;
+
+  if (nal_type == GST_H265_NAL_PREFIX_SEI) {
+    switch (sei->payloadType) {
+      case GST_H265_SEI_BUF_PERIOD:
+        /* size not set; might depend on emulation_prevention_three_byte */
+        res = gst_h265_parser_parse_buffering_period (parser,
+            &sei->payload.buffering_period, nr);
+        break;
+      case GST_H265_SEI_PIC_TIMING:
+        /* size not set; might depend on emulation_prevention_three_byte */
+        res = gst_h265_parser_parse_pic_timing (parser,
+            &sei->payload.pic_timing, nr);
+        break;
+      default:
+        /* Just consume payloadSize bytes, which does not account for
+           emulation prevention bytes */
+        if (!nal_reader_skip_long (nr, payload_size))
+          goto error;
+        res = GST_H265_PARSER_OK;
+        break;
+    }
+  } else if (nal_type == GST_H265_NAL_SUFFIX_SEI) {
+    switch (sei->payloadType) {
+      default:
+        /* Just consume payloadSize bytes, which does not account for
+           emulation prevention bytes */
+        if (!nal_reader_skip_long (nr, payload_size))
+          goto error;
+        res = GST_H265_PARSER_OK;
+        break;
+    }
+  }
+
+  /* Not parsing the reserved_payload_extension, but it shouldn't be
+   * an issue because of 1: There shall not be any reserved_payload_extension
+   * present in bitstreams conforming to the specification.2. Even though
+   * it is present, the size will be less than total PayloadSize since the
+   * size of reserved_payload_extension is supposed to be
+   * 8 * payloadSize - nEarlierBits - nPayloadZeroBits -1 which means the
+   * the current implementation will still skip all unnecessary bits correctly.
+   * In theory, we can have a more optimized implementation by skipping the
+   * data left in PayLoadSize without out individually checking for each bits,
+   * since the totoal size will be always less than payloadSize*/
+  if (nal_reader_has_more_data_in_payload (nr, payload_start_pos_bit,
+          payloadSize)) {
+    /* Skip the byte alignment bits */
+    if (!nal_reader_skip (nr, 1))
+      goto error;
+    while (!nal_reader_is_byte_aligned (nr)) {
+      if (!nal_reader_skip (nr, 1))
+        goto error;
+    }
+  }
 
   return res;
 
 error:
   GST_WARNING ("error parsing \"Sei message\"");
-  gst_h265_sei_free (sei);
-
   return GST_H265_PARSER_ERROR;
 }
 
@@ -2403,6 +2456,42 @@ gst_h265_sei_free (GstH265SEIMessage * sei)
     pic_timing->du_cpb_removal_delay_increment_minus1 = 0;
   }
 }
+
+/**
+ * gst_h265_parser_parse_sei:
+ * @nalparser: a #GstH265Parser
+ * @nalu: The #GST_H265_NAL_SEI #GstH265NalUnit to parse
+ * @messages: The GArray of #GstH265SEIMessage to fill. The caller must free it when done.
+ *
+ * Parses @data, create and fills the @messages array.
+ *
+ * Returns: a #GstH265ParserResult
+ */
+GstH265ParserResult
+gst_h265_parser_parse_sei (GstH265Parser * nalparser, GstH265NalUnit * nalu,
+    GArray ** messages)
+{
+  NalReader nr;
+  GstH265SEIMessage sei;
+  GstH265ParserResult res;
+
+  GST_DEBUG ("parsing SEI nal");
+  nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
+      nalu->size - nalu->header_bytes);
+  *messages = g_array_new (FALSE, FALSE, sizeof (GstH265SEIMessage));
+  g_array_set_clear_func (*messages, (GDestroyNotify) gst_h265_sei_free);
+
+  do {
+    res = gst_h265_parser_parse_sei_message (nalparser, nalu->type, &nr, &sei);
+    if (res == GST_H265_PARSER_OK)
+      g_array_append_val (*messages, sei);
+    else
+      break;
+  } while (nal_reader_has_more_data (&nr));
+
+  return res;
+}
+
 
 /**
  * gst_h265_quant_matrix_4x4_get_zigzag_from_raster:
