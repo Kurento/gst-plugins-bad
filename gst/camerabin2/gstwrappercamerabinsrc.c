@@ -456,7 +456,6 @@ check_and_replace_src (GstWrapperCameraBinSrc * self)
 {
   GstBin *cbin = GST_BIN_CAST (self);
   GstBaseCameraSrc *bcamsrc = GST_BASE_CAMERA_SRC_CAST (self);
-  GstElement *videoconvert;
 
   if (self->src_vid_src && self->src_vid_src == self->app_vid_src) {
     GST_DEBUG_OBJECT (self, "No need to change current videosrc");
@@ -488,21 +487,19 @@ check_and_replace_src (GstWrapperCameraBinSrc * self)
               self->app_vid_src, "autovideosrc", DEFAULT_VIDEOSRC,
               "camerasrc-real-src"))) {
     self->src_vid_src = NULL;
-    return FALSE;
+    goto fail;
   }
 
   if (!gst_bin_add (cbin, self->src_vid_src)) {
-    return FALSE;
+    goto fail;
   }
 
   /* check if we already have the next element to link to */
-  videoconvert = gst_bin_get_by_name (cbin, "src-videoconvert");
-  if (videoconvert) {
-    if (!gst_element_link_pads (self->src_vid_src, "src", videoconvert, "sink")) {
-      gst_object_unref (videoconvert);
-      return FALSE;
+  if (self->src_crop) {
+    if (!gst_element_link_pads (self->src_vid_src, "src", self->src_crop,
+            "sink")) {
+      goto fail;
     }
-    gst_object_unref (videoconvert);
   }
 
   /* we listen for changes to max-zoom in the video src so that
@@ -514,6 +511,11 @@ check_and_replace_src (GstWrapperCameraBinSrc * self)
   }
 
   return TRUE;
+
+fail:
+  if (self->src_vid_src)
+    gst_element_set_state (self->src_vid_src, GST_STATE_NULL);
+  return FALSE;
 }
 
 /**

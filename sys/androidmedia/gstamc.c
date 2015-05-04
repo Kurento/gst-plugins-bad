@@ -1775,9 +1775,12 @@ static const struct
 } color_format_mapping_table[] = {
   {
   COLOR_FormatYUV420Planar, GST_VIDEO_FORMAT_I420}, {
+  COLOR_FormatYUV420Flexible, GST_VIDEO_FORMAT_I420}, {
   COLOR_FormatYUV420SemiPlanar, GST_VIDEO_FORMAT_NV12}, {
   COLOR_TI_FormatYUV420PackedSemiPlanar, GST_VIDEO_FORMAT_NV12}, {
   COLOR_TI_FormatYUV420PackedSemiPlanarInterlaced, GST_VIDEO_FORMAT_NV12}, {
+  COLOR_INTEL_FormatYUV420PackedSemiPlanar, GST_VIDEO_FORMAT_NV12}, {
+  COLOR_INTEL_FormatYUV420PackedSemiPlanar_Tiled, GST_VIDEO_FORMAT_NV12}, {
   COLOR_QCOM_FormatYUV420SemiPlanar, GST_VIDEO_FORMAT_NV12}, {
   COLOR_QCOM_FormatYUV420PackedSemiPlanar64x32Tile2m8ka, GST_VIDEO_FORMAT_NV12}, {
   COLOR_QCOM_FormatYVU420SemiPlanar32m, GST_VIDEO_FORMAT_NV12}, {
@@ -1957,7 +1960,7 @@ gst_amc_color_format_info_set (GstAmcColorFormatInfo * color_format_info,
   if (slice_height == 0) {
     /* NVidia Tegra 3 on Nexus 7 does not set this */
     if (g_str_has_prefix (codec_info->name, "OMX.Nvidia."))
-      slice_height = GST_ROUND_UP_32 (height);
+      slice_height = GST_ROUND_UP_16 (height);
   }
 
   if (width == 0 || height == 0) {
@@ -1966,7 +1969,8 @@ gst_amc_color_format_info_set (GstAmcColorFormatInfo * color_format_info,
   }
 
   switch (color_format) {
-    case COLOR_FormatYUV420Planar:{
+    case COLOR_FormatYUV420Planar:
+    case COLOR_FormatYUV420Flexible:{
       if (stride == 0 || slice_height == 0) {
         GST_ERROR ("Stride or slice height is 0");
         return FALSE;
@@ -1977,6 +1981,20 @@ gst_amc_color_format_info_set (GstAmcColorFormatInfo * color_format_info,
               1) / 2);
       break;
     }
+    case COLOR_INTEL_FormatYUV420PackedSemiPlanar:
+    case COLOR_INTEL_FormatYUV420PackedSemiPlanar_Tiled:
+      if (stride == 0) {
+        GST_ERROR ("Stride is 0");
+        return FALSE;
+      }
+      if (slice_height <= 0)
+        slice_height = height;
+
+      frame_size =
+          stride * (slice_height - crop_top / 2) +
+          (GST_ROUND_UP_2 (stride) * ((slice_height + 1) / 2));
+      break;
+
     case COLOR_TI_FormatYUV420PackedSemiPlanar:
     case COLOR_TI_FormatYUV420PackedSemiPlanarInterlaced:{
       if (stride == 0 || slice_height == 0) {
