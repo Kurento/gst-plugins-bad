@@ -86,6 +86,7 @@ static void gst_dtls_enc_set_property (GObject *, guint prop_id,
 static void gst_dtls_enc_get_property (GObject *, guint prop_id, GValue *,
     GParamSpec *);
 
+static gboolean gst_dtls_enc_post_message (GstElement *, GstMessage *);
 static GstStateChangeReturn gst_dtls_enc_change_state (GstElement *,
     GstStateChange);
 static GstPad *gst_dtls_enc_request_new_pad (GstElement *, GstPadTemplate *,
@@ -115,6 +116,7 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
   gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dtls_enc_set_property);
   gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dtls_enc_get_property);
 
+  element_class->post_message = GST_DEBUG_FUNCPTR (gst_dtls_enc_post_message);
   element_class->change_state = GST_DEBUG_FUNCPTR (gst_dtls_enc_change_state);
   element_class->request_new_pad =
       GST_DEBUG_FUNCPTR (gst_dtls_enc_request_new_pad);
@@ -267,6 +269,31 @@ gst_dtls_enc_get_property (GObject * object, guint prop_id, GValue * value,
   }
 }
 
+static gboolean
+gst_dtls_enc_post_message (GstElement * element, GstMessage * message)
+{
+  GstDtlsEnc *self = GST_DTLS_ENC (element);
+  gboolean ret;
+
+  gst_message_ref (message);
+  ret = GST_ELEMENT_CLASS (parent_class)->post_message (element, message);
+
+  if (GST_MESSAGE_TYPE (message) == GST_MESSAGE_STREAM_STATUS) {
+    GstStreamStatusType type;
+
+    gst_message_parse_stream_status (message, &type, NULL);
+    if (type == GST_STREAM_STATUS_TYPE_CREATE) {
+      self->schedule_task =
+          gst_task_get_scheduleable (GST_PAD_TASK (self->src));
+      GST_DEBUG_OBJECT (self, "Scheduling task %d", self->schedule_task);
+    }
+  }
+
+  gst_message_unref (message);
+
+  return ret;
+}
+
 static GstStateChangeReturn
 gst_dtls_enc_change_state (GstElement * element, GstStateChange transition)
 {
@@ -413,16 +440,22 @@ src_task_loop (GstPad * pad)
     return;
   }
 
-  while (g_queue_is_empty (&self->queue)) {
-    GST_TRACE_OBJECT (self, "src loop: queue empty, waiting for add");
-    g_cond_wait (&self->queue_cond_add, &self->queue_lock);
-    GST_TRACE_OBJECT (self, "src loop: add signaled");
+  if (self->schedule_task && g_queue_is_empty (&self->queue)) {
+    gst_task_unschedule (GST_PAD_TASK (pad));
+    g_mutex_unlock (&self->queue_lock);
+    return;
+  } else {
+    while (g_queue_is_empty (&self->queue)) {
+      GST_TRACE_OBJECT (self, "src loop: queue empty, waiting for add");
+      g_cond_wait (&self->queue_cond_add, &self->queue_lock);
+      GST_TRACE_OBJECT (self, "src loop: add signaled");
 
-    if (self->flushing) {
-      GST_LOG_OBJECT (self, "pad inactive, task returning");
-      GST_TRACE_OBJECT (self, "src loop: releasing lock");
-      g_mutex_unlock (&self->queue_lock);
-      return;
+      if (self->flushing) {
+        GST_LOG_OBJECT (self, "pad inactive, task returning");
+        GST_TRACE_OBJECT (self, "src loop: releasing lock");
+        g_mutex_unlock (&self->queue_lock);
+        return;
+      }
     }
   }
   GST_TRACE_OBJECT (self, "src loop: queue has element");
@@ -527,8 +560,13 @@ on_send_data (GstDtlsConnection * connection, gconstpointer data, gint length,
 
   g_queue_push_tail (&self->queue, buffer);
 
-  GST_TRACE_OBJECT (self, "send data: signaling add");
-  g_cond_signal (&self->queue_cond_add);
+  if (self->schedule_task) {
+    GST_TRACE_OBJECT (self, "send data: scheduling task");
+    gst_task_schedule (GST_PAD_TASK (self->src));
+  } else {
+    GST_TRACE_OBJECT (self, "send data: signaling add");
+    g_cond_signal (&self->queue_cond_add);
+  }
 
   GST_TRACE_OBJECT (self, "send data: releasing lock");
   g_mutex_unlock (&self->queue_lock);
