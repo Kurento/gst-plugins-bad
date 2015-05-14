@@ -239,6 +239,11 @@ gst_gl_filter_gl_stop (GstGLBaseFilter * base_filter)
     filter->vertex_buffer = 0;
   }
 
+  if (filter->vbo_indices) {
+    gl->DeleteBuffers (1, &filter->vbo_indices);
+    filter->vbo_indices = 0;
+  }
+
   if (filter->fbo != 0) {
     gst_gl_context_del_fbo (context, filter->fbo, filter->depthbuffer);
   }
@@ -1057,6 +1062,8 @@ static const GLfloat vertices[] = {
    1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
   -1.0f,  1.0f, 0.0f, 0.0f, 1.0f
 };
+
+static const GLushort indices[] = { 0, 1, 2, 0, 2, 3 };
 /* *INDENT-ON* */
 
 static void
@@ -1065,6 +1072,7 @@ _bind_buffer (GstGLFilter * filter)
   GstGLContext *context = GST_GL_BASE_FILTER (filter)->context;
   const GstGLFuncs *gl = context->gl_vtable;
 
+  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, filter->vbo_indices);
   gl->BindBuffer (GL_ARRAY_BUFFER, filter->vertex_buffer);
 
   _get_attributes (filter);
@@ -1087,6 +1095,7 @@ _unbind_buffer (GstGLFilter * filter)
   GstGLContext *context = GST_GL_BASE_FILTER (filter)->context;
   const GstGLFuncs *gl = context->gl_vtable;
 
+  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
   gl->BindBuffer (GL_ARRAY_BUFFER, 0);
 
   gl->DisableVertexAttribArray (filter->draw_attr_position_loc);
@@ -1125,16 +1134,13 @@ gst_gl_filter_draw_texture (GstGLFilter * filter, GLuint texture,
     };
 
     gl->ActiveTexture (GL_TEXTURE0);
-
-    gl->Enable (GL_TEXTURE_2D);
     gl->BindTexture (GL_TEXTURE_2D, texture);
 
-    gl->ClientActiveTexture (GL_TEXTURE0);
-
     gl->EnableClientState (GL_VERTEX_ARRAY);
-    gl->EnableClientState (GL_TEXTURE_COORD_ARRAY);
-
     gl->VertexPointer (2, GL_FLOAT, 0, &verts);
+
+    gl->ClientActiveTexture (GL_TEXTURE0);
+    gl->EnableClientState (GL_TEXTURE_COORD_ARRAY);
     gl->TexCoordPointer (2, GL_FLOAT, 0, &texcoords);
 
     gl->DrawArrays (GL_TRIANGLE_FAN, 0, 4);
@@ -1145,8 +1151,6 @@ gst_gl_filter_draw_texture (GstGLFilter * filter, GLuint texture,
 #endif
   if (gst_gl_context_get_gl_api (context) & (GST_GL_API_GLES2 |
           GST_GL_API_OPENGL3)) {
-    GLushort indices[] = { 0, 1, 2, 0, 2, 3 };
-
     if (!filter->vertex_buffer) {
       if (gl->GenVertexArrays) {
         gl->GenVertexArrays (1, &filter->vao);
@@ -1158,10 +1162,18 @@ gst_gl_filter_draw_texture (GstGLFilter * filter, GLuint texture,
       gl->BufferData (GL_ARRAY_BUFFER, 4 * 5 * sizeof (GLfloat), vertices,
           GL_STATIC_DRAW);
 
+      gl->GenBuffers (1, &filter->vbo_indices);
+      gl->BindBuffer (GL_ARRAY_BUFFER, filter->vbo_indices);
+      gl->BufferData (GL_ARRAY_BUFFER, sizeof (indices), indices,
+          GL_STATIC_DRAW);
+
       if (gl->GenVertexArrays) {
         _bind_buffer (filter);
-        gl->BindBuffer (GL_ARRAY_BUFFER, 0);
+        gl->BindVertexArray (0);
       }
+
+      gl->BindBuffer (GL_ARRAY_BUFFER, 0);
+      gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
     }
 
     if (gl->GenVertexArrays)
@@ -1169,7 +1181,7 @@ gst_gl_filter_draw_texture (GstGLFilter * filter, GLuint texture,
     else
       _bind_buffer (filter);
 
-    gl->DrawElements (GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+    gl->DrawElements (GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
 
     if (gl->GenVertexArrays)
       gl->BindVertexArray (0);

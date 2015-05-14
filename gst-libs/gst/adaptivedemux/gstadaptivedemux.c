@@ -1894,7 +1894,6 @@ gst_adaptive_demux_stream_download_fragment (GstAdaptiveDemuxStream * stream)
     GST_DEBUG_OBJECT (stream->pad, "Fragment download result: %d %s",
         stream->last_ret, gst_flow_get_name (stream->last_ret));
     if (ret != GST_FLOW_OK) {
-      GST_INFO_OBJECT (demux, "No fragment downloaded");
       /* TODO check if we are truly stoping */
       if (ret != GST_FLOW_ERROR && gst_adaptive_demux_is_live (demux)) {
         /* looks like there is no way of knowing when a live stream has ended
@@ -1986,9 +1985,11 @@ gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
        * demux segment position that can be much ahead */
       for (GList * iter = demux->streams; iter != NULL;
           iter = g_list_next (iter)) {
-        GstAdaptiveDemuxStream *cur_stream = (GstAdaptiveDemuxStream *)iter->data;
+        GstAdaptiveDemuxStream *cur_stream =
+            (GstAdaptiveDemuxStream *) iter->data;
 
-        if (gst_pad_peer_query_position (cur_stream->pad, GST_FORMAT_TIME, &pos)) {
+        if (gst_pad_peer_query_position (cur_stream->pad, GST_FORMAT_TIME,
+                &pos)) {
           ts = (GstClockTime) pos;
           GST_DEBUG_OBJECT (stream->pad, "Downstream position: %"
               GST_TIME_FORMAT, GST_TIME_ARGS (ts));

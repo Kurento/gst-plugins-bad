@@ -51,9 +51,6 @@ struct _GstGLImageSink
 {
     GstVideoSink video_sink;
 
-    //properties
-    gchar *display_name;
-
     guintptr window_id;
     guintptr new_window_id;
     gulong mouse_sig_id;
@@ -89,6 +86,7 @@ struct _GstGLImageSink
 
     GstGLShader *redisplay_shader;
     GLuint vao;
+    GLuint vbo_indices;
     GLuint vertex_buffer;
     GLint  attr_position;
     GLint  attr_texture;

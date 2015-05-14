@@ -205,6 +205,8 @@ static GstFlowReturn
 gst_dash_demux_stream_update_fragment_info (GstAdaptiveDemuxStream * stream);
 static GstFlowReturn gst_dash_demux_stream_seek (GstAdaptiveDemuxStream *
     stream, GstClockTime ts);
+static gboolean
+gst_dash_demux_stream_has_next_fragment (GstAdaptiveDemuxStream * stream);
 static GstFlowReturn
 gst_dash_demux_stream_advance_fragment (GstAdaptiveDemuxStream * stream);
 static gboolean
@@ -361,6 +363,8 @@ gst_dash_demux_class_init (GstDashDemuxClass * klass)
 
   gstadaptivedemux_class->has_next_period = gst_dash_demux_has_next_period;
   gstadaptivedemux_class->advance_period = gst_dash_demux_advance_period;
+  gstadaptivedemux_class->stream_has_next_fragment =
+      gst_dash_demux_stream_has_next_fragment;
   gstadaptivedemux_class->stream_advance_fragment =
       gst_dash_demux_stream_advance_fragment;
   gstadaptivedemux_class->stream_get_fragment_waiting_time =
@@ -591,35 +595,18 @@ gst_dash_demux_setup_streams (GstAdaptiveDemux * demux)
   /* If stream is live, try to find the segment that
    * is closest to current time */
   if (gst_mpd_client_is_live (dashdemux->client)) {
-    GList *iter;
-    gint seg_idx;
+    GDateTime *gnow;
 
     GST_DEBUG_OBJECT (demux, "Seeking to current time of day for live stream ");
-    for (iter = demux->next_streams; iter; iter = g_list_next (iter)) {
-      GstDashDemuxStream *stream = iter->data;
-      GstActiveStream *active_stream = stream->active_stream;
 
-      /* Get segment index corresponding to current time. */
-      seg_idx =
-          gst_mpd_client_get_segment_index_at_time (dashdemux->client,
-          active_stream, now);
-      if (seg_idx < 0) {
-        GST_WARNING_OBJECT (demux,
-            "Failed to find a segment that is available "
-            "at this point in time for stream %d.", stream->index);
-        seg_idx = 0;
-      }
-      GST_INFO_OBJECT (demux,
-          "Segment index corresponding to current time for stream "
-          "%d is %d.", stream->index, seg_idx);
-      gst_mpd_client_set_segment_index (active_stream, seg_idx);
-    }
-
+    gnow = gst_date_time_to_g_date_time (now);
+    gst_mpd_client_seek_to_time (dashdemux->client, gnow);
+    g_date_time_unref (gnow);
   } else {
     GST_DEBUG_OBJECT (demux, "Seeking to first segment for on-demand stream ");
 
     /* start playing from the first segment */
-    gst_mpd_client_set_segment_index_for_all_streams (dashdemux->client, 0);
+    gst_mpd_client_seek_to_first_segment (dashdemux->client);
   }
 
 done:
@@ -986,6 +973,16 @@ gst_dash_demux_stream_advance_subfragment (GstAdaptiveDemuxStream * stream)
   return !fragment_finished;
 }
 
+static gboolean
+gst_dash_demux_stream_has_next_fragment (GstAdaptiveDemuxStream * stream)
+{
+  GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (stream->demux);
+  GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
+
+  return gst_mpd_client_has_next_segment (dashdemux->client,
+      dashstream->active_stream, stream->demux->segment.rate > 0.0);
+}
+
 static GstFlowReturn
 gst_dash_demux_stream_advance_fragment (GstAdaptiveDemuxStream * stream)
 {
@@ -1213,14 +1210,24 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
       }
 
       if (gst_mpd_client_get_next_fragment_timestamp (dashdemux->client,
+              demux_stream->index, &ts)
+          || gst_mpd_client_get_last_fragment_timestamp_end (dashdemux->client,
               demux_stream->index, &ts)) {
+
+        /* Due to rounding when doing the timescale conversions it might happen
+         * that the ts falls back to a previous segment, leading the same data
+         * to be downloaded twice. We try to work around this by always adding
+         * 10 microseconds to get back to the correct segment. The errors are
+         * usually on the order of nanoseconds so it should be enough.
+         */
+        GST_DEBUG_OBJECT (GST_ADAPTIVE_DEMUX_STREAM_PAD (demux_stream),
+            "Current position: %" GST_TIME_FORMAT ", updating to %"
+            GST_TIME_FORMAT, GST_TIME_ARGS (ts),
+            GST_TIME_ARGS (ts + (10 * GST_USECOND)));
+        ts += 10 * GST_USECOND;
         gst_mpd_client_stream_seek (new_client, new_stream, ts);
-      } else
-          if (gst_mpd_client_get_last_fragment_timestamp (dashdemux->client,
-              demux_stream->index, &ts)) {
-        /* try to set to the old timestamp + 1 */
-        gst_mpd_client_stream_seek (new_client, new_stream, ts + 1);
       }
+
       demux_stream->active_stream = new_stream;
     }
 
@@ -1301,7 +1308,7 @@ gst_dash_demux_advance_period (GstAdaptiveDemux * demux)
   }
 
   gst_dash_demux_setup_all_streams (dashdemux);
-  gst_mpd_client_set_segment_index_for_all_streams (dashdemux->client, 0);
+  gst_mpd_client_seek_to_first_segment (dashdemux->client);
 }
 
 static GstBuffer *

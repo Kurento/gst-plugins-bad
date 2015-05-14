@@ -26,6 +26,11 @@
 #include "gl.h"
 #include "gstglshader.h"
 
+/* FIXME: separate into separate shader stage objects that can be added/removed
+ * independently of the shader program */
+
+static const gchar *es2_version_header = "#version 100\n";
+
 /* *INDENT-OFF* */
 static const gchar *simple_vertex_shader_str_gles2 =
       "attribute vec4 a_position;\n"
@@ -47,27 +52,6 @@ static const gchar *simple_fragment_shader_str_gles2 =
       "{\n"
       "  gl_FragColor = texture2D(tex, v_texcoord);\n"
       "}";
-
-static const gchar *simple_vertex_shader_str_gl3 =
-      "#version 130\n"
-      "in vec4 a_position;\n"
-      "in vec2 a_texcoord;\n"
-      "out vec2 v_texcoord;\n"
-      "void main()\n"
-      "{\n"
-      "   gl_Position = a_position;\n"
-      "   v_texcoord = a_texcoord;\n"
-      "}\n";
-
-static const gchar *simple_fragment_shader_str_gl3 =
-      "#version 130\n"
-      "in vec2 v_texcoord;\n"
-      "out vec4 frag_color;\n"
-      "uniform sampler2D tex;\n"
-      "void main()\n"
-      "{\n"
-      "  frag_color = texture(tex, v_texcoord);\n"
-      "}\n";
 /* *INDENT-ON* */
 
 #ifndef GL_COMPILE_STATUS
@@ -127,6 +111,8 @@ struct _GstGLShaderPrivate
 
   gboolean compiled;
   gboolean active;
+
+  GstGLAPI gl_api;
 
   GstGLShaderVTable vtable;
 };
@@ -345,6 +331,9 @@ gst_gl_shader_init (GstGLShader * self)
 
   priv->compiled = FALSE;
   priv->active = FALSE;         /* unused at the moment */
+
+  /* FIXME: add API to get/set this for each shader */
+  priv->gl_api = GST_GL_API_ANY;
 }
 
 static gboolean
@@ -416,6 +405,80 @@ gst_gl_shader_is_compiled (GstGLShader * shader)
   return shader->priv->compiled;
 }
 
+static gboolean
+_shader_string_has_version (const gchar * str)
+{
+  gboolean sl_comment = FALSE;
+  gboolean ml_comment = FALSE;
+  gboolean has_version = FALSE;
+  gint i = 0;
+
+  /* search for #version to allow for preceeding comments as allowed by the
+   * GLSL specification */
+  while (str && str[i] != '\0' && i < 1024) {
+    if (sl_comment) {
+      if (str[i] != '\n')
+        sl_comment = FALSE;
+      i++;
+      continue;
+    }
+
+    if (ml_comment) {
+      if (g_strstr_len (&str[i], 2, "*/")) {
+        ml_comment = FALSE;
+        i += 2;
+      } else {
+        i++;
+      }
+      continue;
+    }
+
+    if (g_strstr_len (&str[i], 2, "//")) {
+      sl_comment = TRUE;
+      i += 2;
+      continue;
+    }
+
+    if (g_strstr_len (&str[i], 2, "/*")) {
+      ml_comment = TRUE;
+      i += 2;
+      continue;
+    }
+
+    if (g_strstr_len (&str[i], 1, "#")) {
+      if (g_strstr_len (&str[i], 8, "#version"))
+        has_version = TRUE;
+      break;
+    }
+
+    i++;
+  }
+
+  return has_version;
+}
+
+static void
+_maybe_prepend_version (GstGLShader * shader, const gchar * shader_str,
+    gint * n_vertex_sources, const gchar *** vertex_sources)
+{
+  gint n = 1;
+
+  /* FIXME: this all an educated guess */
+  if (gst_gl_context_check_gl_version (shader->context, GST_GL_API_OPENGL3, 3,
+          0)
+      && (shader->priv->gl_api & GST_GL_API_GLES2) != 0
+      && !_shader_string_has_version (shader_str))
+    n = 2;
+
+  *vertex_sources = g_malloc0 (n * sizeof (gchar *));
+
+  if (n > 1)
+    *vertex_sources[0] = es2_version_header;
+
+  (*vertex_sources)[n - 1] = shader_str;
+  *n_vertex_sources = n;
+}
+
 gboolean
 gst_gl_shader_compile (GstGLShader * shader, GError ** error)
 {
@@ -444,10 +507,18 @@ gst_gl_shader_compile (GstGLShader * shader, GError ** error)
   g_return_val_if_fail (priv->program_handle, FALSE);
 
   if (priv->vertex_src) {
+    gint n_vertex_sources;
+    const gchar **vertex_sources;
+
+    _maybe_prepend_version (shader, priv->vertex_src, &n_vertex_sources,
+        &vertex_sources);
+
     /* create vertex object */
-    const gchar *vertex_source = priv->vertex_src;
     priv->vertex_handle = priv->vtable.CreateShader (GL_VERTEX_SHADER);
-    gl->ShaderSource (priv->vertex_handle, 1, &vertex_source, NULL);
+    gl->ShaderSource (priv->vertex_handle, n_vertex_sources, vertex_sources,
+        NULL);
+    g_free (vertex_sources);
+
     /* compile */
     gl->CompileShader (priv->vertex_handle);
     /* check everything is ok */
@@ -476,10 +547,17 @@ gst_gl_shader_compile (GstGLShader * shader, GError ** error)
   }
 
   if (priv->fragment_src) {
+    gint n_fragment_sources;
+    const gchar **fragment_sources;
+
+    _maybe_prepend_version (shader, priv->fragment_src, &n_fragment_sources,
+        &fragment_sources);
+
     /* create fragment object */
-    const gchar *fragment_source = priv->fragment_src;
     priv->fragment_handle = priv->vtable.CreateShader (GL_FRAGMENT_SHADER);
-    gl->ShaderSource (priv->fragment_handle, 1, &fragment_source, NULL);
+    gl->ShaderSource (priv->fragment_handle, n_fragment_sources,
+        fragment_sources, NULL);
+    g_free (fragment_sources);
     /* compile */
     gl->CompileShader (priv->fragment_handle);
     /* check everything is ok */
@@ -663,12 +741,8 @@ gst_gl_shader_compile_with_default_f_and_check (GstGLShader * shader,
     const gchar * v_src, const gint n_attribs, const gchar * attrib_names[],
     GLint attrib_locs[])
 {
-  if (gst_gl_context_get_gl_api (shader->context) & GST_GL_API_OPENGL3)
-    return gst_gl_shader_compile_all_with_attribs_and_check (shader, v_src,
-        simple_fragment_shader_str_gl3, n_attribs, attrib_names, attrib_locs);
-  else
-    return gst_gl_shader_compile_all_with_attribs_and_check (shader, v_src,
-        simple_fragment_shader_str_gles2, n_attribs, attrib_names, attrib_locs);
+  return gst_gl_shader_compile_all_with_attribs_and_check (shader, v_src,
+      simple_fragment_shader_str_gles2, n_attribs, attrib_names, attrib_locs);
 }
 
 gboolean
@@ -679,14 +753,8 @@ gst_gl_shader_compile_with_default_v_and_check (GstGLShader * shader,
   GLint attrib_locs[2] = { 0 };
   gboolean ret = TRUE;
 
-  if (gst_gl_context_get_gl_api (shader->context) & GST_GL_API_OPENGL3)
-    ret =
-        gst_gl_shader_compile_all_with_attribs_and_check (shader,
-        simple_vertex_shader_str_gl3, f_src, 2, attrib_names, attrib_locs);
-  else
-    ret =
-        gst_gl_shader_compile_all_with_attribs_and_check (shader,
-        simple_vertex_shader_str_gles2, f_src, 2, attrib_names, attrib_locs);
+  ret = gst_gl_shader_compile_all_with_attribs_and_check (shader,
+      simple_vertex_shader_str_gles2, f_src, 2, attrib_names, attrib_locs);
 
   if (ret) {
     *pos_loc = attrib_locs[0];
@@ -700,12 +768,8 @@ gboolean
 gst_gl_shader_compile_with_default_vf_and_check (GstGLShader * shader,
     GLint * pos_loc, GLint * tex_loc)
 {
-  if (gst_gl_context_get_gl_api (shader->context) & GST_GL_API_OPENGL3)
-    return gst_gl_shader_compile_with_default_v_and_check (shader,
-        simple_fragment_shader_str_gl3, pos_loc, tex_loc);
-  else
-    return gst_gl_shader_compile_with_default_v_and_check (shader,
-        simple_fragment_shader_str_gles2, pos_loc, tex_loc);
+  return gst_gl_shader_compile_with_default_v_and_check (shader,
+      simple_fragment_shader_str_gles2, pos_loc, tex_loc);
 }
 
 void
