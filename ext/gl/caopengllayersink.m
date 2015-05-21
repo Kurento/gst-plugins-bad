@@ -448,6 +448,7 @@ gst_ca_opengl_layer_sink_query (GstBaseSink * bsink, GstQuery * query)
         gst_buffer_unref (buf);
 
       gst_buffer_replace (&ca_sink->next_buffer, NULL);
+      gst_buffer_replace (&ca_sink->next_sync, NULL);
 
       res = GST_BASE_SINK_CLASS (parent_class)->query (bsink, query);
       break;
@@ -528,12 +529,16 @@ gst_ca_opengl_layer_sink_change_state (GstElement * element, GstStateChange tran
        */
       GST_CA_OPENGL_LAYER_SINK_LOCK (ca_sink);
       ca_sink->redisplay_texture = 0;
+
+      gst_buffer_replace (&ca_sink->stored_sync, NULL);
+
       if (ca_sink->stored_buffer) {
         gst_buffer_unref (ca_sink->stored_buffer);
         ca_sink->stored_buffer = NULL;
       }
-      GST_CA_OPENGL_LAYER_SINK_UNLOCK (ca_sink);
       gst_buffer_replace (&ca_sink->next_buffer, NULL);
+      gst_buffer_replace (&ca_sink->next_sync, NULL);
+      GST_CA_OPENGL_LAYER_SINK_UNLOCK (ca_sink);
 
       if (ca_sink->pool) {
         gst_buffer_pool_set_active (ca_sink->pool, FALSE);
@@ -662,7 +667,9 @@ static GstFlowReturn
 gst_ca_opengl_layer_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
 {
   GstCAOpenGLLayerSink *ca_sink;
+  GstBuffer *next_sync, *old_sync, *old_buffer;
   GstVideoFrame gl_frame;
+  GstGLSyncMeta *sync_meta;
 
   ca_sink = GST_CA_OPENGL_LAYER_SINK (bsink);
 
@@ -683,7 +690,24 @@ gst_ca_opengl_layer_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
 
   ca_sink->next_tex = *(guint *) gl_frame.data[0];
 
-  gst_buffer_replace (&ca_sink->next_buffer, buf);
+  next_sync = gst_buffer_new ();
+  sync_meta = gst_buffer_add_gl_sync_meta (ca_sink->context, next_sync);
+  gst_gl_sync_meta_set_sync_point (sync_meta, ca_sink->context);
+
+  GST_CA_OPENGL_LAYER_SINK_LOCK (ca_sink);
+  ca_sink->next_tex = *(guint *) gl_frame.data[0];
+
+  old_buffer = ca_sink->next_buffer;
+  ca_sink->next_buffer = gst_buffer_ref (buf);
+
+  old_sync = ca_sink->next_sync;
+  ca_sink->next_sync = next_sync;
+  GST_CA_OPENGL_LAYER_SINK_UNLOCK (ca_sink);
+
+  if (old_buffer)
+    gst_buffer_unref (old_buffer);
+  if (old_sync)
+    gst_buffer_unref (old_sync);
 
   gst_video_frame_unmap (&gl_frame);
 
@@ -701,7 +725,7 @@ static GstFlowReturn
 gst_ca_opengl_layer_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
 {
   GstCAOpenGLLayerSink *ca_sink;
-  GstBuffer *stored_buffer;
+  GstBuffer *stored_buffer, *old_sync;
 
   GST_TRACE ("rendering buffer:%p", buf);
 
@@ -716,8 +740,12 @@ gst_ca_opengl_layer_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
   /* Avoid to release the texture while drawing */
   GST_CA_OPENGL_LAYER_SINK_LOCK (ca_sink);
   ca_sink->redisplay_texture = ca_sink->next_tex;
+
   stored_buffer = ca_sink->stored_buffer;
   ca_sink->stored_buffer = gst_buffer_ref (ca_sink->next_buffer);
+
+  old_sync = ca_sink->stored_sync;
+  ca_sink->stored_sync = gst_buffer_ref (ca_sink->next_sync);
   GST_CA_OPENGL_LAYER_SINK_UNLOCK (ca_sink);
 
   /* The layer will automatically call the draw callback to draw the new
@@ -730,6 +758,8 @@ gst_ca_opengl_layer_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
 
   if (stored_buffer)
     gst_buffer_unref (stored_buffer);
+  if (old_sync)
+    gst_buffer_unref (old_sync);
 
   if (g_atomic_int_get (&ca_sink->to_quit) != 0) {
     GST_ELEMENT_ERROR (ca_sink, RESOURCE, NOT_FOUND,
@@ -828,6 +858,8 @@ static const GLfloat vertices[] = {
     -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,
      1.0f, -1.0f, 0.0f, 1.0f, 1.0f
 };
+
+static const GLushort indices[] = { 0, 1, 2, 0, 2, 3 };
 /* *INDENT-ON* */
 
 static void
@@ -835,9 +867,8 @@ _bind_buffer (GstCAOpenGLLayerSink * ca_sink)
 {
   const GstGLFuncs *gl = ca_sink->context->gl_vtable;
 
+  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, ca_sink->vbo_indices);
   gl->BindBuffer (GL_ARRAY_BUFFER, ca_sink->vertex_buffer);
-  gl->BufferData (GL_ARRAY_BUFFER, 4 * 5 * sizeof (GLfloat), vertices,
-      GL_STATIC_DRAW);
 
   /* Load the vertex position */
   gl->VertexAttribPointer (ca_sink->attr_position, 3, GL_FLOAT, GL_FALSE,
@@ -856,6 +887,7 @@ _unbind_buffer (GstCAOpenGLLayerSink * ca_sink)
 {
   const GstGLFuncs *gl = ca_sink->context->gl_vtable;
 
+  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
   gl->BindBuffer (GL_ARRAY_BUFFER, 0);
 
   gl->DisableVertexAttribArray (ca_sink->attr_position);
@@ -880,15 +912,27 @@ gst_ca_opengl_layer_sink_thread_init_redisplay (GstCAOpenGLLayerSink * ca_sink)
     gl->BindVertexArray (ca_sink->vao);
   }
 
-  gl->GenBuffers (1, &ca_sink->vertex_buffer);
-  _bind_buffer (ca_sink);
+  if (!ca_sink->vertex_buffer) {
+    gl->GenBuffers (1, &ca_sink->vertex_buffer);
+    gl->BindBuffer (GL_ARRAY_BUFFER, ca_sink->vertex_buffer);
+    gl->BufferData (GL_ARRAY_BUFFER, 4 * 5 * sizeof (GLfloat), vertices,
+        GL_STATIC_DRAW);
+  }
+
+  if (!ca_sink->vbo_indices) {
+    gl->GenBuffers (1, &ca_sink->vbo_indices);
+    gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, ca_sink->vbo_indices);
+    gl->BufferData (GL_ELEMENT_ARRAY_BUFFER, sizeof (indices), indices,
+        GL_STATIC_DRAW);
+  }
 
   if (gl->GenVertexArrays) {
+    _bind_buffer (ca_sink);
     gl->BindVertexArray (0);
-    gl->BindBuffer (GL_ARRAY_BUFFER, 0);
-  } else {
-    _unbind_buffer (ca_sink);
   }
+
+  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
+  gl->BindBuffer (GL_ARRAY_BUFFER, 0);
 }
 
 static void
@@ -904,6 +948,16 @@ gst_ca_opengl_layer_sink_cleanup_glthread (GstCAOpenGLLayerSink * ca_sink)
   if (ca_sink->vao) {
     gl->DeleteVertexArrays (1, &ca_sink->vao);
     ca_sink->vao = 0;
+  }
+
+  if (ca_sink->vbo_indices) {
+    gl->DeleteBuffers (1, &ca_sink->vbo_indices);
+    ca_sink->vbo_indices = 0;
+  }
+
+  if (ca_sink->vertex_buffer) {
+    gl->DeleteBuffers (1, &ca_sink->vertex_buffer);
+    ca_sink->vertex_buffer = 0;
   }
 }
 
@@ -954,7 +1008,7 @@ gst_ca_opengl_layer_sink_on_draw (GstCAOpenGLLayerSink * ca_sink)
    */
 
   const GstGLFuncs *gl = NULL;
-  GLushort indices[] = { 0, 1, 2, 0, 2, 3 };
+  GstGLSyncMeta *sync_meta;
 
   g_return_if_fail (GST_IS_CA_OPENGL_LAYER_SINK (ca_sink));
 
@@ -985,10 +1039,9 @@ gst_ca_opengl_layer_sink_on_draw (GstCAOpenGLLayerSink * ca_sink)
     ca_sink->caps_change = TRUE;
   }
 
-#if GST_GL_HAVE_OPENGL
-  if (USING_OPENGL (ca_sink->context))
-    gl->Disable (GL_TEXTURE_2D);
-#endif
+  sync_meta = gst_buffer_get_gl_sync_meta (ca_sink->stored_sync);
+  if (sync_meta)
+    gst_gl_sync_meta_wait (sync_meta, gst_gl_context_get_current ());
 
   gl->BindTexture (GL_TEXTURE_2D, 0);
 
@@ -1006,7 +1059,7 @@ gst_ca_opengl_layer_sink_on_draw (GstCAOpenGLLayerSink * ca_sink)
   gl->BindTexture (GL_TEXTURE_2D, ca_sink->redisplay_texture);
   gst_gl_shader_set_uniform_1i (ca_sink->redisplay_shader, "tex", 0);
 
-  gl->DrawElements (GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
+  gl->DrawElements (GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
 
   if (gl->GenVertexArrays)
     gl->BindVertexArray (0);

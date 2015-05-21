@@ -616,7 +616,7 @@ gst_x265_enc_init_encoder (GstX265Enc * encoder)
 
   if (x265_param_default_preset (&encoder->x265param,
           x265_preset_names[encoder->speed_preset - 1],
-          x265_tune_names[encoder->tune]) < 0) {
+          x265_tune_names[encoder->tune - 1]) < 0) {
     GST_DEBUG_OBJECT (encoder, "preset or tune unrecognized");
     GST_OBJECT_UNLOCK (encoder);
     return FALSE;
@@ -768,7 +768,8 @@ static GstBuffer *
 gst_x265_enc_get_header_buffer (GstX265Enc * encoder)
 {
   x265_nal *nal;
-  guint32 i_nal, i, offset, vps_idx;
+  guint32 i_nal, i, offset;
+  gint32 vps_idx, sps_idx, pps_idx;
   int header_return;
   GstBuffer *buf;
 
@@ -785,13 +786,18 @@ gst_x265_enc_get_header_buffer (GstX265Enc * encoder)
    * The usefull headers are sequential (VPS, SPS and PPS), so we look for this
    * nal units and only copy these tree nal units as the header */
 
-  for (vps_idx = 0; vps_idx < i_nal; vps_idx++) {
-    if (nal[vps_idx].type == 32) {
-      break;
+  vps_idx = sps_idx = pps_idx = -1;
+  for (i = 0; i < i_nal; i++) {
+    if (nal[i].type == 32) {
+      vps_idx = i;
+    } else if (nal[i].type == 33) {
+      sps_idx = i;
+    } else if (nal[i].type == 34) {
+      pps_idx = i;
     }
   }
 
-  if (vps_idx >= i_nal - 3) {
+  if (vps_idx == -1 || sps_idx == -1 || pps_idx == -1) {
     GST_ELEMENT_ERROR (encoder, STREAM, ENCODE, ("Encode x265 header failed."),
         ("x265_encoder_headers did not return VPS, SPS and PPS"));
     return FALSE;
@@ -800,13 +806,13 @@ gst_x265_enc_get_header_buffer (GstX265Enc * encoder)
   offset = 0;
   buf =
       gst_buffer_new_allocate (NULL,
-      nal[vps_idx].sizeBytes + nal[vps_idx + 1].sizeBytes + nal[vps_idx +
-          2].sizeBytes, NULL);
-  for (i = 0; i < i_nal; i++) {
-    gst_buffer_fill (buf, offset, nal[i + vps_idx].payload,
-        nal[i + vps_idx].sizeBytes);
-    offset += nal[i + vps_idx].sizeBytes;
-  }
+      nal[vps_idx].sizeBytes + nal[sps_idx].sizeBytes + nal[pps_idx].sizeBytes,
+      NULL);
+  gst_buffer_fill (buf, offset, nal[vps_idx].payload, nal[vps_idx].sizeBytes);
+  offset += nal[vps_idx].sizeBytes;
+  gst_buffer_fill (buf, offset, nal[sps_idx].payload, nal[sps_idx].sizeBytes);
+  offset += nal[sps_idx].sizeBytes;
+  gst_buffer_fill (buf, offset, nal[pps_idx].payload, nal[pps_idx].sizeBytes);
 
   return buf;
 }
@@ -858,7 +864,7 @@ gst_x265_enc_set_latency (GstX265Enc * encoder)
 
   /* FIXME get a real value from the encoder, this is currently not exposed */
   if (encoder->tune > 0 && encoder->tune <= G_N_ELEMENTS (x265_tune_names) &&
-      strcmp (x265_tune_names[encoder->tune + 1], "zerolatency") == 0)
+      strcmp (x265_tune_names[encoder->tune - 1], "zerolatency") == 0)
     max_delayed_frames = 0;
   else
     max_delayed_frames = 5;

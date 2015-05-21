@@ -114,8 +114,6 @@ gst_gl_framebuffer_generate (GstGLFramebuffer * frame, gint width, gint height,
 
   if (gst_gl_context_get_gl_api (frame->context) & (GST_GL_API_OPENGL |
           GST_GL_API_OPENGL3)) {
-    gl->RenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width,
-        height);
     gl->RenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width,
         height);
   }
@@ -200,9 +198,6 @@ gst_gl_framebuffer_use_v2 (GstGLFramebuffer * frame, gint texture_fbo_width,
   if (gst_gl_context_get_gl_api (frame->context) & (GST_GL_API_OPENGL |
           GST_GL_API_OPENGL3))
     gl->DrawBuffer (GL_COLOR_ATTACHMENT0);
-
-  gl->ClearColor (0.0, 0.0, 0.0, 0.0);
-  gl->Clear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   /* the opengl scene */
   cb (stuff);

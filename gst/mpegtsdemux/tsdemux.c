@@ -1998,7 +1998,8 @@ calculate_and_push_newsegment (GstTSDemux * demux, TSDemuxStream * stream)
       demux->segment = base->segment;
     } else {
       /* Start from the first ts/pts */
-      GstClockTime base = demux->segment.position - demux->segment.start;
+      GstClockTime base =
+          demux->segment.base + demux->segment.position - demux->segment.start;
       gst_segment_init (&demux->segment, GST_FORMAT_TIME);
       demux->segment.start = firstts;
       demux->segment.stop = GST_CLOCK_TIME_NONE;
@@ -2244,9 +2245,9 @@ gst_ts_demux_push_pending_data (GstTSDemux * demux, TSDemuxStream * stream)
   stream->discont = FALSE;
 
   if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_DTS (buffer)))
-    demux->segment.position = GST_BUFFER_DTS (buffer) - stream->first_dts;
+    demux->segment.position = GST_BUFFER_DTS (buffer);
   else if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_PTS (buffer)))
-    demux->segment.position = GST_BUFFER_PTS (buffer) - stream->first_dts;
+    demux->segment.position = GST_BUFFER_PTS (buffer);
 
   res = gst_pad_push (stream->pad, buffer);
   /* Record that a buffer was pushed */
