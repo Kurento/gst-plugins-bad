@@ -33,7 +33,7 @@
  * DASH demuxer element.
  * <title>Example launch line</title>
  * |[
- * gst-launch playbin2 uri="http://www-itec.uni-klu.ac.at/ftp/datasets/mmsys12/RedBullPlayStreets/redbull_4s/RedBullPlayStreets_4s_isoffmain_DIS_23009_1_v_2_1c2_2011_08_30.mpd"
+ * gst-launch-1.0 playbin uri="http://www-itec.uni-klu.ac.at/ftp/datasets/mmsys12/RedBullPlayStreets/redbull_4s/RedBullPlayStreets_4s_isoffmain_DIS_23009_1_v_2_1c2_2011_08_30.mpd"
  * ]|
  */
 
@@ -244,7 +244,7 @@ static GstPad *gst_dash_demux_create_pad (GstDashDemux * demux,
 #define gst_dash_demux_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstDashDemux, gst_dash_demux, GST_TYPE_ADAPTIVE_DEMUX,
     GST_DEBUG_CATEGORY_INIT (gst_dash_demux_debug, "dashdemux", 0,
-        "dashdemux element");
+        "dashdemux element")
     );
 
 static void

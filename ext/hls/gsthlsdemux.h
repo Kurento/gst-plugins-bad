@@ -66,15 +66,9 @@ struct _GstHLSDemux
 
   gint srcpad_counter;
 
-  GstCaps *input_caps;
   gchar *uri;                   /* Original playlist URI */
   GstM3U8Client *client;        /* M3U8 client */
   gboolean do_typefind;         /* Whether we need to typefind the next buffer */
-  gboolean new_playlist;        /* Whether a new playlist is about to start and pads should be switched */
-
-
-  /* Streaming task */
-  gint64 next_download;
 
   /* Cache for the last key */
   gchar *key_url;

@@ -223,6 +223,15 @@ _mixer_pad_get_output_size (GstCompositor * comp,
   gint pad_width, pad_height;
   guint dar_n, dar_d;
 
+  /* FIXME: Anything better we can do here? */
+  if (!vagg_pad->info.finfo
+      || vagg_pad->info.finfo->format == GST_VIDEO_FORMAT_UNKNOWN) {
+    GST_DEBUG_OBJECT (comp_pad, "Have no caps yet");
+    *width = 0;
+    *height = 0;
+    return;
+  }
+
   pad_width =
       comp_pad->width <=
       0 ? GST_VIDEO_INFO_WIDTH (&vagg_pad->info) : comp_pad->width;
@@ -247,11 +256,6 @@ _mixer_pad_get_output_size (GstCompositor * comp,
   } else {
     pad_width = gst_util_uint64_scale_int (pad_height, dar_n, dar_d);
   }
-
-  if (width)
-    *width = pad_width;
-  if (height)
-    *height = pad_height;
 
   if (width)
     *width = pad_width;

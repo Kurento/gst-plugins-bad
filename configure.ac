@@ -1812,7 +1812,7 @@ AG_GST_CHECK_FEATURE(CHROMAPRINT, [chromaprint], chromaprint, [
 dnl *** Curl ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_CURL, true)
 AG_GST_CHECK_FEATURE(CURL, [Curl plugin], curl, [
-  PKG_CHECK_MODULES(CURL, libcurl >= 7.21.0, [
+  PKG_CHECK_MODULES(CURL, libcurl >= 7.37.1, [
     HAVE_CURL="yes"
     AC_CHECK_HEADERS([unistd.h sys/socket.h sys/types.h netinet/in.h netinet/ip.h netinet/tcp.h fcntl.h], [ ], [
       AC_CHECK_HEADERS([unistd.h sys/types.h winsock2.h ws2tcpip.h fcntl.h], [ ], [HAVE_CURL="no"])
@@ -3206,6 +3206,7 @@ gst-libs/gst/gl/dispmanx/Makefile
 gst-libs/gst/gl/glprototypes/Makefile
 gst-libs/gst/gl/eagl/Makefile
 gst-libs/gst/gl/egl/Makefile
+gst-libs/gst/gl/gpuprocess/Makefile
 gst-libs/gst/gl/wayland/Makefile
 gst-libs/gst/gl/win32/Makefile
 gst-libs/gst/gl/x11/Makefile

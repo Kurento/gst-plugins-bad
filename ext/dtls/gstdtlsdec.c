@@ -358,7 +358,7 @@ gst_dtls_dec_request_new_pad (GstElement * element,
   }
 
   self->src = pad = gst_pad_new_from_template (tmpl, name);
-  gst_object_ref (pad);
+
   g_mutex_unlock (&self->src_mutex);
 
   gst_pad_set_active (pad, TRUE);
@@ -367,7 +367,6 @@ gst_dtls_dec_request_new_pad (GstElement * element,
     gst_pad_set_caps (pad, (GstCaps *) caps);
 
   gst_element_add_pad (element, pad);
-  gst_object_unref (pad);
 
   return pad;
 }
@@ -380,15 +379,13 @@ gst_dtls_dec_release_pad (GstElement * element, GstPad * pad)
   g_return_if_fail (self->src == pad);
 
   g_mutex_lock (&self->src_mutex);
-  gst_object_unref (self->src);
+
   self->src = NULL;
   g_mutex_unlock (&self->src_mutex);
 
-  gst_element_remove_pad (element, pad);
-
   GST_DEBUG_OBJECT (self, "releasing src pad");
 
-  GST_ELEMENT_GET_CLASS (element)->release_pad (element, pad);
+  gst_element_remove_pad (element, pad);
 }
 
 static void

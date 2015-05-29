@@ -29,7 +29,7 @@ G_BEGIN_DECLS
 
 #define GST_GL_TYPE_CONTEXT         (gst_gl_context_get_type())
 #define GST_GL_CONTEXT(o)           (G_TYPE_CHECK_INSTANCE_CAST((o), GST_GL_TYPE_CONTEXT, GstGLContext))
-#define GST_GL_CONTEXT_CLASS(k)     (G_TYPE_CHECK_CLASS((k), GST_GL_TYPE_CONTEXT, GstGLContextClass))
+#define GST_GL_CONTEXT_CLASS(k)     (G_TYPE_CHECK_CLASS_CAST((k), GST_GL_TYPE_CONTEXT, GstGLContextClass))
 #define GST_GL_IS_CONTEXT(o)        (G_TYPE_CHECK_INSTANCE_TYPE((o), GST_GL_TYPE_CONTEXT))
 #define GST_GL_IS_CONTEXT_CLASS(k)  (G_TYPE_CHECK_CLASS_TYPE((k), GST_GL_TYPE_CONTEXT))
 #define GST_GL_CONTEXT_GET_CLASS(o) (G_TYPE_INSTANCE_GET_CLASS((o), GST_GL_TYPE_CONTEXT, GstGLContextClass))
@@ -124,6 +124,7 @@ gboolean      gst_gl_context_activate         (GstGLContext *context, gboolean a
 GThread *     gst_gl_context_get_thread       (GstGLContext *context);
 GstGLContext * gst_gl_context_get_current     (void);
 
+void           gst_gl_context_set_display (GstGLContext *context, GstGLDisplay *display);
 GstGLDisplay * gst_gl_context_get_display (GstGLContext *context);
 gpointer      gst_gl_context_get_proc_address (GstGLContext *context, const gchar *name);
 GstGLPlatform gst_gl_context_get_gl_platform  (GstGLContext *context);

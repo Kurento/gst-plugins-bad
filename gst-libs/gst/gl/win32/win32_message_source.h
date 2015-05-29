@@ -1,6 +1,7 @@
 /*
  * GStreamer
- * Copyright (C) 2009 Julien Isorce <julien.isorce@gmail.com>
+ * Copyright (C) 2012 Matthew Waters <ystreet00@gmail.com>
+ * Copyright (C) 2015 Collabora ltd.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -18,33 +19,16 @@
  * Boston, MA 02110-1301, USA.
  */
 
-/* Compatibility for OpenGL ES 2.0 */
+#ifndef __WIN32_MESSAGE_SOURCE_H__
+#define __WIN32_MESSAGE_SOURCE_H__
 
-#ifndef __GST_GL_ES2__
-#define __GST_GL_ES2__
+#include <glib-object.h>
+#include "gstglwindow_win32.h"
 
-#include <glib.h>
+typedef void (*Win32MessageSourceFunc) (GstGLWindowWin32 *window_win32,
+    MSG *msg, gpointer user_data);
 
-G_BEGIN_DECLS
+GSource *
+win32_message_source_new (GstGLWindowWin32 *window_win32);
 
-/* SUPPORTED */
-//FIXME:
-#define GL_RGB16 GL_RGB565
-#define GL_RGB8 GL_RGB
-//END FIXME
-
-/* UNSUPPORTED */
-
-#define GL_COLOR_ATTACHMENT1 0
-#define GL_COLOR_ATTACHMENT2 0
-#ifndef GL_TEXTURE_ENV
-#define GL_TEXTURE_ENV 0
-#endif
-#ifndef GL_TEXTURE_ENV_MODE
-#define GL_TEXTURE_ENV_MODE 0
-#endif
-#define GL_DEPTH24_STENCIL8 0
-
-G_END_DECLS
-
-#endif /* __GST_GL_ES2__ */
+#endif /* __WIN32_MESSAGE_SOURCE_H__ */
