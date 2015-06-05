@@ -50,7 +50,7 @@ gstreamer@GST_ABI@-plugins-base-doc
 libzbar-dev (>= 0.9)
 librtmp-dev
 libgnutls28-dev (>= 2.11.3)
-libcurl4-gnutls-dev (>= 7.21.0)
+libcurl4-openssl-dev
 libxvidcore-dev
 libvo-aacenc-dev
 libvo-amrwbenc-dev
