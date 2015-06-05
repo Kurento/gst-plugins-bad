@@ -94,10 +94,11 @@ Build-Depends: autoconf (>= 2.62),
                libzbar-dev (>= 0.9),
                libzvbi-dev,
                nettle-dev,
+               openh264,
                pkg-config (>= 0.11.0)
 Standards-Version: 3.9.3
-Vcs-Git: git://anonscm.debian.org/pkg-gstreamer/gst-plugins-bad1.0.git
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-gstreamer/gst-plugins-bad1.0.git;a=summary
+Vcs-Git: git://anonscm.debian.org/pkg-gstreamer/gst-plugins-bad1.5.git
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-gstreamer/gst-plugins-bad1.5.git;a=summary
 Homepage: http://gstreamer.freedesktop.org/modules/gst-plugins-bad.html
 
 Package: gstreamer1.5-plugins-bad-doc
@@ -203,6 +204,7 @@ Depends: ${misc:Depends},
          libgstreamer1.5-dev,
          libgstreamer-plugins-base1.5-dev,
          gir1.2-gst-plugins-bad-1.5 (= ${binary:Version})
+Conflicts: libgstreamer-plugins-bad1.0-dev
 Description: GStreamer development files for libraries from the "bad" set
  GStreamer is a streaming media framework, based on graphs of filters
  which operate on media data.  Applications using this library can do
@@ -243,3 +245,13 @@ Description: Description: GObject introspection data for the GStreamer libraries
  the "bad" set. It can be used by packages using the GIRepository format to
  generate dynamic bindings.
 
+Package: openh264-gst-plugins-bad-1.5
+Architecture: any
+Multi-Arch: same
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+         gstreamer1.5-plugins-base,
+         openh264,
+         libgstreamer-plugins-bad1.5-0 (= ${binary:Version}),
+Description: GStreamer plugins from openh264

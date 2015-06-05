@@ -1,0 +1,9 @@
+#!/bin/sh
+
+FILENAME=/usr/lib/x86_64-linux-gnu/gstreamer-1.5/libgstopenh264.so
+
+if [ -f $FILENAME ]; then
+    rm $FILENAME
+fi
+
+exit 0

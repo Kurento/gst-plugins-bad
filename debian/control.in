@@ -154,3 +154,13 @@ Description: Description: GObject introspection data for the GStreamer libraries
  the "bad" set. It can be used by packages using the GIRepository format to
  generate dynamic bindings.
 
+Package: openh264-gst-plugins-bad-@GST_ABI@
+Architecture: any
+Multi-Arch: same
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+         gstreamer@GST_ABI@-plugins-base,
+         openh264,
+         libgstreamer-plugins-bad@GST_DEB_ABI@ (= ${binary:Version}),
+Description: GStreamer plugins from openh264
