@@ -63,12 +63,16 @@ struct display {
 struct window {
   struct display *display;
 
-  struct wl_egl_window      *native;
+  struct wl_event_queue     *queue;
   struct wl_surface         *surface;
   struct wl_shell_surface   *shell_surface;
+  struct wl_egl_window      *native;
+  struct wl_surface         *foreign_surface;
+  struct wl_subsurface      *subsurface;
   struct wl_callback        *callback;
   int fullscreen, configured;
   int window_width, window_height;
+  int window_x, window_y;
 };
 
 struct _GstGLWindowWaylandEGL {
@@ -79,8 +83,6 @@ struct _GstGLWindowWaylandEGL {
   struct window  window;
 
   GSource *wl_source;
-  GMainContext *main_context;
-  GMainLoop *loop;
 
   gpointer _reserved[GST_PADDING];
 };
@@ -96,6 +98,8 @@ struct _GstGLWindowWaylandEGLClass {
 GType gst_gl_window_wayland_egl_get_type     (void);
 
 GstGLWindowWaylandEGL * gst_gl_window_wayland_egl_new  (void);
+
+void gst_gl_window_wayland_egl_create_window (GstGLWindowWaylandEGL * window_egl);
 
 G_END_DECLS
 

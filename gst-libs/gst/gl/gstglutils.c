@@ -31,6 +31,9 @@
 #if GST_GL_HAVE_WINDOW_X11
 #include <gst/gl/x11/gstgldisplay_x11.h>
 #endif
+#if GST_GL_HAVE_WINDOW_WAYLAND
+#include <gst/gl/wayland/gstgldisplay_wayland.h>
+#endif
 
 #ifndef GL_FRAMEBUFFER_UNDEFINED
 #define GL_FRAMEBUFFER_UNDEFINED          0x8219
@@ -105,6 +108,7 @@ static void
 _gen_texture (GstGLContext * context, GenTexture * data)
 {
   const GstGLFuncs *gl = context->gl_vtable;
+  GLenum internal_format;
 
   GST_TRACE ("Generating texture format:%u dimensions:%ux%u", data->format,
       data->width, data->height);
@@ -112,8 +116,11 @@ _gen_texture (GstGLContext * context, GenTexture * data)
   gl->GenTextures (1, &data->result);
   gl->BindTexture (GL_TEXTURE_2D, data->result);
 
+  internal_format =
+      gst_gl_sized_gl_format_from_gl_format_type (context, GL_RGBA,
+      GL_UNSIGNED_BYTE);
   if (data->width > 0 && data->height > 0)
-    gl->TexImage2D (GL_TEXTURE_2D, 0, gst_gl_internal_format_rgba (context),
+    gl->TexImage2D (GL_TEXTURE_2D, 0, internal_format,
         data->width, data->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 
   gl->TexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -124,6 +131,7 @@ _gen_texture (GstGLContext * context, GenTexture * data)
   GST_LOG ("generated texture id:%d", data->result);
 }
 
+/* deprecated. replaced by GstGLMemory */
 void
 gst_gl_context_gen_texture (GstGLContext * context, GLuint * pTexture,
     GstVideoFormat v_format, GLint width, GLint height)
@@ -142,6 +150,7 @@ _del_texture (GstGLContext * context, guint * texture)
   context->gl_vtable->DeleteTextures (1, texture);
 }
 
+/* deprecated. replaced by GstGLMemory */
 void
 gst_gl_context_del_texture (GstGLContext * context, GLuint * pTexture)
 {
@@ -160,6 +169,8 @@ static void
 _gen_texture_full (GstGLContext * context, GenTextureFull * data)
 {
   const GstGLFuncs *gl = context->gl_vtable;
+  GstVideoGLTextureType tex_type;
+  GstVideoFormat v_format;
   GLint glinternalformat = 0;
   GLenum glformat = 0;
   GLenum gltype = 0;
@@ -167,60 +178,14 @@ _gen_texture_full (GstGLContext * context, GenTextureFull * data)
   gl->GenTextures (1, &data->result);
   gl->BindTexture (GL_TEXTURE_2D, data->result);
 
-  switch (GST_VIDEO_INFO_FORMAT (data->info)) {
-    case GST_VIDEO_FORMAT_RGB:
-    case GST_VIDEO_FORMAT_BGR:
-    {
-      glinternalformat = GL_RGB8;
-      glformat = GL_RGB;
-      gltype = GL_UNSIGNED_BYTE;
-      break;
-    }
-    case GST_VIDEO_FORMAT_RGB16:
-    {
-      glinternalformat = GL_RGB16;
-      glformat = GL_RGB;
-      gltype = GL_UNSIGNED_SHORT_5_6_5;
-      break;
-    }
-    case GST_VIDEO_FORMAT_RGBA:
-    case GST_VIDEO_FORMAT_BGRA:
-    case GST_VIDEO_FORMAT_ARGB:
-    case GST_VIDEO_FORMAT_ABGR:
-    case GST_VIDEO_FORMAT_RGBx:
-    case GST_VIDEO_FORMAT_BGRx:
-    case GST_VIDEO_FORMAT_xRGB:
-    case GST_VIDEO_FORMAT_xBGR:
-    case GST_VIDEO_FORMAT_AYUV:
-    {
-      glinternalformat = gst_gl_internal_format_rgba (context);
-      glformat = GL_RGBA;
-      gltype = GL_UNSIGNED_BYTE;
-      break;
-    }
-    case GST_VIDEO_FORMAT_NV12:
-    case GST_VIDEO_FORMAT_NV21:
-    {
-      glinternalformat = GL_LUMINANCE;
-      glformat = data->comp == 0 ? GL_LUMINANCE : GL_LUMINANCE_ALPHA;
-      gltype = GL_UNSIGNED_BYTE;
-      break;
-    }
-    case GST_VIDEO_FORMAT_I420:
-    case GST_VIDEO_FORMAT_YV12:
-    case GST_VIDEO_FORMAT_Y444:
-    case GST_VIDEO_FORMAT_Y42B:
-    case GST_VIDEO_FORMAT_Y41B:
-    {
-      glformat = GL_LUMINANCE;
-      gltype = GL_UNSIGNED_BYTE;
-      break;
-    }
-    default:
-      GST_WARNING ("unsupported %s",
-          gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (data->info)));
-      break;
-  }
+  v_format = GST_VIDEO_INFO_FORMAT (data->info);
+  tex_type = gst_gl_texture_type_from_format (context, v_format, data->comp);
+  glformat = gst_gl_format_from_gl_texture_type (tex_type);
+  gltype = GL_UNSIGNED_BYTE;
+  if (v_format == GST_VIDEO_FORMAT_RGB16)
+    gltype = GL_UNSIGNED_SHORT_5_6_5;
+  glinternalformat = gst_gl_sized_gl_format_from_gl_format_type (context,
+      glformat, gltype);
 
   gl->TexImage2D (GL_TEXTURE_2D, 0, glinternalformat,
       GST_VIDEO_INFO_COMP_WIDTH (data->info, data->comp),
@@ -233,6 +198,7 @@ _gen_texture_full (GstGLContext * context, GenTextureFull * data)
   gl->TexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
+/* deprecated. replaced by GstGLMemory */
 void
 gst_gl_generate_texture_full (GstGLContext * context, const GstVideoInfo * info,
     const guint comp, gint stride[], gsize offset[], gsize size[],
@@ -618,6 +584,30 @@ gst_gl_display_context_query (GstElement * element, GstGLDisplay ** display_ptr)
     goto out;
 #endif
 
+#if GST_GL_HAVE_WINDOW_WAYLAND
+  gst_query_unref (query);
+  query =
+      _gst_context_query (element, display_ptr,
+      "GstWaylandDisplayHandleContextType");
+  gst_query_parse_context (query, &ctxt);
+  if (ctxt
+      && gst_context_has_context_type (ctxt,
+          "GstWaylandDisplayHandleContextType")) {
+    const GstStructure *s;
+    struct wl_display *display;
+
+    s = gst_context_get_structure (ctxt);
+    if (gst_structure_get (s, "display", G_TYPE_POINTER, &display, NULL)
+        && display) {
+      *display_ptr =
+          (GstGLDisplay *) gst_gl_display_wayland_new_with_display (display);
+    }
+  }
+
+  if (*display_ptr)
+    goto out;
+#endif
+
 out:
   gst_query_unref (query);
 }
@@ -742,6 +732,17 @@ gst_gl_handle_set_context (GstElement * element, GstContext * context,
           (GstGLDisplay *) gst_gl_display_x11_new_with_display (display);
   }
 #endif
+#if GST_GL_HAVE_WINDOW_WAYLAND
+  else if (g_strcmp0 (context_type, "GstWaylandDisplayHandleContextType") == 0) {
+    const GstStructure *s;
+    struct wl_display *display;
+
+    s = gst_context_get_structure (context);
+    if (gst_structure_get (s, "display", G_TYPE_POINTER, &display, NULL))
+      display_replacement =
+          (GstGLDisplay *) gst_gl_display_wayland_new_with_display (display);
+  }
+#endif
   else if (g_strcmp0 (context_type, "gst.gl.app_context") == 0) {
     const GstStructure *s = gst_context_get_structure (context);
     GstGLDisplay *context_display;
@@ -839,6 +840,33 @@ gst_gl_handle_context_query (GstElement * element, GstQuery * query,
     res = x11_display != NULL;
   }
 #endif
+#if GST_GL_HAVE_WINDOW_WAYLAND
+  else if (g_strcmp0 (context_type, "GstWaylandDisplayHandleContextType") == 0) {
+    GstStructure *s;
+    struct wl_display *wayland_display = NULL;
+
+    gst_query_parse_context (query, &old_context);
+
+    if (old_context)
+      context = gst_context_copy (old_context);
+    else
+      context = gst_context_new ("GstWaylandDisplayHandleContextType", TRUE);
+
+    if (*display
+        && ((*display)->type & GST_GL_DISPLAY_TYPE_WAYLAND) ==
+        GST_GL_DISPLAY_TYPE_WAYLAND)
+      wayland_display =
+          (struct wl_display *) gst_gl_display_get_handle (*display);
+
+    s = gst_context_writable_structure (context);
+    gst_structure_set (s, "display", G_TYPE_POINTER, wayland_display, NULL);
+
+    gst_query_set_context (query, context);
+    gst_context_unref (context);
+
+    res = wayland_display != NULL;
+  }
+#endif
   else if (g_strcmp0 (context_type, "gst.gl.app_context") == 0) {
     GstStructure *s;
 
@@ -903,16 +931,4 @@ gst_gl_caps_replace_all_caps_features (const GstCaps * caps,
   }
 
   return tmp;
-}
-
-GLint
-gst_gl_internal_format_rgba (GstGLContext * context)
-{
-#if GST_GL_HAVE_GLES2 && (GST_GL_HAVE_OPENGL || GST_GL_HAVE_GLES3)
-  return USING_GLES2 (context) ? GL_RGBA : GL_RGBA8;
-#elif GST_GL_HAVE_OPENGL || GST_GL_HAVE_GLES3
-  return GL_RGBA8;
-#else
-  return GL_RGBA;
-#endif
 }

@@ -28,7 +28,7 @@
  * biggest incoming video stream and the framerate of the fastest incoming one.
  *
  * VideoAggregator will do colorspace conversion.
- * 
+ *
  * Zorder for each input stream can be configured on the
  * #GstVideoAggregatorPad.
  *
@@ -674,6 +674,7 @@ gst_videoaggregator_update_src_caps (GstVideoAggregator * vagg)
     GstCaps *caps, *peercaps, *info_caps;
     GstStructure *s;
     GstVideoInfo info;
+    int i;
 
     if (GST_VIDEO_INFO_FPS_N (&vagg->info) != best_fps_n ||
         GST_VIDEO_INFO_FPS_D (&vagg->info) != best_fps_d) {
@@ -711,11 +712,8 @@ gst_videoaggregator_update_src_caps (GstVideoAggregator * vagg)
       caps = info_caps;
     }
 
-    peercaps = gst_pad_peer_query_caps (agg->srcpad, NULL);
-    if (peercaps) {
-      GstCaps *tmp;
-      int i;
-
+    /* If the sub-class allows it, allow size/framerate changes */
+    if (!vagg_klass->preserve_update_caps_result) {
       s = gst_caps_get_structure (caps, 0);
       gst_structure_get (s, "width", G_TYPE_INT, &best_width, "height",
           G_TYPE_INT, &best_height, NULL);
@@ -726,6 +724,12 @@ gst_videoaggregator_update_src_caps (GstVideoAggregator * vagg)
             "height", GST_TYPE_INT_RANGE, 1, G_MAXINT, "framerate",
             GST_TYPE_FRACTION_RANGE, 0, 1, G_MAXINT, 1, NULL);
       }
+    }
+
+    peercaps = gst_pad_peer_query_caps (agg->srcpad, caps);
+    if (peercaps) {
+      GstCaps *tmp;
+
 
       tmp = gst_caps_intersect (caps, peercaps);
       GST_DEBUG_OBJECT (vagg, "intersecting %" GST_PTR_FORMAT
@@ -1198,6 +1202,10 @@ gst_videoaggregator_do_aggregate (GstVideoAggregator * vagg,
         gst_flow_get_name (ret));
     return ret;
   }
+  if (*outbuf == NULL) {
+    /* sub-class doesn't want to generate output right now */
+    return GST_FLOW_OK;
+  }
 
   GST_BUFFER_TIMESTAMP (*outbuf) = output_start_time;
   GST_BUFFER_DURATION (*outbuf) = output_end_time - output_start_time;
@@ -1369,6 +1377,8 @@ gst_videoaggregator_aggregate (GstAggregator * agg, gboolean timeout)
   if (jitter <= 0) {
     ret = gst_videoaggregator_do_aggregate (vagg, output_start_time,
         output_end_time, &outbuf);
+    if (ret != GST_FLOW_OK)
+      goto done;
     vagg->priv->qos_processed++;
   } else {
     GstMessage *msg;
@@ -1405,6 +1415,8 @@ gst_videoaggregator_aggregate (GstAggregator * agg, gboolean timeout)
   goto done_unlocked;
 
 done:
+  if (outbuf)
+    gst_buffer_unref (outbuf);
   GST_VIDEO_AGGREGATOR_UNLOCK (vagg);
 
 done_unlocked:

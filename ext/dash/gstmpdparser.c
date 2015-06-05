@@ -2536,6 +2536,82 @@ gst_mpdparser_get_initializationURL (GstActiveStream * stream,
   return url_prefix;
 }
 
+/* ISO/IEC 23009-1:2004 5.3.9.4.4 */
+static gboolean
+validate_format (const gchar * format)
+{
+  gchar *p;
+
+  /* Check if there is a % at all */
+  p = strchr (format, '%');
+  if (!p)
+    return TRUE;
+  p++;
+
+  /* Following the % must be a 0, or any of d, x or u.
+   * x and u are not part of the spec, but don't hurt us
+   */
+  if (p[0] == '0') {
+    p++;
+
+    while (g_ascii_isdigit (*p))
+      p++;
+  }
+
+  /* After any 0 and alphanumeric values, there must be
+   * an d, x or u.
+   */
+  if (p[0] != 'd' && p[0] != 'x' && p[0] != 'u')
+    return FALSE;
+  p++;
+
+  /* And then potentially more characters without any
+   * further %, even if the spec does not mention this
+   */
+  p = strchr (p, '%');
+  if (p)
+    return FALSE;
+
+  return TRUE;
+}
+
+static gchar *
+promote_format_to_uint64 (const gchar * format)
+{
+  gchar *p;
+  gchar *promoted_format;
+
+  /* Must be called with a validated format! */
+  g_return_val_if_fail (validate_format (format), NULL);
+
+  /* Check if there is a % at all */
+  p = strchr (format, '%');
+  if (!p)
+    return g_strdup (format);
+  p++;
+
+  /* Following the % must be a 0, or any of d, x or u.
+   * x and u are not part of the spec, but don't hurt us
+   */
+  if (p[0] == '0') {
+    p++;
+
+    while (g_ascii_isdigit (*p))
+      p++;
+  }
+
+  /* After any 0 and alphanumeric values, there must be
+   * an d, x or u. Otherwise validation would have failed
+   */
+  g_assert (p[0] == 'd' || p[0] == 'x' || p[0] != 'u');
+
+  promoted_format =
+      g_strdup_printf ("%.*s" G_GINT64_MODIFIER "%s", (gint) (p - format),
+      format, p);
+
+  return promoted_format;
+}
+
 static gchar *
 gst_mpdparser_build_URL_from_template (const gchar * url_template,
     const gchar * id, guint number, guint bandwidth, guint64 time)
@@ -2566,6 +2642,9 @@ gst_mpdparser_build_URL_from_template (const gchar * url_template,
       if (strlen (token) > 6) {
         format = token + 6;     /* format tag */
       }
+      if (!validate_format (format))
+        goto invalid_format;
+
       tokens[i] = g_strdup_printf (format, number);
       g_free (token);
       last_token_par = TRUE;
@@ -2573,16 +2652,24 @@ gst_mpdparser_build_URL_from_template (const gchar * url_template,
       if (strlen (token) > 9) {
         format = token + 9;     /* format tag */
       }
+      if (!validate_format (format))
+        goto invalid_format;
+
       tokens[i] = g_strdup_printf (format, bandwidth);
       g_free (token);
       last_token_par = TRUE;
     } else if (!strncmp (token, "Time", 4)) {
+      gchar *promoted_format;
+
       if (strlen (token) > 4) {
         format = token + 4;     /* format tag */
-      } else {
-        format = "%" G_GUINT64_FORMAT;
       }
-      tokens[i] = g_strdup_printf (format, time);
+      if (!validate_format (format))
+        goto invalid_format;
+
+      promoted_format = promote_format_to_uint64 (format);
+      tokens[i] = g_strdup_printf (promoted_format, time);
+      g_free (promoted_format);
       g_free (token);
       last_token_par = TRUE;
     } else if (!g_strcmp0 (token, "")) {
@@ -2597,9 +2684,19 @@ gst_mpdparser_build_URL_from_template (const gchar * url_template,
   }
 
   ret = g_strjoinv (NULL, tokens);
+
   g_strfreev (tokens);
 
   return ret;
+
+invalid_format:
+  {
+    GST_ERROR ("Invalid format '%s' in '%s'", format, token);
+
+    g_strfreev (tokens);
+
+    return NULL;
+  }
 }
 
 guint
@@ -3712,13 +3809,17 @@ gst_mpd_client_get_next_fragment (GstMpdClient * client,
       mediaURL =
           gst_mpdparser_build_URL_from_template (stream->
           cur_seg_template->media, stream->cur_representation->id,
-          stream->segment_index, stream->cur_representation->bandwidth,
+          stream->segment_index +
+          stream->cur_seg_template->MultSegBaseType->startNumber,
+          stream->cur_representation->bandwidth,
           stream->segment_index * fragment->duration);
       if (stream->cur_seg_template->index) {
         indexURL =
             gst_mpdparser_build_URL_from_template (stream->
             cur_seg_template->index, stream->cur_representation->id,
-            stream->segment_index, stream->cur_representation->bandwidth,
+            stream->segment_index +
+            stream->cur_seg_template->MultSegBaseType->startNumber,
+            stream->cur_representation->bandwidth,
             stream->segment_index * fragment->duration);
       }
     } else {
@@ -3791,6 +3892,7 @@ gst_mpd_client_advance_segment (GstMpdClient * client, GstActiveStream * stream,
     gboolean forward)
 {
   GstMediaSegment *segment;
+  GstFlowReturn ret = GST_FLOW_OK;
   guint segments_count = gst_mpd_client_get_segments_counts (stream);
 
   GST_DEBUG ("Advancing segment. Current: %d / %d r:%d", stream->segment_index,
@@ -3803,27 +3905,30 @@ gst_mpd_client_advance_segment (GstMpdClient * client, GstActiveStream * stream,
         stream->segment_index = 0;
       else
         stream->segment_index++;
-      return GST_FLOW_OK;
+      goto done;
     }
 
-    if (stream->segment_index >= segments_count)
-      return GST_FLOW_EOS;
+    if (stream->segment_index >= segments_count) {
+      ret = GST_FLOW_EOS;
+      goto done;
+    }
 
     /* special case for when playback direction is reverted right at *
      * the end of the segment list */
     if (stream->segment_index < 0) {
       stream->segment_index = 0;
-      return GST_FLOW_OK;
+      goto done;
     }
   } else {
     if (stream->segments == NULL)
       stream->segment_index--;
     if (stream->segment_index < 0) {
       stream->segment_index = -1;
-      return GST_FLOW_EOS;
+      ret = GST_FLOW_EOS;
+      goto done;
     }
     if (stream->segments == NULL)
-      return GST_FLOW_OK;
+      goto done;
 
     /* special case for when playback direction is reverted right at *
      * the end of the segment list */
@@ -3831,7 +3936,7 @@ gst_mpd_client_advance_segment (GstMpdClient * client, GstActiveStream * stream,
       stream->segment_index = segments_count - 1;
       segment = g_ptr_array_index (stream->segments, stream->segment_index);
       stream->segment_repeat_index = segment->repeat;
-      return GST_FLOW_OK;
+      goto done;
     }
   }
 
@@ -3859,9 +3964,10 @@ gst_mpd_client_advance_segment (GstMpdClient * client, GstActiveStream * stream,
   }
 
 done:
-  GST_DEBUG ("Advanced to segment: %d / %d r:%d", stream->segment_index,
-      stream->segments->len, stream->segment_repeat_index);
-  return GST_FLOW_OK;
+  GST_DEBUG ("Advanced to segment: %d / %d r:%d (ret: %s)",
+      stream->segment_index, (stream->segments ? stream->segments->len : -1),
+      stream->segment_repeat_index, gst_flow_get_name (ret));
+  return ret;
 }
 
 gboolean
@@ -4427,6 +4533,10 @@ gst_mpd_client_seek_to_time (GstMpdClient * client, GDateTime * time)
 
   ts_microseconds = g_date_time_difference (time, start);
   g_date_time_unref (start);
+
+  /* Clamp to availability start time, otherwise calculations wrap around */
+  if (ts_microseconds < 0)
+    ts_microseconds = 0;
 
   ts = ts_microseconds * GST_USECOND;
   for (stream = client->active_streams; stream; stream = g_list_next (stream)) {

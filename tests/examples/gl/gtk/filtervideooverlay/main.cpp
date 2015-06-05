@@ -27,6 +27,11 @@
 
 static GstBusSyncReply create_window (GstBus* bus, GstMessage* message, GtkWidget* widget)
 {
+    GtkAllocation allocation;
+
+    if (gst_gtk_handle_need_context (bus, message, NULL))
+        return GST_BUS_DROP;
+
     // ignore anything but 'prepare-window-handle' element messages
     if (GST_MESSAGE_TYPE (message) != GST_MESSAGE_ELEMENT)
         return GST_BUS_PASS;
@@ -38,22 +43,55 @@ static GstBusSyncReply create_window (GstBus* bus, GstMessage* message, GtkWidge
 
     gst_video_overlay_set_gtk_window (GST_VIDEO_OVERLAY (GST_MESSAGE_SRC (message)), widget);
 
+    gtk_widget_get_allocation (widget, &allocation);
+    gst_video_overlay_set_render_rectangle (GST_VIDEO_OVERLAY (GST_MESSAGE_SRC (message)), allocation.x, allocation.y, allocation.width, allocation.height);
+
     gst_message_unref (message);
 
     return GST_BUS_DROP;
 }
 
+static gboolean
+resize_cb (GtkWidget * widget, GdkEvent * event, gpointer sink)
+{
+    GtkAllocation allocation;
+
+    gtk_widget_get_allocation (widget, &allocation);
+    gst_video_overlay_set_render_rectangle (GST_VIDEO_OVERLAY (sink), allocation.x, allocation.y, allocation.width, allocation.height);
+
+    return G_SOURCE_CONTINUE;
+}
 
 static void end_stream_cb(GstBus* bus, GstMessage* message, GstElement* pipeline)
 {
-    g_print("End of stream\n");
+    GError *error = NULL;
+    gchar *details;
 
-    gst_element_set_state (pipeline, GST_STATE_NULL);
-    gst_object_unref(pipeline);
+    switch (GST_MESSAGE_TYPE (message)) {
+        case GST_MESSAGE_ERROR:
+            gst_message_parse_error (message, &error, &details);
 
-    gtk_main_quit();
+            g_print("Error %s\n", error->message);
+            g_print("Details %s\n", details);
+        /* fallthrough */
+        case GST_MESSAGE_EOS:
+            g_print("End of stream\n");
+
+            gst_element_set_state (pipeline, GST_STATE_NULL);
+            gst_object_unref(pipeline);
+
+            gtk_main_quit();
+            break;
+        case GST_MESSAGE_WARNING:
+            gst_message_parse_warning (message, &error, &details);
+
+            g_print("Warning %s\n", error->message);
+            g_print("Details %s\n", details);
+            break;
+        default:
+            break;
+    }
 }
-
 
 static gboolean expose_cb(GtkWidget* widget, cairo_t *cr, GstElement* videosink)
 {
@@ -182,20 +220,20 @@ gint main (gint argc, gchar *argv[])
     g_signal_connect(G_OBJECT(window), "delete-event", G_CALLBACK(destroy_cb), pipeline);
 
     GstElement* videosrc = gst_element_factory_make ("videotestsrc", "videotestsrc");
+    GstElement* upload = gst_element_factory_make ("glupload", "glupload");
     GstElement* glfiltercube = gst_element_factory_make ("glfiltercube", "glfiltercube");
-    GstElement* glfilterlaplacian = gst_element_factory_make ("glfilterlaplacian", "glfilterlaplacian");
     GstElement* videosink = gst_element_factory_make ("glimagesink", "glimagesink");
 
     GstCaps *caps = gst_caps_new_simple("video/x-raw",
                                         "width", G_TYPE_INT, 640,
                                         "height", G_TYPE_INT, 480,
                                         "framerate", GST_TYPE_FRACTION, 25, 1,
-                                        "format", G_TYPE_STRING, "AYUV",
+                                        "format", G_TYPE_STRING, "RGBA",
                                         NULL) ;
 
-    gst_bin_add_many (GST_BIN (pipeline), videosrc, glfiltercube, glfilterlaplacian, videosink, NULL);
+    gst_bin_add_many (GST_BIN (pipeline), videosrc, upload, glfiltercube, videosink, NULL);
 
-    gboolean link_ok = gst_element_link_filtered(videosrc, glfiltercube, caps) ;
+    gboolean link_ok = gst_element_link_filtered(videosrc, upload, caps) ;
     gst_caps_unref(caps) ;
     if(!link_ok)
     {
@@ -203,7 +241,7 @@ gint main (gint argc, gchar *argv[])
         return -1;
     }
 
-    if(!gst_element_link_many(glfiltercube, glfilterlaplacian, videosink, NULL))
+    if(!gst_element_link_many(upload, glfiltercube, videosink, NULL))
     {
         g_warning("Failed to link glfiltercube to videosink!\n") ;
         return -1;
@@ -211,6 +249,7 @@ gint main (gint argc, gchar *argv[])
 
     //area where the video is drawn
     GtkWidget* area = gtk_drawing_area_new();
+    gtk_widget_set_redraw_on_allocate (area, TRUE);
     gtk_container_add (GTK_CONTAINER (window), area);
 
     gtk_widget_realize(area);
@@ -227,6 +266,7 @@ gint main (gint argc, gchar *argv[])
     //needed when being in GST_STATE_READY, GST_STATE_PAUSED
     //or resizing/obscuring the window
     g_signal_connect(area, "draw", G_CALLBACK(expose_cb), videosink);
+    g_signal_connect(area, "configure-event", G_CALLBACK(resize_cb), videosink);
 
     //start
     GstStateChangeReturn ret = gst_element_set_state (pipeline, GST_STATE_PLAYING);
