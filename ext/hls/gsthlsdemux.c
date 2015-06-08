@@ -31,7 +31,7 @@
  * <refsect2>
  * <title>Example launch line</title>
  * |[
- * gst-launch souphttpsrc location=http://devimages.apple.com/iphone/samples/bipbop/gear4/prog_index.m3u8 ! hlsdemux ! decodebin2 ! videoconvert ! videoscale ! autovideosink
+ * gst-launch-1.0 souphttpsrc location=http://devimages.apple.com/iphone/samples/bipbop/gear4/prog_index.m3u8 ! hlsdemux ! decodebin ! videoconvert ! videoscale ! autovideosink
  * ]|
  * </refsect2>
  */
@@ -436,12 +436,17 @@ gst_hls_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
   if (gst_m3u8_client_has_variant_playlist (hlsdemux->client)) {
     GstM3U8 *child = NULL;
     GError *err = NULL;
-    GList *current_variant = NULL;
 
-    current_variant =
-        gst_m3u8_client_get_playlist_for_bitrate (hlsdemux->client,
-        demux->connection_speed);
-    child = GST_M3U8 (current_variant->data);
+    if (demux->connection_speed == 0) {
+      GST_M3U8_CLIENT_LOCK (hlsdemux->client);
+      child = hlsdemux->client->main->current_variant->data;
+      GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
+    } else {
+      GList *tmp = gst_m3u8_client_get_playlist_for_bitrate (hlsdemux->client,
+          demux->connection_speed);
+
+      child = GST_M3U8 (tmp->data);
+    }
 
     gst_m3u8_client_set_current (hlsdemux->client, child);
     if (!gst_hls_demux_update_playlist (hlsdemux, FALSE, &err)) {
