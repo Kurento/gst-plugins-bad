@@ -65,7 +65,7 @@ libgles2-mesa-dev
 libglu1-mesa-dev
 libxml2-dev (>= 2.4)
 libfluidsynth-dev (>= 1.0)
-libsrtp0-dev
+libsrtp-dev
 libopencv-dev (>= 2.0.0)
 libopenjpeg-dev
 libchromaprint-dev
