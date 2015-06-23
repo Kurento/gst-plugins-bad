@@ -152,6 +152,16 @@ gst_decklink_video_sink_start_scheduled_playback (GstElement * element);
 G_DEFINE_TYPE (GstDecklinkVideoSink, gst_decklink_video_sink,
     GST_TYPE_BASE_SINK);
 
+static gboolean
+reset_framerate (GstCapsFeatures * features, GstStructure * structure,
+    gpointer user_data)
+{
+  gst_structure_set (structure, "framerate", GST_TYPE_FRACTION_RANGE, 0, 1,
+      G_MAXINT, 1, NULL);
+
+  return TRUE;
+}
+
 static void
 gst_decklink_video_sink_class_init (GstDecklinkVideoSinkClass * klass)
 {
@@ -195,6 +205,9 @@ gst_decklink_video_sink_class_init (GstDecklinkVideoSinkClass * klass)
               G_PARAM_CONSTRUCT)));
 
   templ_caps = gst_decklink_mode_get_template_caps ();
+  templ_caps = gst_caps_make_writable (templ_caps);
+  /* For output we support any framerate and only really care about timestamps */
+  gst_caps_map_in_place (templ_caps, reset_framerate, NULL);
   gst_element_class_add_pad_template (element_class,
       gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS, templ_caps));
   gst_caps_unref (templ_caps);
@@ -305,6 +318,10 @@ gst_decklink_video_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
   GstCaps *mode_caps, *caps;
 
   mode_caps = gst_decklink_mode_get_caps (self->mode);
+  mode_caps = gst_caps_make_writable (mode_caps);
+  /* For output we support any framerate and only really care about timestamps */
+  gst_caps_map_in_place (mode_caps, reset_framerate, NULL);
+
   if (filter) {
     caps =
         gst_caps_intersect_full (filter, mode_caps, GST_CAPS_INTERSECT_FIRST);
@@ -400,7 +417,6 @@ gst_decklink_video_sink_prepare (GstBaseSink * bsink, GstBuffer * buffer)
   GstClockTime timestamp, duration;
   GstClockTime running_time, running_time_duration;
   gint i;
-  GstClock *clock;
 
   GST_DEBUG_OBJECT (self, "Preparing buffer %p", buffer);
 
@@ -422,47 +438,6 @@ gst_decklink_video_sink_prepare (GstBaseSink * bsink, GstBuffer * buffer)
   running_time_duration =
       gst_segment_to_running_time (&GST_BASE_SINK_CAST (self)->segment,
       GST_FORMAT_TIME, timestamp + duration) - running_time;
-
-  // FIXME: https://bugzilla.gnome.org/show_bug.cgi?id=742916
-  // We need to drop late buffers here immediately instead of
-  // potentially overflowing the internal queue of the hardware
-  clock = gst_element_get_clock (GST_ELEMENT_CAST (self));
-  if (clock) {
-    GstClockTime clock_running_time, base_time, clock_time, latency,
-        max_lateness;
-
-    base_time = gst_element_get_base_time (GST_ELEMENT_CAST (self));
-    clock_time = gst_clock_get_time (clock);
-    if (base_time != GST_CLOCK_TIME_NONE && clock_time != GST_CLOCK_TIME_NONE) {
-      clock_running_time = clock_time - base_time;
-      latency = gst_base_sink_get_latency (GST_BASE_SINK_CAST (self));
-      max_lateness = gst_base_sink_get_max_lateness (GST_BASE_SINK_CAST (self));
-
-      if (clock_running_time >
-          running_time + running_time_duration + latency + max_lateness) {
-        GST_DEBUG_OBJECT (self,
-            "Late buffer: %" GST_TIME_FORMAT " > %" GST_TIME_FORMAT,
-            GST_TIME_ARGS (clock_running_time),
-            GST_TIME_ARGS (running_time + running_time_duration));
-
-        if (self->last_render_time == GST_CLOCK_TIME_NONE
-            || (self->last_render_time < clock_running_time
-                && clock_running_time - self->last_render_time >= GST_SECOND)) {
-          GST_DEBUG_OBJECT (self,
-              "Rendering frame nonetheless because we had none for more than 1s");
-          running_time = clock_running_time;
-          running_time_duration = 0;
-        } else {
-          GST_WARNING_OBJECT (self, "Dropping frame");
-          gst_object_unref (clock);
-          return GST_FLOW_OK;
-        }
-      }
-    }
-
-    gst_object_unref (clock);
-  }
-  self->last_render_time = running_time;
 
   ret = self->output->output->CreateVideoFrame (self->info.width,
       self->info.height, self->info.stride[0], bmdFormat8BitYUV,
@@ -674,7 +649,6 @@ gst_decklink_video_sink_change_state (GstElement * element,
       gst_element_post_message (element,
           gst_message_new_clock_provide (GST_OBJECT_CAST (element),
               self->output->clock, TRUE));
-      self->last_render_time = GST_CLOCK_TIME_NONE;
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:{
       GstClock *clock, *audio_clock;

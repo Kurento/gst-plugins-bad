@@ -958,9 +958,11 @@ gst_mpdparser_get_xml_node_namespace (xmlNode * a_node, const gchar * prefix)
 
   if (prefix == NULL) {
     /* return the default namespace */
-    namespace = xmlMemStrdup ((const gchar *) a_node->ns->href);
-    if (namespace) {
-      GST_LOG (" - default namespace: %s", namespace);
+    if (a_node->ns) {
+      namespace = xmlMemStrdup ((const gchar *) a_node->ns->href);
+      if (namespace) {
+        GST_LOG (" - default namespace: %s", namespace);
+      }
     }
   } else {
     /* look for the specified prefix in the namespace list */
@@ -1162,6 +1164,7 @@ gst_mpdparser_parse_seg_base_type_ext (GstSegmentBaseType ** pointer,
   xmlNode *cur_node;
   GstSegmentBaseType *seg_base_type;
   guint intval;
+  guint64 int64val;
   gboolean boolval;
   GstRange *rangeval;
 
@@ -1194,9 +1197,9 @@ gst_mpdparser_parse_seg_base_type_ext (GstSegmentBaseType ** pointer,
           &intval)) {
     seg_base_type->timescale = intval;
   }
-  if (gst_mpdparser_get_xml_prop_unsigned_integer (a_node,
-          "presentationTimeOffset", 0, &intval)) {
-    seg_base_type->presentationTimeOffset = intval;
+  if (gst_mpdparser_get_xml_prop_unsigned_integer_64 (a_node,
+          "presentationTimeOffset", 0, &int64val)) {
+    seg_base_type->presentationTimeOffset = int64val;
   }
   if (gst_mpdparser_get_xml_prop_range (a_node, "indexRange", &rangeval)) {
     if (seg_base_type->indexRange) {
@@ -2069,7 +2072,7 @@ gst_mpdparser_get_rep_idx_with_max_bandwidth (GList * Representations,
     return -1;
 
   if (max_bandwidth <= 0)       /* 0 => get lowest representation available */
-    return 0;
+    return gst_mpdparser_get_rep_idx_with_min_bandwidth (Representations);
 
   for (list = g_list_first (Representations); list; list = g_list_next (list)) {
     representation = (GstRepresentationNode *) list->data;
@@ -3283,13 +3286,17 @@ gst_mpd_client_setup_representation (GstMpdClient * client,
 
       GST_LOG ("Building media segment list using this template: %s",
           stream->cur_seg_template->media);
-      stream->presentationTimeOffset =
-          mult_seg->SegBaseType->presentationTimeOffset * GST_SECOND;
 
-      /* Avoid dividing by zero */
-      if (mult_seg->SegBaseType->timescale)
-        stream->presentationTimeOffset /= mult_seg->SegBaseType->timescale;
-
+      /* Avoid dividing by zero and avoid overflows */
+      if (mult_seg->SegBaseType->timescale) {
+        stream->presentationTimeOffset =
+            gst_util_uint64_scale (mult_seg->
+            SegBaseType->presentationTimeOffset, GST_SECOND,
+            mult_seg->SegBaseType->timescale);
+      } else {
+        stream->presentationTimeOffset =
+            mult_seg->SegBaseType->presentationTimeOffset * GST_SECOND;
+      }
       GST_LOG ("Setting stream's presentation time offset to %" GST_TIME_FORMAT,
           GST_TIME_ARGS (stream->presentationTimeOffset));
 
@@ -3384,6 +3391,12 @@ gst_mpd_client_setup_media_presentation (GstMpdClient * client)
     period_node = (GstPeriodNode *) list->data;
     if (period_node->start != -1) {
       /* we have a regular period */
+      /* start cannot be smaller than previous start */
+      if (list != g_list_first (client->mpd_node->Periods)
+          && start >= period_node->start * GST_MSECOND) {
+        /* Invalid MPD file: duration would be negative or zero */
+        goto syntax_error;
+      }
       start = period_node->start * GST_MSECOND;
     } else if (duration != GST_CLOCK_TIME_NONE) {
       /* start time inferred from previous period, this is still a regular period */
@@ -3398,13 +3411,26 @@ gst_mpd_client_setup_media_presentation (GstMpdClient * client)
       goto early;
     }
 
-    if (period_node->duration != -1) {
-      duration = period_node->duration * GST_MSECOND;
-    } else if ((next = g_list_next (list)) != NULL) {
+    /* compute duration.
+       If there is a start time for the next period, or this is the last period
+       and mediaPresentationDuration was set, those values will take precedence
+       over a configured period duration in computing this period's duration
+
+       ISO/IEC 23009-1:2014(E), chapter 5.3.2.1
+       "The Period extends until the PeriodStart of the next Period, or until
+       the end of the Media Presentation in the case of the last Period."
+     */
+    if ((next = g_list_next (list)) != NULL) {
       /* try to infer this period duration from the start time of the next period */
       GstPeriodNode *next_period_node = next->data;
       if (next_period_node->start != -1) {
+        if (start >= next_period_node->start * GST_MSECOND) {
+          /* Invalid MPD file: duration would be negative or zero */
+          goto syntax_error;
+        }
         duration = next_period_node->start * GST_MSECOND - start;
+      } else if (period_node->duration != -1) {
+        duration = period_node->duration * GST_MSECOND;
       } else if (client->mpd_node->type == GST_MPD_FILE_TYPE_DYNAMIC) {
         /* might be a live file, ignore unspecified duration */
       } else {
@@ -3413,8 +3439,14 @@ gst_mpd_client_setup_media_presentation (GstMpdClient * client)
       }
     } else if (client->mpd_node->mediaPresentationDuration != -1) {
       /* last Period of the Media Presentation */
+      if (client->mpd_node->mediaPresentationDuration * GST_MSECOND <= start) {
+        /* Invalid MPD file: duration would be negative or zero */
+        goto syntax_error;
+      }
       duration =
           client->mpd_node->mediaPresentationDuration * GST_MSECOND - start;
+    } else if (period_node->duration != -1) {
+      duration = period_node->duration * GST_MSECOND;
     } else if (client->mpd_node->type == GST_MPD_FILE_TYPE_DYNAMIC) {
       /* might be a live file, ignore unspecified duration */
     } else {
@@ -3532,13 +3564,16 @@ gst_mpd_client_setup_streaming (GstMpdClient * client,
   stream->mimeType =
       gst_mpdparser_representation_get_mimetype (adapt_set, representation);
   if (stream->mimeType == GST_STREAM_UNKNOWN) {
+    GST_WARNING ("Unknown mime type in the representation, aborting...");
     g_slice_free (GstActiveStream, stream);
     return FALSE;
   }
 
   client->active_streams = g_list_append (client->active_streams, stream);
-  if (!gst_mpd_client_setup_representation (client, stream, representation))
+  if (!gst_mpd_client_setup_representation (client, stream, representation)) {
+    GST_WARNING ("Failed to setup the representation, aborting...");
     return FALSE;
+  }
 
   GST_INFO ("Successfully setup the download pipeline for mimeType %d",
       stream->mimeType);
@@ -4412,7 +4447,7 @@ gst_mpdparser_get_list_and_nb_of_audio_language (GstMpdClient * client,
   GList *list;
   const gchar *this_mimeType = "audio";
   gchar *mimeType = NULL;
-  guint nb_adapatation_set = 0;
+  guint nb_adaptation_set = 0;
 
   stream_period = gst_mpdparser_get_stream_period (client);
   g_return_val_if_fail (stream_period != NULL, 0);
@@ -4434,14 +4469,14 @@ gst_mpdparser_get_list_and_nb_of_audio_language (GstMpdClient * client,
 
       if (strncmp_ext (mimeType, this_mimeType) == 0) {
         if (this_lang) {
-          nb_adapatation_set++;
+          nb_adaptation_set++;
           *lang = g_list_append (*lang, this_lang);
         }
       }
     }
   }
 
-  return nb_adapatation_set;
+  return nb_adaptation_set;
 }
 
 

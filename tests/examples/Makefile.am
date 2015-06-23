@@ -34,8 +34,20 @@ else
 AVSAMPLE_DIR=
 endif
 
-SUBDIRS= mpegts $(DIRECTFB_DIR) $(GTK_EXAMPLES) $(OPENCV_EXAMPLES) $(GL_DIR) \
-	$(AVSAMPLE_DIR)
-DIST_SUBDIRS= mpegts camerabin2 directfb mxf opencv uvch264 gl avsamplesink
+if USE_GTK3
+GTK3_DIR=gtk
+else
+GTK3_DIR=
+endif
+
+noinst_PROGRAMS = playout
+
+playout_SOURCES = playout.c
+playout_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_CFLAGS)
+playout_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstvideo-$(GST_API_VERSION) $(GST_LIBS)
+
+SUBDIRS= codecparsers mpegts $(DIRECTFB_DIR) $(GTK_EXAMPLES) $(OPENCV_EXAMPLES) \
+        $(GL_DIR) $(GTK3_DIR) $(AVSAMPLE_DIR)
+DIST_SUBDIRS= codecparsers mpegts camerabin2 directfb mxf opencv uvch264 gl gtk avsamplesink
 
 include $(top_srcdir)/common/parallel-subdirs.mak

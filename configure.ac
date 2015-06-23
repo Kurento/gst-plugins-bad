@@ -2,7 +2,7 @@ AC_PREREQ([2.69])
 
 dnl initialize autoconf
 dnl when going to/from release please set the nano (fourth number) right !
-dnl releases only do Wall, cvs and prerelease does Werror too
+dnl releases only do Wall, git and prerelease does Werror too
 AC_INIT([GStreamer Bad Plug-ins],[1.5.1.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
 
 AG_GST_INIT
@@ -2134,7 +2134,7 @@ AC_SUBST(LIBMMS_LIBS)
 dnl *** libsrtp ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_SRTP, true)
 AG_GST_CHECK_FEATURE(SRTP, [srtp library], srtp, [
-  PKG_CHECK_MODULES(SRTP, libsrtp, HAVE_SRTP="yes", 
+  PKG_CHECK_MODULES(SRTP, libsrtp, HAVE_SRTP="yes",
     AG_GST_CHECK_LIBHEADER(SRTP, srtp, srtp_init, , srtp/srtp.h, SRTP_LIBS="-lsrtp")
   )
   AC_SUBST(SRTP_LIBS)
@@ -2585,6 +2585,27 @@ AG_GST_CHECK_FEATURE(GL, [gl elements], gl, [
   fi
 ])
 
+dnl *** gtk+ ***
+HAVE_GTK3_GL="no"
+translit(dnm, m, l) AM_CONDITIONAL(USE_GTK3, true)
+AG_GST_CHECK_FEATURE(GTK3, [Gtk+ elements], gtk, [
+  PKG_CHECK_MODULES(GTK3, gtk+-3.0, [
+      AC_DEFINE([HAVE_GTK3], 1, [Define if Gtk+ 3.0 is installed])
+      HAVE_GTK3="yes"
+  ], [
+      HAVE_GTK3="no"
+  ])
+  PKG_CHECK_MODULES(GTK3_GL, gtk+-3.0 >= 3.15.0, [
+      AC_DEFINE([HAVE_GTK3_GL], 1, [Define if Gtk+ 3.0 GL is installed])
+      if test "x$HAVE_GL" = "xyes"; then
+        HAVE_GTK3_GL="yes"
+      fi
+  ], [
+      HAVE_GTK3_GL="no"
+  ])
+])
+AM_CONDITIONAL(USE_GTK3_GL, test "x$HAVE_GTK3_GL" = "xyes")
+
 dnl *** libvisual ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_LIBVISUAL, true)
 AG_GST_CHECK_FEATURE(LIBVISUAL, [libvisual visualization library], libvisual, [
@@ -2989,6 +3010,8 @@ AM_CONDITIONAL(USE_FLITE, false)
 AM_CONDITIONAL(USE_FLUIDSYNTH, false)
 AM_CONDITIONAL(USE_GL, false)
 AM_CONDITIONAL(USE_GSM, false)
+AM_CONDITIONAL(USE_GTK3, false)
+AM_CONDITIONAL(USE_GTK3_GL, false)
 AM_CONDITIONAL(USE_HLS, false)
 AM_CONDITIONAL(USE_KATE, false)
 AM_CONDITIONAL(USE_TIGER, false)
@@ -3206,7 +3229,6 @@ gst-libs/gst/gl/dispmanx/Makefile
 gst-libs/gst/gl/glprototypes/Makefile
 gst-libs/gst/gl/eagl/Makefile
 gst-libs/gst/gl/egl/Makefile
-gst-libs/gst/gl/gpuprocess/Makefile
 gst-libs/gst/gl/wayland/Makefile
 gst-libs/gst/gl/win32/Makefile
 gst-libs/gst/gl/x11/Makefile
@@ -3251,6 +3273,7 @@ tests/files/Makefile
 tests/examples/Makefile
 tests/examples/avsamplesink/Makefile
 tests/examples/camerabin2/Makefile
+tests/examples/codecparsers/Makefile
 tests/examples/directfb/Makefile
 tests/examples/gl/Makefile
 tests/examples/gl/cocoa/Makefile
@@ -3262,12 +3285,14 @@ tests/examples/gl/generic/doublecube/Makefile
 tests/examples/gl/generic/recordgraphic/Makefile
 tests/examples/gl/gtk/Makefile
 tests/examples/gl/gtk/gtkvideooverlay/Makefile
+tests/examples/gl/gtk/3dvideo/Makefile
 tests/examples/gl/gtk/filternovideooverlay/Makefile
 tests/examples/gl/gtk/filtervideooverlay/Makefile
 tests/examples/gl/gtk/fxtest/Makefile
 tests/examples/gl/gtk/switchvideooverlay/Makefile
 tests/examples/gl/qt/Makefile
 tests/examples/gl/sdl/Makefile
+tests/examples/gtk/Makefile
 tests/examples/mpegts/Makefile
 tests/examples/mxf/Makefile
 tests/examples/opencv/Makefile
@@ -3288,6 +3313,7 @@ ext/wayland/Makefile
 ext/daala/Makefile
 ext/dts/Makefile
 ext/gl/Makefile
+ext/gtk/Makefile
 ext/faac/Makefile
 ext/faad/Makefile
 ext/flite/Makefile

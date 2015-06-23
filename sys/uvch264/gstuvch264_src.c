@@ -1351,23 +1351,26 @@ gst_uvc_h264_src_get_boolean_setting (GstUvcH264Src * self, gchar * property,
   gboolean ret = FALSE;
 
   if (g_strcmp0 (property, "enable-sei") == 0) {
-    ret = probe_setting (self, UVCX_VIDEO_CONFIG_PROBE,
-        offsetof (uvcx_video_config_probe_commit_t, bTimestamp), 1,
-        &min, &def, &max);
-    *changeable = (min != max);
-    *default_value = (def != 0);
+    if ((ret = probe_setting (self, UVCX_VIDEO_CONFIG_PROBE,
+                offsetof (uvcx_video_config_probe_commit_t, bTimestamp), 1,
+                &min, &def, &max))) {
+      *changeable = (min != max);
+      *default_value = (def != 0);
+    }
   } else if (g_strcmp0 (property, "preview-flipped") == 0) {
-    ret = probe_setting (self, UVCX_VIDEO_CONFIG_PROBE,
-        offsetof (uvcx_video_config_probe_commit_t, bPreviewFlipped), 1,
-        &min, &def, &max);
-    *changeable = (min != max);
-    *default_value = (def != 0);
+    if ((ret = probe_setting (self, UVCX_VIDEO_CONFIG_PROBE,
+                offsetof (uvcx_video_config_probe_commit_t, bPreviewFlipped), 1,
+                &min, &def, &max))) {
+      *changeable = (min != max);
+      *default_value = (def != 0);
+    }
   } else if (g_strcmp0 (property, "fixed-framerate") == 0) {
-    ret = probe_setting (self, UVCX_VIDEO_CONFIG_PROBE,
-        offsetof (uvcx_video_config_probe_commit_t, bRateControlMode), 1,
-        &min, &def, &max);
-    *changeable = ((max & UVC_H264_RATECONTROL_FIXED_FRM_FLG) != 0);
-    *default_value = ((def & UVC_H264_RATECONTROL_FIXED_FRM_FLG) != 0);
+    if ((ret = probe_setting (self, UVCX_VIDEO_CONFIG_PROBE,
+                offsetof (uvcx_video_config_probe_commit_t, bRateControlMode),
+                1, &min, &def, &max))) {
+      *changeable = ((max & UVC_H264_RATECONTROL_FIXED_FRM_FLG) != 0);
+      *default_value = ((def & UVC_H264_RATECONTROL_FIXED_FRM_FLG) != 0);
+    }
   }
 
   return ret;
@@ -3061,13 +3064,18 @@ gst_uvc_h264_src_getcaps (GstPad * pad, GstObject * parent, GstQuery * query)
 static gboolean
 gst_uvc_h264_src_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
-  gboolean ret = FALSE;
+  gboolean ret;
 
   switch (GST_QUERY_TYPE (query)) {
-    case GST_QUERY_CAPS:
-      gst_query_set_caps_result (query,
-          gst_uvc_h264_src_getcaps (pad, parent, query));
+    case GST_QUERY_CAPS:{
+      GstCaps *caps;
+
+      caps = gst_uvc_h264_src_getcaps (pad, parent, query);
+      gst_query_set_caps_result (query, caps);
+      gst_caps_unref (caps);
       ret = TRUE;
+      break;
+    }
     default:
       ret = gst_pad_query_default (pad, parent, query);
       break;

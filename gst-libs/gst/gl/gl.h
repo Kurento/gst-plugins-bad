@@ -39,10 +39,12 @@
 #include <gst/gl/gstglupload.h>
 #include <gst/gl/gstgluploadmeta.h>
 #include <gst/gl/gstgldownload.h>
+#include <gst/gl/gstglbasebuffer.h>
 #include <gst/gl/gstglmemory.h>
 #include <gst/gl/gstglbufferpool.h>
 #include <gst/gl/gstglframebuffer.h>
 #include <gst/gl/gstglbasefilter.h>
+#include <gst/gl/gstglviewconvert.h>
 #include <gst/gl/gstglfilter.h>
 #include <gst/gl/gstglshadervariables.h>
 #include <gst/gl/gstglsyncmeta.h>

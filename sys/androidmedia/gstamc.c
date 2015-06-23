@@ -1605,9 +1605,9 @@ scan_codecs (GstPlugin * plugin)
       const gchar *supported_type_str = NULL;
       jobject capabilities = NULL;
       jclass capabilities_class = NULL;
-      jfieldID color_formats_id, profile_levels_id;
-      jobject color_formats = NULL;
+      jfieldID profile_levels_id, color_formats_id;
       jobject profile_levels = NULL;
+      jobject color_formats = NULL;
       jint *color_formats_elems = NULL;
       jsize n_elems, k;
 
@@ -1668,42 +1668,42 @@ scan_codecs (GstPlugin * plugin)
         goto next_supported_type;
       }
 
-      color_formats =
-          (*env)->GetObjectField (env, capabilities, color_formats_id);
-      if ((*env)->ExceptionCheck (env)) {
-        GST_ERROR ("Failed to get color formats");
-        (*env)->ExceptionDescribe (env);
-        (*env)->ExceptionClear (env);
-        valid_codec = FALSE;
-        goto next_supported_type;
-      }
-
-      n_elems = (*env)->GetArrayLength (env, color_formats);
-      if ((*env)->ExceptionCheck (env)) {
-        GST_ERROR ("Failed to get color formats array length");
-        (*env)->ExceptionDescribe (env);
-        (*env)->ExceptionClear (env);
-        valid_codec = FALSE;
-        goto next_supported_type;
-      }
-      gst_codec_type->n_color_formats = n_elems;
-      gst_codec_type->color_formats = g_new0 (gint, n_elems);
-      color_formats_elems =
-          (*env)->GetIntArrayElements (env, color_formats, NULL);
-      if ((*env)->ExceptionCheck (env)) {
-        GST_ERROR ("Failed to get color format elements");
-        (*env)->ExceptionDescribe (env);
-        (*env)->ExceptionClear (env);
-        valid_codec = FALSE;
-        goto next_supported_type;
-      }
-
-      for (k = 0; k < n_elems; k++) {
-        GST_INFO ("Color format %d: 0x%x", k, color_formats_elems[k]);
-        gst_codec_type->color_formats[k] = color_formats_elems[k];
-      }
-
       if (g_str_has_prefix (gst_codec_type->mime, "video/")) {
+        color_formats =
+            (*env)->GetObjectField (env, capabilities, color_formats_id);
+        if ((*env)->ExceptionCheck (env)) {
+          GST_ERROR ("Failed to get color formats");
+          (*env)->ExceptionDescribe (env);
+          (*env)->ExceptionClear (env);
+          valid_codec = FALSE;
+          goto next_supported_type;
+        }
+
+        n_elems = (*env)->GetArrayLength (env, color_formats);
+        if ((*env)->ExceptionCheck (env)) {
+          GST_ERROR ("Failed to get color formats array length");
+          (*env)->ExceptionDescribe (env);
+          (*env)->ExceptionClear (env);
+          valid_codec = FALSE;
+          goto next_supported_type;
+        }
+        gst_codec_type->n_color_formats = n_elems;
+        gst_codec_type->color_formats = g_new0 (gint, n_elems);
+        color_formats_elems =
+            (*env)->GetIntArrayElements (env, color_formats, NULL);
+        if ((*env)->ExceptionCheck (env)) {
+          GST_ERROR ("Failed to get color format elements");
+          (*env)->ExceptionDescribe (env);
+          (*env)->ExceptionClear (env);
+          valid_codec = FALSE;
+          goto next_supported_type;
+        }
+
+        for (k = 0; k < n_elems; k++) {
+          GST_INFO ("Color format %d: 0x%x", k, color_formats_elems[k]);
+          gst_codec_type->color_formats[k] = color_formats_elems[k];
+        }
+
         if (!n_elems) {
           GST_ERROR ("No supported color formats for video codec");
           valid_codec = FALSE;
@@ -3143,7 +3143,9 @@ register_codecs (GstPlugin * plugin)
        */
       if (g_str_has_prefix (codec_info->name, "OMX.google") ||
           g_str_has_suffix (codec_info->name, ".sw.dec")) {
-        rank = GST_RANK_SECONDARY;
+        /* For video we prefer hardware codecs, for audio we prefer software
+         * codecs. Hardware codecs don't make much sense for audio */
+        rank = is_video ? GST_RANK_SECONDARY : GST_RANK_PRIMARY;
       } else if (g_str_has_prefix (codec_info->name, "OMX.Exynos.")
           && !is_video) {
         /* OMX.Exynos. audio codecs are existing on some devices like the
@@ -3156,7 +3158,7 @@ register_codecs (GstPlugin * plugin)
          */
         rank = GST_RANK_MARGINAL;
       } else if (g_str_has_prefix (codec_info->name, "OMX.")) {
-        rank = GST_RANK_PRIMARY;
+        rank = is_video ? GST_RANK_PRIMARY : GST_RANK_SECONDARY;
       } else {
         rank = GST_RANK_MARGINAL;
       }

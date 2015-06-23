@@ -174,7 +174,8 @@ gst_vtenc_base_init (GstVTEncClass * klass)
       min_fps_n, min_fps_d, max_fps_n, max_fps_d, NULL);
   if (codec_details->format_id == kCMVideoCodecType_H264) {
     gst_structure_set (gst_caps_get_structure (src_caps, 0),
-        "stream-format", G_TYPE_STRING, "avc", NULL);
+        "stream-format", G_TYPE_STRING, "avc",
+        "alignment", G_TYPE_STRING, "au", NULL);
   }
   src_template = gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
       src_caps);
@@ -740,6 +741,7 @@ static GstFlowReturn
 gst_vtenc_finish (GstVideoEncoder * enc)
 {
   GstVTEnc *self = GST_VTENC_CAST (enc);
+  GstVideoCodecFrame *outframe;
   GstFlowReturn ret = GST_FLOW_OK;
   OSStatus vt_status;
 
@@ -757,9 +759,7 @@ gst_vtenc_finish (GstVideoEncoder * enc)
         (int) vt_status);
   }
 
-  while (g_async_queue_length (self->cur_outframes) > 0) {
-    GstVideoCodecFrame *outframe = g_async_queue_try_pop (self->cur_outframes);
-
+  while ((outframe = g_async_queue_try_pop (self->cur_outframes))) {
     ret =
         gst_video_encoder_finish_frame (GST_VIDEO_ENCODER_CAST (self),
         outframe);
@@ -1049,9 +1049,10 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
   CMTime ts, duration;
   GstCoreMediaMeta *meta;
   CVPixelBufferRef pbuf = NULL;
+  GstVideoCodecFrame *outframe;
   OSStatus vt_status;
   GstFlowReturn ret = GST_FLOW_OK;
-  guint i;
+  gboolean renegotiated;
   CFDictionaryRef frame_props = NULL;
 
   if (GST_VIDEO_CODEC_FRAME_IS_FORCE_KEYFRAME (frame)) {
@@ -1163,6 +1164,7 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
           pixel_format_type = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
           break;
         default:
+          gst_vtenc_frame_free (vframe);
           goto cv_error;
       }
 
@@ -1200,30 +1202,39 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
         (int) vt_status);
   }
 
+  /* VTCompressionSessionEncodeFrame retained pbuf
+   * and we want to free input_buffer ASAP */
+  gst_buffer_replace (&frame->input_buffer, NULL);
+
   gst_video_codec_frame_unref (frame);
 
   CVPixelBufferRelease (pbuf);
 
-  i = 0;
-  while (g_async_queue_length (self->cur_outframes) > 0) {
-    GstVideoCodecFrame *outframe = g_async_queue_try_pop (self->cur_outframes);
-
-    /* Try to renegotiate once */
-    if (i == 0) {
-      meta = gst_buffer_get_core_media_meta (outframe->output_buffer);
-      if (!gst_vtenc_negotiate_downstream (self, meta->sample_buf)) {
-        ret = GST_FLOW_NOT_NEGOTIATED;
-        gst_video_codec_frame_unref (outframe);
-        break;
+  renegotiated = FALSE;
+  while ((outframe = g_async_queue_try_pop (self->cur_outframes))) {
+    if (outframe->output_buffer) {
+      if (!renegotiated) {
+        meta = gst_buffer_get_core_media_meta (outframe->output_buffer);
+        /* Try to renegotiate once */
+        if (meta) {
+          if (gst_vtenc_negotiate_downstream (self, meta->sample_buf)) {
+            renegotiated = TRUE;
+          } else {
+            ret = GST_FLOW_NOT_NEGOTIATED;
+            gst_video_codec_frame_unref (outframe);
+            /* the rest of the frames will be pop'd and unref'd later */
+            break;
+          }
+        }
       }
 
       gst_vtenc_update_latency (self);
     }
 
+    /* releases frame, even if it has no output buffer (i.e. failed to encode) */
     ret =
         gst_video_encoder_finish_frame (GST_VIDEO_ENCODER_CAST (self),
         outframe);
-    i++;
   }
 
   return ret;
@@ -1245,9 +1256,24 @@ gst_vtenc_enqueue_buffer (void *outputCallbackRefCon,
   gboolean is_keyframe;
   GstVideoCodecFrame *frame;
 
+  frame =
+      gst_video_encoder_get_frame (GST_VIDEO_ENCODER_CAST (self),
+      GPOINTER_TO_INT (sourceFrameRefCon));
+
   if (status != noErr) {
-    GST_ELEMENT_ERROR (self, LIBRARY, ENCODE, (NULL), ("Failed to encode: %d",
-            (int) status));
+    if (frame) {
+      GST_ELEMENT_ERROR (self, LIBRARY, ENCODE, (NULL),
+          ("Failed to encode frame %d: %d", frame->system_frame_number,
+              (int) status));
+    } else {
+      GST_ELEMENT_ERROR (self, LIBRARY, ENCODE, (NULL),
+          ("Failed to encode (frame unknown): %d", (int) status));
+    }
+    goto beach;
+  }
+
+  if (!frame) {
+    GST_WARNING_OBJECT (self, "No corresponding frame found!");
     goto beach;
   }
 
@@ -1256,15 +1282,6 @@ gst_vtenc_enqueue_buffer (void *outputCallbackRefCon,
     goto beach;
 
   is_keyframe = gst_vtenc_buffer_is_keyframe (self, sampleBuffer);
-
-  frame =
-      gst_video_encoder_get_frame (GST_VIDEO_ENCODER_CAST (self),
-      GPOINTER_TO_INT (sourceFrameRefCon));
-
-  if (!frame) {
-    GST_WARNING_OBJECT (self, "No corresponding frame found!");
-    goto beach;
-  }
 
   if (is_keyframe) {
     GST_VIDEO_CODEC_FRAME_SET_SYNC_POINT (frame);
@@ -1275,10 +1292,10 @@ gst_vtenc_enqueue_buffer (void *outputCallbackRefCon,
    * to enable the use of the video meta API on the core media buffer */
   frame->output_buffer = gst_core_media_buffer_new (sampleBuffer, FALSE, TRUE);
 
-  g_async_queue_push (self->cur_outframes, frame);
-
 beach:
-  return;
+  /* needed anyway so the frame will be released */
+  if (frame)
+    g_async_queue_push (self->cur_outframes, frame);
 }
 
 static gboolean

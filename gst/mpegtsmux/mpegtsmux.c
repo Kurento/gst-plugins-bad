@@ -331,7 +331,7 @@ static void
 mpegtsmux_pad_reset (MpegTsPadData * pad_data)
 {
   pad_data->pid = 0;
-  pad_data->min_dts = GST_CLOCK_TIME_NONE;
+  pad_data->dts = GST_CLOCK_STIME_NONE;
   pad_data->prog_id = -1;
 #if 0
   pad_data->prog_id = -1;
@@ -390,7 +390,10 @@ mpegtsmux_reset (MpegTsMux * mux, gboolean alloc)
     mux->tsmux = NULL;
   }
 
-  memset (mux->programs, 0, sizeof (mux->programs));
+  if (mux->programs) {
+    g_hash_table_destroy (mux->programs);
+  }
+  mux->programs = g_hash_table_new (g_direct_hash, g_direct_equal);
 
   if (mux->streamheader) {
     GstBuffer *buf;
@@ -444,6 +447,10 @@ mpegtsmux_dispose (GObject * object)
   if (mux->prog_map) {
     gst_structure_free (mux->prog_map);
     mux->prog_map = NULL;
+  }
+  if (mux->programs) {
+    g_hash_table_destroy (mux->programs);
+    mux->programs = NULL;
   }
   GST_CALL_PARENT (G_OBJECT_CLASS, dispose, (object));
 }
@@ -750,10 +757,10 @@ mpegtsmux_create_streams (MpegTsMux * mux)
               ("Reading program map failed. Assuming default"), (NULL));
           idx = DEFAULT_PROG_ID;
         }
-        if (idx < 0 || idx >= MAX_PROG_NUMBER) {
-          GST_DEBUG_OBJECT (mux, "Program number %d associate with pad %s out "
-              "of range (max = %d); DEFAULT_PROGRAM = %d is used instead",
-              idx, name, MAX_PROG_NUMBER, DEFAULT_PROG_ID);
+        if (idx < 0) {
+          GST_DEBUG_OBJECT (mux, "Program number %d associate with pad %s less "
+              "than zero; DEFAULT_PROGRAM = %d is used instead",
+              idx, name, DEFAULT_PROG_ID);
           idx = DEFAULT_PROG_ID;
         }
         ts_data->prog_id = idx;
@@ -762,13 +769,15 @@ mpegtsmux_create_streams (MpegTsMux * mux)
       }
     }
 
-    ts_data->prog = mux->programs[ts_data->prog_id];
+    ts_data->prog =
+        g_hash_table_lookup (mux->programs, GINT_TO_POINTER (ts_data->prog_id));
     if (ts_data->prog == NULL) {
       ts_data->prog = tsmux_program_new (mux->tsmux, ts_data->prog_id);
       if (ts_data->prog == NULL)
         goto no_program;
       tsmux_set_pmt_interval (ts_data->prog, mux->pmt_interval);
-      mux->programs[ts_data->prog_id] = ts_data->prog;
+      g_hash_table_insert (mux->programs,
+          GINT_TO_POINTER (ts_data->prog_id), ts_data->prog);
     }
 
     if (ts_data->stream == NULL) {
@@ -1026,7 +1035,7 @@ mpegtsmux_clip_inc_running_time (GstCollectPads * pads,
   *outbuf = buf;
 
   /* PTS */
-  time = GST_BUFFER_TIMESTAMP (buf);
+  time = GST_BUFFER_PTS (buf);
 
   /* invalid left alone and passed */
   if (G_LIKELY (GST_CLOCK_TIME_IS_VALID (time))) {
@@ -1037,11 +1046,11 @@ mpegtsmux_clip_inc_running_time (GstCollectPads * pads,
       *outbuf = NULL;
       goto beach;
     } else {
-      GST_LOG_OBJECT (cdata->pad, "buffer pts %" GST_TIME_FORMAT " -> %"
+      GST_LOG_OBJECT (cdata->pad, "buffer pts %" GST_TIME_FORMAT " ->  %"
           GST_TIME_FORMAT " running time",
-          GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)), GST_TIME_ARGS (time));
+          GST_TIME_ARGS (GST_BUFFER_PTS (buf)), GST_TIME_ARGS (time));
       buf = *outbuf = gst_buffer_make_writable (buf);
-      GST_BUFFER_TIMESTAMP (*outbuf) = time;
+      GST_BUFFER_PTS (*outbuf) = time;
     }
   }
 
@@ -1050,23 +1059,36 @@ mpegtsmux_clip_inc_running_time (GstCollectPads * pads,
 
   /* invalid left alone and passed */
   if (G_LIKELY (GST_CLOCK_TIME_IS_VALID (time))) {
-    time = gst_segment_to_running_time (&cdata->segment, GST_FORMAT_TIME, time);
-    /* may have to decode out-of-segment, so pass INVALID */
-    if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (time))) {
-      GST_DEBUG_OBJECT (cdata->pad, "running dts outside segment");
-    } else {
-      GST_LOG_OBJECT (cdata->pad, "buffer dts %" GST_TIME_FORMAT " -> %"
-          GST_TIME_FORMAT " running time",
-          GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)), GST_TIME_ARGS (time));
-      if (GST_CLOCK_TIME_IS_VALID (pad_data->min_dts) &&
-          time < pad_data->min_dts) {
-        /* Ignore DTS going backward */
-        GST_WARNING_OBJECT (cdata->pad, "ignoring DTS going backward");
-        time = pad_data->min_dts;
-      }
-      *outbuf = gst_buffer_make_writable (buf);
-      GST_BUFFER_DTS (*outbuf) = time;
+    gint sign;
+    gint64 dts;
+
+    sign = gst_segment_to_running_time_full (&cdata->segment, GST_FORMAT_TIME,
+        time, &time);
+
+    if (sign > 0)
+      dts = (gint64) time;
+    else
+      dts = -((gint64) time);
+
+    GST_LOG_OBJECT (cdata->pad, "buffer dts %" GST_TIME_FORMAT " -> %"
+        GST_STIME_FORMAT " running time", GST_TIME_ARGS (GST_BUFFER_DTS (buf)),
+        GST_STIME_ARGS (dts));
+
+    if (GST_CLOCK_STIME_IS_VALID (pad_data->dts) && dts < pad_data->dts) {
+      /* Ignore DTS going backward */
+      GST_WARNING_OBJECT (cdata->pad, "ignoring DTS going backward");
+      dts = pad_data->dts;
     }
+
+    *outbuf = gst_buffer_make_writable (buf);
+    if (sign > 0)
+      GST_BUFFER_DTS (*outbuf) = time;
+    else
+      GST_BUFFER_DTS (*outbuf) = GST_CLOCK_TIME_NONE;
+
+    pad_data->dts = dts;
+  } else {
+    pad_data->dts = GST_CLOCK_STIME_NONE;
   }
 
   buf = *outbuf;
@@ -1089,8 +1111,8 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
   GstFlowReturn ret = GST_FLOW_OK;
   MpegTsPadData *best = (MpegTsPadData *) data;
   TsMuxProgram *prog;
-  gint64 pts = -1;
-  guint64 dts = -1;
+  gint64 pts = GST_CLOCK_STIME_NONE;
+  gint64 dts = GST_CLOCK_STIME_NONE;
   gboolean delta = TRUE, header = FALSE;
   StreamData *stream_data;
 
@@ -1126,7 +1148,7 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
     GstEvent *event;
 
     event = check_pending_key_unit_event (mux->force_key_unit_event,
-        &best->collect.segment, GST_BUFFER_TIMESTAMP (buf),
+        &best->collect.segment, GST_BUFFER_PTS (buf),
         GST_BUFFER_FLAGS (buf), mux->pending_key_unit_ts);
     if (event) {
       GstClockTime running_time;
@@ -1161,7 +1183,7 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
     /* Take the first data stream for the PCR */
     GST_DEBUG_OBJECT (COLLECT_DATA_PAD (best),
         "Use stream (pid=%d) from pad as PCR for program (prog_id = %d)",
-        MPEG_TS_PAD_DATA (best)->pid, MPEG_TS_PAD_DATA (best)->prog_id);
+        best->pid, best->prog_id);
 
     /* Set the chosen PCR stream */
     tsmux_program_set_pcr_stream (prog, best->stream);
@@ -1172,18 +1194,19 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
 
   if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_PTS (buf))) {
     pts = GSTTIME_TO_MPEGTIME (GST_BUFFER_PTS (buf));
-    GST_DEBUG_OBJECT (mux, "Buffer has PTS %" GST_TIME_FORMAT " pts %"
+    GST_DEBUG_OBJECT (mux, "Buffer has PTS  %" GST_TIME_FORMAT " pts %"
         G_GINT64_FORMAT, GST_TIME_ARGS (GST_BUFFER_PTS (buf)), pts);
   }
 
-  if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_DTS (buf))) {
-    dts = GSTTIME_TO_MPEGTIME (GST_BUFFER_DTS (buf));
-    GST_DEBUG_OBJECT (mux, "Buffer has DTS %" GST_TIME_FORMAT " dts %"
-        G_GINT64_FORMAT, GST_TIME_ARGS (GST_BUFFER_DTS (buf)), dts);
+  if (GST_CLOCK_STIME_IS_VALID (best->dts)) {
+    dts = GSTTIME_TO_MPEGTIME (best->dts);
+    GST_DEBUG_OBJECT (mux, "Buffer has DTS %s%" GST_TIME_FORMAT " dts %"
+        G_GINT64_FORMAT, best->dts >= 0 ? " " : "-",
+        GST_TIME_ARGS (ABS (best->dts)), dts);
   }
 
   /* should not have a DTS without PTS */
-  if (pts == -1 && dts != -1) {
+  if (!GST_CLOCK_STIME_IS_VALID (pts) && GST_CLOCK_STIME_IS_VALID (dts)) {
     GST_DEBUG_OBJECT (mux, "using DTS for unknown PTS");
     pts = dts;
   }

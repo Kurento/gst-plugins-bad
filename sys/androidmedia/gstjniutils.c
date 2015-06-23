@@ -488,7 +488,7 @@ gst_amc_jni_detach_current_thread (void *env)
 
   GST_DEBUG ("Detaching thread %p", g_thread_self ());
   if ((ret = (*java_vm)->DetachCurrentThread (java_vm)) != JNI_OK) {
-    GST_ERROR ("Failed to detach current thread: %d", ret);
+    GST_DEBUG ("Failed to detach current thread: %d", ret);
   }
 }
 
@@ -531,8 +531,11 @@ load_java_module (const gchar * name)
     goto load_failed;
 
   if (!g_module_symbol (java_module, "JNI_CreateJavaVM",
-          (gpointer *) & create_java_vm))
-    goto symbol_error;
+          (gpointer *) & create_java_vm)) {
+    GST_ERROR ("Could not find 'JNI_CreateJavaVM' in '%s': %s",
+        GST_STR_NULL (name), g_module_error ());
+    create_java_vm = NULL;
+  }
 
   if (!g_module_symbol (java_module, "JNI_GetCreatedJavaVMs",
           (gpointer *) & get_created_java_vms))
@@ -625,6 +628,11 @@ gst_amc_jni_initialize_java_vm (void)
   jsize n_vms;
   gint ret;
 
+  if (java_vm) {
+    GST_DEBUG ("Java VM already provided by the application");
+    return TRUE;
+  }
+
   /* Returns TRUE if we can safely
    * a) get the current VMs and
    * b) start a VM if none is started yet
@@ -648,7 +656,7 @@ gst_amc_jni_initialize_java_vm (void)
 
   if (n_vms > 0) {
     GST_DEBUG ("Successfully got existing Java VM %p", java_vm);
-  } else {
+  } else if (create_java_vm) {
     JNIEnv *env;
     JavaVMInitArgs vm_args;
     JavaVMOption options[4];
@@ -669,6 +677,9 @@ gst_amc_jni_initialize_java_vm (void)
     GST_DEBUG ("Successfully created Java VM %p", java_vm);
 
     started_java_vm = TRUE;
+  } else {
+    GST_ERROR ("JNI_CreateJavaVM not available");
+    java_vm = NULL;
   }
 
   if (java_vm == NULL)
@@ -749,6 +760,14 @@ gst_amc_jni_initialize_internal (gpointer data)
 {
   pthread_key_create (&current_jni_env, gst_amc_jni_detach_current_thread);
   return gst_amc_jni_initialize_java_vm ()? GINT_TO_POINTER (1) : NULL;
+}
+
+/* Allow the application to set the Java VM */
+void
+gst_amc_jni_set_java_vm (JavaVM * vm)
+{
+  GST_DEBUG ("Application provides Java VM %p", vm);
+  java_vm = vm;
 }
 
 gboolean

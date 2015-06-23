@@ -2,7 +2,7 @@
 lib_LTLIBRARIES = libgstgl-@GST_API_VERSION@.la
 
 SUBDIRS = glprototypes
-DIST_SUBDIRS = glprototypes android x11 win32 cocoa wayland dispmanx egl eagl gpuprocess
+DIST_SUBDIRS = glprototypes android x11 win32 cocoa wayland dispmanx egl eagl
 
 noinst_HEADERS =
 
@@ -11,6 +11,7 @@ built_sys_header_configure = gstglconfig.h
 libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstgldisplay.c \
 	gstglcontext.c \
+	gstglbasebuffer.c \
 	gstglmemory.c \
 	gstglbufferpool.c \
 	gstglfilter.c \
@@ -26,13 +27,15 @@ libgstgl_@GST_API_VERSION@_la_SOURCES = \
         gstglfeature.c \
         gstglutils.c \
         gstglframebuffer.c \
-        gstglsyncmeta.c
+        gstglsyncmeta.c \
+        gstglviewconvert.c
 
 libgstgl_@GST_API_VERSION@includedir = $(includedir)/gstreamer-@GST_API_VERSION@/gst/gl
 libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglwindow.h \
 	gstgldisplay.h \
 	gstglcontext.h \
+	gstglbasebuffer.h \
 	gstglmemory.h \
 	gstglbufferpool.h \
 	gstglfilter.h \
@@ -48,6 +51,7 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglutils.h \
 	gstglframebuffer.h \
 	gstglsyncmeta.h \
+	gstglviewconvert.h \
 	gstgl_fwd.h \
 	gl.h
 
@@ -98,9 +102,6 @@ if USE_EGL
 SUBDIRS += egl
 libgstgl_@GST_API_VERSION@_la_LIBADD += egl/libgstgl-egl.la
 endif
-
-SUBDIRS += gpuprocess
-libgstgl_@GST_API_VERSION@_la_LIBADD += gpuprocess/libgstgl-gpuprocess.la
 
 configexecincludedir = $(libdir)/gstreamer-@GST_API_VERSION@/include/gst/gl
 nodist_configexecinclude_HEADERS = $(built_sys_header_configure)
