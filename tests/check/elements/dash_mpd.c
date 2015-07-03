@@ -32,15 +32,15 @@ GST_DEBUG_CATEGORY (gst_dash_demux_debug);
  * This function must use the same conversion algorithm implemented in
  * gst_mpdparser_get_xml_prop_duration from gstmpdparser.c file.
  */
-static gint64
+static guint64
 duration_to_ms (guint year, guint month, guint day, guint hour, guint minute,
     guint second, guint millisecond)
 {
-  gint64 days = (gint64) year * 365 + month * 30 + day;
-  gint64 hours = days * 24 + hour;
-  gint64 minutes = hours * 60 + minute;
-  gint64 seconds = minutes * 60 + second;
-  gint64 ms = seconds * 1000 + millisecond;
+  guint64 days = (guint64) year * 365 + (guint64) month * 30 + day;
+  guint64 hours = days * 24 + hour;
+  guint64 minutes = hours * 60 + minute;
+  guint64 seconds = minutes * 60 + second;
+  guint64 ms = seconds * 1000 + millisecond;
   return ms;
 }
 
@@ -58,7 +58,7 @@ GST_START_TEST (dash_mpdparser_validsimplempd)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   /* check that unset elements with default values are properly configured */
@@ -99,7 +99,7 @@ GST_START_TEST (dash_mpdparser_mpd)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
 
@@ -130,25 +130,25 @@ GST_START_TEST (dash_mpdparser_mpd)
   assert_equals_int (gst_date_time_get_second (availabilityEndTime), 50);
 
   assert_equals_int64 (mpdclient->mpd_node->mediaPresentationDuration,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   assert_equals_int64 (mpdclient->mpd_node->minimumUpdatePeriod,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   assert_equals_int64 (mpdclient->mpd_node->minBufferTime,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   assert_equals_int64 (mpdclient->mpd_node->timeShiftBufferDepth,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   assert_equals_int64 (mpdclient->mpd_node->suggestedPresentationDelay,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   assert_equals_int64 (mpdclient->mpd_node->maxSegmentDuration,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   assert_equals_int64 (mpdclient->mpd_node->maxSubsegmentDuration,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   gst_mpd_client_free (mpdclient);
 }
@@ -159,7 +159,7 @@ GST_END_TEST;
  * Test parsing the ProgramInformation attributes
  *
  */
-GST_START_TEST (dash_mpdparser_program_information)
+GST_START_TEST (dash_mpdparser_programInformation)
 {
   GstProgramInformationNode *program;
   const gchar *xml =
@@ -175,7 +175,7 @@ GST_START_TEST (dash_mpdparser_program_information)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   program =
@@ -195,7 +195,7 @@ GST_END_TEST;
  * Test parsing the BaseURL attributes
  *
  */
-GST_START_TEST (dash_mpdparser_base_URL)
+GST_START_TEST (dash_mpdparser_baseURL)
 {
   GstBaseURL *baseURL;
   const gchar *xml =
@@ -208,7 +208,7 @@ GST_START_TEST (dash_mpdparser_base_URL)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   baseURL = (GstBaseURL *) mpdclient->mpd_node->BaseURLs->data;
@@ -222,7 +222,7 @@ GST_START_TEST (dash_mpdparser_base_URL)
 GST_END_TEST;
 
 /*
- * Test parsing the location attributes
+ * Test parsing the Location attributes
  *
  */
 GST_START_TEST (dash_mpdparser_location)
@@ -237,7 +237,7 @@ GST_START_TEST (dash_mpdparser_location)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   location = (gchar *) mpdclient->mpd_node->Locations->data;
@@ -249,7 +249,7 @@ GST_START_TEST (dash_mpdparser_location)
 GST_END_TEST;
 
 /*
- * Test parsing metrics attributes
+ * Test parsing Metrics attributes
  *
  */
 GST_START_TEST (dash_mpdparser_metrics)
@@ -264,7 +264,7 @@ GST_START_TEST (dash_mpdparser_metrics)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   metricsNode = (GstMetricsNode *) mpdclient->mpd_node->Metrics->data;
@@ -275,7 +275,7 @@ GST_START_TEST (dash_mpdparser_metrics)
 GST_END_TEST;
 
 /*
- * Test parsing metrics range attributes
+ * Test parsing Metrics Range attributes
  *
  */
 GST_START_TEST (dash_mpdparser_metrics_range)
@@ -292,16 +292,16 @@ GST_START_TEST (dash_mpdparser_metrics_range)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   metricsNode = (GstMetricsNode *) mpdclient->mpd_node->Metrics->data;
   assert_equals_pointer (metricsNode->metrics, NULL);
   metricsRangeNode = (GstMetricsRangeNode *) metricsNode->MetricsRanges->data;
   assert_equals_int64 (metricsRangeNode->starttime,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
   assert_equals_int64 (metricsRangeNode->duration,
-      duration_to_ms (0, 1, 2, 12, 10, 20, 123));
+      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 123));
 
   gst_mpd_client_free (mpdclient);
 }
@@ -309,7 +309,7 @@ GST_START_TEST (dash_mpdparser_metrics_range)
 GST_END_TEST;
 
 /*
- * Test parsing metrics reporting attributes
+ * Test parsing Metrics Reporting attributes
  *
  */
 GST_START_TEST (dash_mpdparser_metrics_reporting)
@@ -324,7 +324,7 @@ GST_START_TEST (dash_mpdparser_metrics_reporting)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   metricsNode = (GstMetricsNode *) mpdclient->mpd_node->Metrics->data;
@@ -2115,12 +2115,36 @@ GST_START_TEST (dash_mpdparser_type_dynamic)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, TRUE);
   assert_equals_int (mpdclient->mpd_node->type, GST_MPD_FILE_TYPE_DYNAMIC);
 
   gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Validate gst_mpdparser_build_URL_from_template function
+ *
+ */
+GST_START_TEST (dash_mpdparser_template_parsing)
+{
+  const gchar *url_template;
+  const gchar *id = "TestId";
+  guint number = 7;
+  guint bandwidth = 2500;
+  guint64 time = 100;
+  gchar *result;
+
+  url_template = "TestMedia$Bandwidth$$$test";
+  result =
+      gst_mpdparser_build_URL_from_template (url_template, id, number,
+      bandwidth, time);
+  assert_equals_string (result, "TestMedia2500$test");
+  g_free (result);
+
 }
 
 GST_END_TEST;
@@ -2202,7 +2226,7 @@ GST_START_TEST (dash_mpdparser_missing_xml)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, FALSE);
 
@@ -2222,7 +2246,7 @@ GST_START_TEST (dash_mpdparser_missing_mpd)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, FALSE);
 
@@ -2244,7 +2268,7 @@ GST_START_TEST (dash_mpdparser_no_end_tag)
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
 
-  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
 
   assert_equals_int (ret, FALSE);
 
@@ -2377,8 +2401,8 @@ dash_suite (void)
 
   /* tests parsing attributes from each element type */
   tcase_add_test (tc_simpleMPD, dash_mpdparser_mpd);
-  tcase_add_test (tc_simpleMPD, dash_mpdparser_program_information);
-  tcase_add_test (tc_simpleMPD, dash_mpdparser_base_URL);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_programInformation);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_baseURL);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_location);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_metrics);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_metrics_range);
@@ -2468,6 +2492,7 @@ dash_suite (void)
 
   /* tests checking other possible values for attributes */
   tcase_add_test (tc_simpleMPD, dash_mpdparser_type_dynamic);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_template_parsing);
 
   tcase_add_test (tc_complexMPD, dash_mpdparser_representation_selection);
   /* tests checking the parsing of missing/incomplete attributes of xml */
