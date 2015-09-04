@@ -38,7 +38,7 @@ m4_pattern_allow(PKG_CONFIG_SYSROOT_DIR)
 
 dnl our libraries and install dirs use GST_API_VERSION in the filename
 dnl to allow side-by-side installation of different API versions
-GST_API_VERSION=1.0
+GST_API_VERSION=1.5
 AC_SUBST(GST_API_VERSION)
 AC_DEFINE_UNQUOTED(GST_API_VERSION, "$GST_API_VERSION",
   [GStreamer API Version])
