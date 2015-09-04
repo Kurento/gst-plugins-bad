@@ -130,7 +130,9 @@ static GstStaticPadTemplate mpegtsmux_sink_factory =
         "mpegversion = (int) { 1, 2 };"
         "audio/mpeg, "
         "framed = (boolean) TRUE, "
-        "mpegversion = (int) 4, stream-format = (string) { raw, adts };"
+        "mpegversion = (int) 4, stream-format = (string) adts;"
+        "audio/mpeg, "
+        "mpegversion = (int) 4, stream-format = (string) raw;"
         "audio/x-lpcm, "
         "width = (int) { 16, 20, 24 }, "
         "rate = (int) { 48000, 96000 }, "
@@ -140,7 +142,7 @@ static GstStaticPadTemplate mpegtsmux_sink_factory =
         "mute = (boolean) { FALSE, TRUE }; "
         "audio/x-ac3, framed = (boolean) TRUE;"
         "audio/x-dts, framed = (boolean) TRUE;"
-        "subpicture/x-dvb;" "application/x-teletext"));
+        "subpicture/x-dvb; application/x-teletext; meta/x-klv, parsed=true"));
 
 static GstStaticPadTemplate mpegtsmux_src_factory =
 GST_STATIC_PAD_TEMPLATE ("src",
@@ -330,7 +332,6 @@ mpegtsmux_init (MpegTsMux * mux)
 static void
 mpegtsmux_pad_reset (MpegTsPadData * pad_data)
 {
-  pad_data->pid = 0;
   pad_data->dts = GST_CLOCK_STIME_NONE;
   pad_data->prog_id = -1;
 #if 0
@@ -361,6 +362,7 @@ mpegtsmux_pad_reset (MpegTsPadData * pad_data)
 static void
 mpegtsmux_reset (MpegTsMux * mux, gboolean alloc)
 {
+  GstBuffer *buf;
   GSList *walk;
 
   mux->first = TRUE;
@@ -395,19 +397,9 @@ mpegtsmux_reset (MpegTsMux * mux, gboolean alloc)
   }
   mux->programs = g_hash_table_new (g_direct_hash, g_direct_equal);
 
-  if (mux->streamheader) {
-    GstBuffer *buf;
-    GList *sh;
+  while ((buf = g_queue_pop_head (&mux->streamheader)))
+    gst_buffer_unref (buf);
 
-    sh = mux->streamheader;
-    while (sh) {
-      buf = sh->data;
-      gst_buffer_unref (buf);
-      sh = g_list_next (sh);
-    }
-    g_list_free (mux->streamheader);
-    mux->streamheader = NULL;
-  }
   gst_event_replace (&mux->force_key_unit_event, NULL);
   gst_buffer_replace (&mux->out_buffer, NULL);
 
@@ -675,6 +667,8 @@ mpegtsmux_create_stream (MpegTsMux * mux, MpegTsPadData * ts_data)
     st = TSMUX_ST_PS_TELETEXT;
     /* needs a particularly sized layout */
     ts_data->prepare_func = mpegtsmux_prepare_teletext;
+  } else if (strcmp (mt, "meta/x-klv") == 0) {
+    st = TSMUX_ST_PS_KLV;
   }
 
   if (st != TSMUX_ST_RESERVED) {
@@ -878,6 +872,19 @@ mpegtsmux_sink_event (GstCollectPads * pads, GstCollectData * data,
       /* handled this, don't want collectpads to forward it downstream */
       res = TRUE;
       forward = gst_tag_list_get_scope (list) == GST_TAG_SCOPE_GLOBAL;
+      break;
+    }
+    case GST_EVENT_STREAM_START:{
+      GstStreamFlags flags;
+
+      gst_event_parse_stream_flags (event, &flags);
+
+      /* Don't wait for data on sparse inputs like metadata streams */
+      if ((flags & GST_STREAM_FLAG_SPARSE)) {
+        GST_COLLECT_PADS_STATE_UNSET (data, GST_COLLECT_PADS_STATE_LOCKED);
+        gst_collect_pads_set_waiting (pads, data, FALSE);
+        GST_COLLECT_PADS_STATE_SET (data, GST_COLLECT_PADS_STATE_LOCKED);
+      }
       break;
     }
     default:
@@ -1130,6 +1137,7 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
 
   if (G_UNLIKELY (best == NULL)) {
     /* EOS */
+    GST_INFO_OBJECT (mux, "EOS");
     /* drain some possibly cached data */
     new_packet_m2ts (mux, NULL, -1);
     mpegtsmux_push_packets (mux, TRUE);
@@ -1225,6 +1233,12 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
     GST_OBJECT_UNLOCK (mux);
 #endif
   }
+
+  if (best->stream->is_meta && gst_buffer_get_size (buf) > (G_MAXUINT16 - 3)) {
+    GST_WARNING_OBJECT (mux, "KLV meta unit too big, splitting not supported");
+    return GST_FLOW_OK;
+  }
+
   GST_DEBUG_OBJECT (mux, "delta: %d", delta);
 
   stream_data = stream_data_new (buf);
@@ -1362,8 +1376,11 @@ new_packet_common_init (MpegTsMux * mux, GstBuffer * buf, guint8 * data,
       } else {
         hbuf = gst_buffer_copy (buf);
       }
-      mux->streamheader = g_list_append (mux->streamheader, hbuf);
-    } else if (mux->streamheader) {
+      GST_LOG_OBJECT (mux,
+          "Collecting packet with pid 0x%04x into streamheaders", pid);
+
+      g_queue_push_tail (&mux->streamheader, hbuf);
+    } else if (!g_queue_is_empty (&mux->streamheader)) {
       mpegtsmux_set_header_on_caps (mux);
       mux->streamheader_sent = TRUE;
     }
@@ -1664,25 +1681,21 @@ mpegtsmux_set_header_on_caps (MpegTsMux * mux)
   GValue array = { 0 };
   GValue value = { 0 };
   GstCaps *caps;
-  GList *sh;
 
   caps = gst_caps_make_writable (gst_pad_get_current_caps (mux->srcpad));
   structure = gst_caps_get_structure (caps, 0);
 
   g_value_init (&array, GST_TYPE_ARRAY);
 
-  sh = mux->streamheader;
-  while (sh) {
-    buf = sh->data;
+  GST_LOG_OBJECT (mux, "setting %u packets into streamheader",
+      g_queue_get_length (&mux->streamheader));
+
+  while ((buf = g_queue_pop_head (&mux->streamheader))) {
     g_value_init (&value, GST_TYPE_BUFFER);
     gst_value_take_buffer (&value, buf);
     gst_value_array_append_value (&array, &value);
     g_value_unset (&value);
-    sh = g_list_next (sh);
   }
-
-  g_list_free (mux->streamheader);
-  mux->streamheader = NULL;
 
   gst_structure_set_value (structure, "streamheader", &array);
   gst_pad_set_caps (mux->srcpad, caps);

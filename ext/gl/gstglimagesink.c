@@ -322,14 +322,18 @@ static void gst_glimage_sink_handle_events (GstVideoOverlay * overlay,
     gboolean handle_events);
 static gboolean update_output_format (GstGLImageSink * glimage_sink);
 
+#define GST_GL_SINK_CAPS \
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, "RGBA")
+
+#define GST_GL_SINK_OVERLAY_CAPS \
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY "," \
+            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, "RGBA")
+
 static GstStaticPadTemplate gst_glimage_sink_template =
-GST_STATIC_PAD_TEMPLATE ("sink",
+    GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
-            "RGBA"))
-    );
+    GST_STATIC_CAPS (GST_GL_SINK_CAPS ";" GST_GL_SINK_OVERLAY_CAPS));
 
 enum
 {
@@ -356,6 +360,43 @@ enum
 static guint gst_glimage_sink_signals[LAST_SIGNAL] = { 0 };
 
 static void
+_display_size_to_stream_size (GstGLImageSink * gl_sink, gdouble x,
+    gdouble y, gdouble * stream_x, gdouble * stream_y)
+{
+  gdouble stream_width, stream_height;
+
+  stream_width = (gdouble) GST_VIDEO_INFO_WIDTH (&gl_sink->out_info);
+  stream_height = (gdouble) GST_VIDEO_INFO_HEIGHT (&gl_sink->out_info);
+
+  /* from display coordinates to stream coordinates */
+  if (gl_sink->display_rect.w > 0)
+    *stream_x =
+        (x - gl_sink->display_rect.x) / gl_sink->display_rect.w * stream_width;
+  else
+    *stream_x = 0.;
+
+  /* clip to stream size */
+  if (*stream_x < 0.)
+    *stream_x = 0.;
+  if (*stream_x > GST_VIDEO_INFO_WIDTH (&gl_sink->out_info))
+    *stream_x = GST_VIDEO_INFO_WIDTH (&gl_sink->out_info);
+
+  /* same for y-axis */
+  if (gl_sink->display_rect.h > 0)
+    *stream_y =
+        (y - gl_sink->display_rect.y) / gl_sink->display_rect.h * stream_height;
+  else
+    *stream_y = 0.;
+
+  if (*stream_y < 0.)
+    *stream_y = 0.;
+  if (*stream_y > GST_VIDEO_INFO_HEIGHT (&gl_sink->out_info))
+    *stream_y = GST_VIDEO_INFO_HEIGHT (&gl_sink->out_info);
+
+  GST_TRACE ("transform %fx%f into %fx%f", x, y, *stream_x, *stream_y);
+}
+
+static void
 gst_glimage_sink_navigation_send_event (GstNavigation * navigation, GstStructure
     * structure)
 {
@@ -364,7 +405,7 @@ gst_glimage_sink_navigation_send_event (GstNavigation * navigation, GstStructure
   GstPad *pad = NULL;
   GstGLWindow *window;
   guint width, height;
-  gdouble x, y, xscale, yscale;
+  gdouble x, y;
 
   if (!sink->context)
     return;
@@ -380,19 +421,15 @@ gst_glimage_sink_navigation_send_event (GstNavigation * navigation, GstStructure
 
   pad = gst_pad_get_peer (GST_VIDEO_SINK_PAD (sink));
   /* Converting pointer coordinates to the non scaled geometry */
-  if (width != GST_VIDEO_SINK_WIDTH (sink) &&
-      width != 0 && gst_structure_get_double (structure, "pointer_x", &x)) {
-    xscale = (gdouble) GST_VIDEO_SINK_WIDTH (sink) / width;
-    gst_structure_set (structure, "pointer_x", G_TYPE_DOUBLE,
-        (gdouble) x * xscale, NULL);
-  }
-  if (height != GST_VIDEO_SINK_HEIGHT (sink) &&
-      height != 0 && gst_structure_get_double (structure, "pointer_y", &y)) {
-    yscale = (gdouble) GST_VIDEO_SINK_HEIGHT (sink) / height;
-    gst_structure_set (structure, "pointer_y", G_TYPE_DOUBLE,
-        (gdouble) y * yscale, NULL);
-  }
+  if (width != 0 && gst_structure_get_double (structure, "pointer_x", &x)
+      && height != 0 && gst_structure_get_double (structure, "pointer_y", &y)) {
+    gdouble stream_x, stream_y;
 
+    _display_size_to_stream_size (sink, x, y, &stream_x, &stream_y);
+
+    gst_structure_set (structure, "pointer_x", G_TYPE_DOUBLE,
+        stream_x, "pointer_y", G_TYPE_DOUBLE, stream_y, NULL);
+  }
 
   if (GST_IS_PAD (pad) && GST_IS_EVENT (event))
     gst_pad_send_event (pad, event);
@@ -549,6 +586,7 @@ gst_glimage_sink_init (GstGLImageSink * glimage_sink)
   glimage_sink->redisplay_texture = 0;
   glimage_sink->handle_events = TRUE;
   glimage_sink->ignore_alpha = TRUE;
+  glimage_sink->overlay_compositor = NULL;
 
   glimage_sink->mview_output_mode = DEFAULT_MULTIVIEW_MODE;
   glimage_sink->mview_output_flags = DEFAULT_MULTIVIEW_FLAGS;
@@ -618,7 +656,6 @@ gst_glimage_sink_finalize (GObject * object)
   g_return_if_fail (GST_IS_GLIMAGE_SINK (object));
 
   glimage_sink = GST_GLIMAGE_SINK (object);
-
   g_mutex_clear (&glimage_sink->drawing_lock);
 
   GST_DEBUG ("finalized");
@@ -905,6 +942,9 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
       if (!_ensure_gl_setup (glimage_sink))
         return GST_STATE_CHANGE_FAILURE;
 
+      glimage_sink->overlay_compositor =
+          gst_gl_overlay_compositor_new (glimage_sink->context);
+
       g_atomic_int_set (&glimage_sink->to_quit, 0);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
@@ -977,6 +1017,9 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
           g_signal_handler_disconnect (window, glimage_sink->mouse_sig_id);
         glimage_sink->mouse_sig_id = 0;
 
+        gst_object_unref (glimage_sink->overlay_compositor);
+        glimage_sink->overlay_compositor = NULL;
+
         gst_object_unref (window);
         gst_object_unref (glimage_sink->context);
         glimage_sink->context = NULL;
@@ -1041,6 +1084,8 @@ gst_glimage_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
   } else {
     result = tmp;
   }
+
+  result = gst_gl_overlay_compositor_add_caps (result);
 
   GST_DEBUG_OBJECT (bsink, "returning caps: %" GST_PTR_FORMAT, result);
 
@@ -1273,6 +1318,10 @@ prepare_next_buffer (GstGLImageSink * glimage_sink)
     next_buffer = in_buffer;
     info = &glimage_sink->in_info;
   }
+
+  gst_gl_overlay_compositor_upload_overlays (glimage_sink->overlay_compositor,
+      next_buffer);
+
   /* in_buffer invalid now */
   if (!gst_video_frame_map (&gl_frame, info, next_buffer,
           GST_MAP_READ | GST_MAP_GL)) {
@@ -1502,6 +1551,7 @@ gst_glimage_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
   GstCaps *caps;
   guint size;
   gboolean need_pool;
+  GstStructure *allocation_meta = NULL;
 
   if (!_ensure_gl_setup (glimage_sink))
     return FALSE;
@@ -1526,6 +1576,8 @@ gst_glimage_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
     pool = gst_gl_buffer_pool_new (glimage_sink->context);
     config = gst_buffer_pool_get_config (pool);
     gst_buffer_pool_config_set_params (config, caps, size, 0, 0);
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_GL_SYNC_META);
 
     if (!gst_buffer_pool_set_config (pool, config)) {
       g_object_unref (pool);
@@ -1539,6 +1591,21 @@ gst_glimage_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
 
   if (glimage_sink->context->gl_vtable->FenceSync)
     gst_query_add_allocation_meta (query, GST_GL_SYNC_META_API_TYPE, 0);
+
+  if (glimage_sink->window_width != 0 && glimage_sink->window_height != 0) {
+    allocation_meta =
+        gst_structure_new ("GstVideoOverlayCompositionMeta",
+        "width", G_TYPE_UINT, glimage_sink->window_width,
+        "height", G_TYPE_UINT, glimage_sink->window_height, NULL);
+    GST_DEBUG ("sending alloc query with size %dx%d",
+        glimage_sink->window_width, glimage_sink->window_height);
+  }
+
+  gst_query_add_allocation_meta (query,
+      GST_VIDEO_OVERLAY_COMPOSITION_META_API_TYPE, allocation_meta);
+
+  if (allocation_meta)
+    gst_structure_free (allocation_meta);
 
   return TRUE;
 
@@ -1668,6 +1735,8 @@ gst_glimage_sink_cleanup_glthread (GstGLImageSink * gl_sink)
     gl->DeleteBuffers (1, &gl_sink->vbo_indices);
     gl_sink->vbo_indices = 0;
   }
+
+  gst_gl_overlay_compositor_free_overlays (gl_sink->overlay_compositor);
 }
 
 static void
@@ -1689,6 +1758,7 @@ gst_glimage_sink_do_resize (GstGLImageSink * gl_sink, gint width, gint height)
    * It means that they cannot change between two set_caps
    */
   gboolean do_reshape;
+  gboolean reconfigure;
 
   GST_GLIMAGE_SINK_UNLOCK (gl_sink);
   /* check if a client reshape callback is registered */
@@ -1699,8 +1769,20 @@ gst_glimage_sink_do_resize (GstGLImageSink * gl_sink, gint width, gint height)
   width = MAX (1, width);
   height = MAX (1, height);
 
+  /* Check if we would suggest a different width/height now */
+  reconfigure = ((gl_sink->window_width != width)
+      || (gl_sink->window_height != height))
+      && (gl_sink->window_width != 0)
+      && (gl_sink->window_height != 0);
+
   gl_sink->window_width = width;
   gl_sink->window_height = height;
+
+  if (reconfigure) {
+    GST_DEBUG ("Sending reconfigure event on sinkpad.");
+    gst_pad_push_event (GST_BASE_SINK (gl_sink)->sinkpad,
+        gst_event_new_reconfigure ());
+  }
 
   /* default reshape */
   if (!do_reshape) {
@@ -1844,6 +1926,8 @@ gst_glimage_sink_on_draw (GstGLImageSink * gl_sink)
 
     if (gl_sink->ignore_alpha)
       gl->Disable (GL_BLEND);
+
+    gst_gl_overlay_compositor_draw_overlays (gl_sink->overlay_compositor);
   }
   /* end default opengl scene */
   window->is_drawing = FALSE;

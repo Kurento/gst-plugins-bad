@@ -16,19 +16,21 @@ libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstglbufferpool.c \
 	gstglfilter.c \
 	gstglbasefilter.c \
-        gstglshader.c \
-        gstglshadervariables.c \
-        gstglcolorconvert.c \
-        gstgldownload.c \
-        gstglupload.c \
-        gstgluploadmeta.c \
-        gstglwindow.c \
-        gstglapi.c \
-        gstglfeature.c \
-        gstglutils.c \
-        gstglframebuffer.c \
-        gstglsyncmeta.c \
-        gstglviewconvert.c
+	gstglshader.c \
+	gstglshadervariables.c \
+	gstglcolorconvert.c \
+	gstgldownload.c \
+	gstglupload.c \
+	gstgluploadmeta.c \
+	gstglwindow.c \
+	gstglapi.c \
+	gstglfeature.c \
+	gstglutils.c \
+	gstglframebuffer.c \
+	gstglsyncmeta.c \
+	gstglviewconvert.c \
+	gstgloverlaycompositor.c \
+	utils/opengl_versions.h
 
 libgstgl_@GST_API_VERSION@includedir = $(includedir)/gstreamer-@GST_API_VERSION@/gst/gl
 libgstgl_@GST_API_VERSION@include_HEADERS = \
@@ -52,6 +54,7 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglframebuffer.h \
 	gstglsyncmeta.h \
 	gstglviewconvert.h \
+	gstgloverlaycompositor.h \
 	gstgl_fwd.h \
 	gl.h
 

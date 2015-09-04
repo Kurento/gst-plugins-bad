@@ -104,6 +104,9 @@ gst_rsvg_dec_init (GstRsvgDec * rsvg)
 {
   GstVideoDecoder *decoder = GST_VIDEO_DECODER (rsvg);
   gst_video_decoder_set_packetized (decoder, FALSE);
+  gst_video_decoder_set_use_default_pad_acceptcaps (GST_VIDEO_DECODER_CAST
+      (rsvg), TRUE);
+  GST_PAD_SET_ACCEPT_TEMPLATE (GST_VIDEO_DECODER_SINK_PAD (rsvg));
 }
 
 static void
@@ -203,8 +206,7 @@ gst_rsvg_decode_image (GstRsvgDec * rsvg, GstBuffer * buffer,
 
 
   if (!gst_video_frame_map (&vframe,
-          &gst_video_decoder_get_output_state (decoder)->info,
-          frame->output_buffer, GST_MAP_READWRITE)) {
+          &output_state->info, frame->output_buffer, GST_MAP_READWRITE)) {
     GST_ERROR_OBJECT (rsvg, "Failed to get SVG image");
     g_object_unref (handle);
     gst_video_codec_state_unref (output_state);

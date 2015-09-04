@@ -320,6 +320,35 @@ static const char frag_NV12_NV21_to_RGB[] = {
       "}"
 };
 
+/* RGB to NV12/NV21 conversion */
+/* NV12: u, v
+   NV21: v, u */
+static const char frag_RGB_to_NV12_NV21[] = {
+    "#ifdef GL_ES\n"
+    "precision mediump float;\n"
+    "#endif\n"
+    "varying vec2 v_texcoord;\n"
+    "uniform sampler2D tex;\n"
+    "uniform vec2 tex_scale0;\n"
+    "uniform vec2 tex_scale1;\n"
+    "uniform vec2 tex_scale2;\n"
+    RGB_TO_YUV_COEFFICIENTS
+    "void main(void) {\n"
+    "  float y, u, v;\n"
+    "  vec4 texel, uv_texel;\n"
+    "  texel = texture2D(tex, v_texcoord * tex_scale0).%c%c%c%c;\n"
+    "  uv_texel = texture2D(tex, v_texcoord * tex_scale0 * 2.0).%c%c%c%c;\n"
+    "  y = dot(texel.rgb, coeff1);\n"
+    "  u = dot(uv_texel.rgb, coeff2);\n"
+    "  v = dot(uv_texel.rgb, coeff3);\n"
+    "  y += offset.x;\n"
+    "  u += offset.y;\n"
+    "  v += offset.z;\n"
+    "  gl_FragData[0] = vec4(y, 0.0, 0.0, 1.0);\n"
+    "  gl_FragData[1] = vec4(%c, %c, 0.0, 1.0);\n"
+    "}"
+};
+
 /* YUY2:r,g,a
    UYVY:a,b,r */
 static const gchar frag_YUY2_UYVY_to_RGB[] =
@@ -731,9 +760,12 @@ gst_gl_color_convert_transform_caps (GstGLContext * convert,
       (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, GST_GL_COLOR_CONVERT_FORMATS));
 
   caps = gst_gl_color_convert_caps_remove_format_info (caps);
+
   result = gst_caps_intersect (caps, templ);
   gst_caps_unref (caps);
   gst_caps_unref (templ);
+
+  result = gst_gl_overlay_compositor_add_caps (result);
 
   if (filter) {
     GstCaps *tmp;
@@ -1124,6 +1156,20 @@ _RGB_to_YUV (GstGLColorConvert * convert)
           pixel_order[0], pixel_order[1], pixel_order[2], pixel_order[3],
           "u", "y", "v", "y");
       info->out_n_textures = 1;
+      break;
+    case GST_VIDEO_FORMAT_NV12:
+      info->frag_prog = g_strdup_printf (frag_RGB_to_NV12_NV21,
+          pixel_order[0], pixel_order[1], pixel_order[2], pixel_order[3],
+          pixel_order[0], pixel_order[1], pixel_order[2], pixel_order[3],
+          'u', 'v');
+      info->out_n_textures = 2;
+      break;
+    case GST_VIDEO_FORMAT_NV21:
+      info->frag_prog = g_strdup_printf (frag_RGB_to_NV12_NV21,
+          pixel_order[0], pixel_order[1], pixel_order[2], pixel_order[3],
+          pixel_order[0], pixel_order[1], pixel_order[2], pixel_order[3],
+          'v', 'u');
+      info->out_n_textures = 2;
       break;
     default:
       break;
@@ -1664,6 +1710,7 @@ _do_convert (GstGLContext * context, GstGLColorConvert * convert)
   GstVideoInfo *in_info = &convert->in_info;
   gboolean res = TRUE;
   gint views, v;
+  GstVideoOverlayCompositionMeta *composition_meta;
 
   convert->outbuf = NULL;
 
@@ -1700,6 +1747,14 @@ _do_convert (GstGLContext * context, GstGLColorConvert * convert)
 
     if (sync_meta)
       gst_gl_sync_meta_set_sync_point (sync_meta, convert->context);
+  }
+
+  composition_meta =
+      gst_buffer_get_video_overlay_composition_meta (convert->inbuf);
+  if (composition_meta) {
+    GST_DEBUG ("found video overlay composition meta, appliying on output.");
+    gst_buffer_add_video_overlay_composition_meta
+        (convert->outbuf, composition_meta->overlay);
   }
 
   convert->priv->result = res;

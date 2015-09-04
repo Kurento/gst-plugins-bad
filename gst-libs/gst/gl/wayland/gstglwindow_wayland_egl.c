@@ -290,8 +290,8 @@ create_surfaces (GstGLWindowWaylandEGL * window_egl)
           wl_shell_get_shell_surface (display->shell,
           window_egl->window.surface);
       if (window_egl->window.queue)
-        wl_proxy_set_queue ((struct wl_proxy *) window_egl->
-            window.shell_surface, window_egl->window.queue);
+        wl_proxy_set_queue ((struct wl_proxy *) window_egl->window.
+            shell_surface, window_egl->window.queue);
 
       wl_shell_surface_add_listener (window_egl->window.shell_surface,
           &shell_surface_listener, window_egl);
@@ -351,15 +351,16 @@ gst_gl_window_wayland_egl_init (GstGLWindowWaylandEGL * window)
 
 /* Must be called in the gl thread */
 GstGLWindowWaylandEGL *
-gst_gl_window_wayland_egl_new (void)
+gst_gl_window_wayland_egl_new (GstGLDisplay * display)
 {
-  GstGLWindowWaylandEGL *window;
+  if ((gst_gl_display_get_handle_type (display) & GST_GL_DISPLAY_TYPE_WAYLAND)
+      == 0)
+    /* we require a wayland display to create wayland surfaces */
+    return NULL;
 
   GST_DEBUG ("creating Wayland EGL window");
 
-  window = g_object_new (GST_GL_TYPE_WINDOW_WAYLAND_EGL, NULL);
-
-  return window;
+  return g_object_new (GST_GL_TYPE_WINDOW_WAYLAND_EGL, NULL);
 }
 
 static void
@@ -381,8 +382,16 @@ gst_gl_window_wayland_egl_close (GstGLWindow * window)
 static gboolean
 gst_gl_window_wayland_egl_open (GstGLWindow * window, GError ** error)
 {
-  GstGLDisplayWayland *display = GST_GL_DISPLAY_WAYLAND (window->display);
+  GstGLDisplayWayland *display;
   GstGLWindowWaylandEGL *window_egl = GST_GL_WINDOW_WAYLAND_EGL (window);
+
+  if (!GST_IS_GL_DISPLAY_WAYLAND (window->display)) {
+    g_set_error (error, GST_GL_WINDOW_ERROR,
+        GST_GL_WINDOW_ERROR_RESOURCE_UNAVAILABLE,
+        "Failed to retrieve Wayland display (wrong type?)");
+    return FALSE;
+  }
+  display = GST_GL_DISPLAY_WAYLAND (window->display);
 
   if (!display->display) {
     g_set_error (error, GST_GL_WINDOW_ERROR,

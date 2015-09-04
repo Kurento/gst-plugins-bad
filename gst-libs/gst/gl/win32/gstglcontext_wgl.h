@@ -34,6 +34,7 @@ G_BEGIN_DECLS
 
 typedef struct _GstGLContextWGL        GstGLContextWGL;
 typedef struct _GstGLContextWGLClass   GstGLContextWGLClass;
+typedef struct _GstGLContextWGLPrivate GstGLContextWGLPrivate;
 
 struct _GstGLContextWGL {
   /*< private >*/
@@ -41,6 +42,8 @@ struct _GstGLContextWGL {
 
   HGLRC wgl_context;
   HGLRC external_gl_context;
+
+  GstGLContextWGLPrivate *priv;
 
   gpointer _reserved[GST_PADDING];
 };
@@ -55,9 +58,9 @@ struct _GstGLContextWGLClass {
 
 GType gst_gl_context_wgl_get_type     (void);
 
-GstGLContextWGL *   gst_gl_context_wgl_new                  (void);
+GstGLContextWGL *   gst_gl_context_wgl_new                  (GstGLDisplay * display);
 guintptr            gst_gl_context_wgl_get_current_context  (void);
-gpointer            gst_gl_context_wgl_get_proc_address     (GstGLContext * context, const gchar * name);
+gpointer            gst_gl_context_wgl_get_proc_address     (GstGLAPI gl_api, const gchar * name);
 
 G_END_DECLS
 

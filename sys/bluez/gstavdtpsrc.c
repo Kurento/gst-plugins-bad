@@ -39,7 +39,7 @@ GST_DEBUG_CATEGORY_STATIC (avdtpsrc_debug);
 enum
 {
   PROP_0,
-  PROP_TRANSPORT
+  PROP_TRANSPORT,
 };
 
 #define parent_class gst_avdtp_src_parent_class
@@ -199,7 +199,7 @@ gst_avdtp_src_getcaps (GstBaseSrc * bsrc, GstCaps * filter)
       value = gst_structure_get_value (structure, "mpegversion");
       if (!value || !G_VALUE_HOLDS_INT (value)) {
         GST_ERROR_OBJECT (avdtpsrc, "Failed to get mpegversion");
-        goto fail;
+        return NULL;
       }
       gst_caps_set_simple (caps, "mpegversion", G_TYPE_INT,
           g_value_get_int (value), NULL);
@@ -207,7 +207,7 @@ gst_avdtp_src_getcaps (GstBaseSrc * bsrc, GstCaps * filter)
       value = gst_structure_get_value (structure, "channels");
       if (!value || !G_VALUE_HOLDS_INT (value)) {
         GST_ERROR_OBJECT (avdtpsrc, "Failed to get channels");
-        goto fail;
+        return NULL;
       }
       gst_caps_set_simple (caps, "channels", G_TYPE_INT,
           g_value_get_int (value), NULL);
@@ -215,7 +215,7 @@ gst_avdtp_src_getcaps (GstBaseSrc * bsrc, GstCaps * filter)
       value = gst_structure_get_value (structure, "base-profile");
       if (!value || !G_VALUE_HOLDS_STRING (value)) {
         GST_ERROR_OBJECT (avdtpsrc, "Failed to get base-profile");
-        goto fail;
+        return NULL;
       }
       gst_caps_set_simple (caps, "base-profile", G_TYPE_STRING,
           g_value_get_string (value), NULL);
@@ -228,7 +228,7 @@ gst_avdtp_src_getcaps (GstBaseSrc * bsrc, GstCaps * filter)
     value = gst_structure_get_value (structure, "rate");
     if (!value || !G_VALUE_HOLDS_INT (value)) {
       GST_ERROR_OBJECT (avdtpsrc, "Failed to get sample rate");
-      goto fail;
+      return NULL;
     }
     rate = g_value_get_int (value);
 
@@ -245,12 +245,6 @@ gst_avdtp_src_getcaps (GstBaseSrc * bsrc, GstCaps * filter)
   }
 
   return ret;
-
-fail:
-  if (ret)
-    gst_caps_unref (ret);
-
-  return NULL;
 }
 
 static gboolean
@@ -262,7 +256,7 @@ gst_avdtp_src_start (GstBaseSrc * bsrc)
    * connection to figure out what format the device is going to send us.
    */
 
-  if (!gst_avdtp_connection_acquire (&avdtpsrc->conn)) {
+  if (!gst_avdtp_connection_acquire (&avdtpsrc->conn, FALSE)) {
     GST_ERROR_OBJECT (avdtpsrc, "Failed to acquire connection");
     return FALSE;
   }

@@ -723,7 +723,7 @@ gst_audio_aggregator_do_clip (GstAggregator * agg,
   bpf = GST_AUDIO_INFO_BPF (&pad->info);
 
   GST_OBJECT_LOCK (bpad);
-  *out = gst_audio_buffer_clip (buffer, &bpad->segment, rate, bpf);
+  *out = gst_audio_buffer_clip (buffer, &bpad->clip_segment, rate, bpf);
   GST_OBJECT_UNLOCK (bpad);
 
   return GST_FLOW_OK;
@@ -739,7 +739,6 @@ gst_audio_aggregator_fill_buffer (GstAudioAggregator * aagg,
   GstClockTime start_time, end_time;
   gboolean discont = FALSE;
   guint64 start_offset, end_offset;
-  GstClockTime timestamp, stream_time = GST_CLOCK_TIME_NONE;
   gint rate, bpf;
 
   GstAggregatorPad *aggpad = GST_AGGREGATOR_PAD (pad);
@@ -761,15 +760,6 @@ gst_audio_aggregator_fill_buffer (GstAudioAggregator * aagg,
       pad->priv->next_offset += pad->priv->size;
     goto done;
   }
-
-  timestamp = GST_BUFFER_PTS (inbuf);
-  stream_time = gst_segment_to_stream_time (&aggpad->segment, GST_FORMAT_TIME,
-      timestamp);
-
-  /* sync object properties on stream time */
-  /* TODO: Ideally we would want to do that on every sample */
-  if (GST_CLOCK_TIME_IS_VALID (stream_time))
-    gst_object_sync_values (GST_OBJECT (pad), stream_time);
 
   start_time = GST_BUFFER_PTS (inbuf);
   end_time =
@@ -953,8 +943,8 @@ static GstBuffer *
 gst_audio_aggregator_create_output_buffer (GstAudioAggregator * aagg,
     guint num_frames)
 {
-  GstBuffer *outbuf = gst_buffer_new_and_alloc (num_frames *
-      GST_AUDIO_INFO_BPF (&aagg->info));
+  GstBuffer *outbuf = gst_buffer_new_allocate (NULL, num_frames *
+      GST_AUDIO_INFO_BPF (&aagg->info), NULL);
   GstMapInfo outmap;
 
   gst_buffer_map (outbuf, &outmap, GST_MAP_WRITE);
@@ -962,6 +952,29 @@ gst_audio_aggregator_create_output_buffer (GstAudioAggregator * aagg,
   gst_buffer_unmap (outbuf, &outmap);
 
   return outbuf;
+}
+
+static gboolean
+sync_pad_values (GstAudioAggregator * aagg, GstAudioAggregatorPad * pad)
+{
+  GstAggregatorPad *bpad = GST_AGGREGATOR_PAD (pad);
+  GstClockTime timestamp, stream_time;
+
+  if (pad->priv->buffer == NULL)
+    return TRUE;
+
+  timestamp = GST_BUFFER_PTS (pad->priv->buffer);
+  GST_OBJECT_LOCK (bpad);
+  stream_time = gst_segment_to_stream_time (&bpad->segment, GST_FORMAT_TIME,
+      timestamp);
+  GST_OBJECT_UNLOCK (bpad);
+
+  /* sync object properties on stream time */
+  /* TODO: Ideally we would want to do that on every sample */
+  if (GST_CLOCK_TIME_IS_VALID (stream_time))
+    gst_object_sync_values (GST_OBJECT (pad), stream_time);
+
+  return TRUE;
 }
 
 static GstFlowReturn
@@ -1011,9 +1024,9 @@ gst_audio_aggregator_aggregate (GstAggregator * agg, gboolean timeout)
   element = GST_ELEMENT (agg);
   aagg = GST_AUDIO_AGGREGATOR (agg);
 
-  blocksize = gst_util_uint64_scale (aagg->priv->output_buffer_duration,
-      GST_AUDIO_INFO_RATE (&aagg->info), GST_SECOND);
-  blocksize = MAX (1, blocksize);
+  /* Sync pad properties to the stream time */
+  gst_aggregator_iterate_sinkpads (agg,
+      (GstAggregatorPadForeachFunc) GST_DEBUG_FUNCPTR (sync_pad_values), NULL);
 
   GST_AUDIO_AGGREGATOR_LOCK (aagg);
   GST_OBJECT_LOCK (agg);
@@ -1062,6 +1075,9 @@ gst_audio_aggregator_aggregate (GstAggregator * agg, gboolean timeout)
   rate = GST_AUDIO_INFO_RATE (&aagg->info);
   bpf = GST_AUDIO_INFO_BPF (&aagg->info);
 
+  blocksize = gst_util_uint64_scale (aagg->priv->output_buffer_duration,
+      GST_AUDIO_INFO_RATE (&aagg->info), GST_SECOND);
+  blocksize = MAX (1, blocksize);
 
   /* for the next timestamp, use the sample counter, which will
    * never accumulate rounding errors */
@@ -1254,6 +1270,20 @@ gst_audio_aggregator_aggregate (GstAggregator * agg, gboolean timeout)
 
   aagg->priv->offset = next_offset;
   agg->segment.position = next_timestamp;
+
+  /* If there was a timeout and there was a gap in data in out of the streams,
+   * then it's a very good time to for a resync with the timestamps.
+   */
+  if (timeout) {
+    for (iter = element->sinkpads; iter; iter = iter->next) {
+      GstAudioAggregatorPad *pad = GST_AUDIO_AGGREGATOR_PAD (iter->data);
+
+      GST_OBJECT_LOCK (pad);
+      if (pad->priv->output_offset < aagg->priv->offset)
+        pad->priv->output_offset = -1;
+      GST_OBJECT_UNLOCK (pad);
+    }
+  }
 
   GST_OBJECT_UNLOCK (agg);
 

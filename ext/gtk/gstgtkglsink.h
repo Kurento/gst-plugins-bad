@@ -27,21 +27,22 @@
 #include <gst/video/video.h>
 #include <gst/gl/gl.h>
 
-typedef struct _GstGtkGLSink GstGtkGLSink;
-typedef struct _GstGtkGLSinkClass GstGtkGLSinkClass;
-typedef struct _GstGtkGLSinkPrivate GstGtkGLSinkPrivate;
+#include "gstgtkbasesink.h"
 
-#include <gtkgstglwidget.h>
 
-G_BEGIN_DECLS
-
-GType gst_gtk_gl_sink_get_type (void);
 #define GST_TYPE_GTK_GL_SINK            (gst_gtk_gl_sink_get_type())
 #define GST_GTK_GL_SINK(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_GTK_GL_SINK,GstGtkGLSink))
 #define GST_GTK_GL_SINK_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_GTK_GL_SINK,GstGtkGLSinkClass))
 #define GST_IS_GTK_GL_SINK(obj)         (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_GTK_GL_SINK))
 #define GST_IS_GTK_GL_SINK_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_GTK_GL_SINK))
 #define GST_GTK_GL_SINK_CAST(obj)       ((GstGtkGLSink*)(obj))
+
+G_BEGIN_DECLS
+
+typedef struct _GstGtkGLSink GstGtkGLSink;
+typedef struct _GstGtkGLSinkClass GstGtkGLSinkClass;
+
+GType gst_gtk_gl_sink_get_type (void);
 
 /**
  * GstGtkGLSink:
@@ -51,12 +52,7 @@ GType gst_gtk_gl_sink_get_type (void);
 struct _GstGtkGLSink
 {
   /* <private> */
-  GstVideoSink          parent;
-
-  GtkGstGLWidget       *widget;
-
-  GstVideoInfo          v_info;
-  GstBufferPool        *pool;
+  GstGtkBaseSink        parent;
 
   GstGLDisplay         *display;
   GstGLContext         *context;
@@ -65,18 +61,9 @@ struct _GstGtkGLSink
   GstGLUpload          *upload;
   GstBuffer            *uploaded_buffer;
 
-  /* properties */
-  gboolean              force_aspect_ratio;
-  GBinding             *bind_force_aspect_ratio;
-
-  gint                  par_n;
-  gint                  par_d;
-  GBinding             *bind_pixel_aspect_ratio;
-
-  gboolean              ignore_alpha;
-  GBinding             *bind_ignore_alpha;
-
-  GstGtkGLSinkPrivate  *priv;
+  /* read/write with object lock */
+  gint                  display_width;
+  gint                  display_height;
 };
 
 /**
@@ -87,10 +74,8 @@ struct _GstGtkGLSink
 struct _GstGtkGLSinkClass
 {
   /* <private> */
-  GstVideoSinkClass object_class;
+  GstGtkBaseSinkClass object_class;
 };
-
-GstGtkGLSink *    gst_gtk_gl_sink_new (void);
 
 G_END_DECLS
 

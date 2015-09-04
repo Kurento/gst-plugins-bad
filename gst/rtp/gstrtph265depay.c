@@ -27,6 +27,7 @@
 
 #include <gst/base/gstbitreader.h>
 #include <gst/rtp/gstrtpbuffer.h>
+#include <gst/video/video.h>
 #include "gstrtph265depay.h"
 
 GST_DEBUG_CATEGORY_STATIC (rtph265depay_debug);
@@ -103,7 +104,7 @@ static GstStateChangeReturn gst_rtp_h265_depay_change_state (GstElement *
     element, GstStateChange transition);
 
 static GstBuffer *gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload,
-    GstBuffer * buf);
+    GstRTPBuffer * rtp);
 static gboolean gst_rtp_h265_depay_setcaps (GstRTPBaseDepayload * filter,
     GstCaps * caps);
 static gboolean gst_rtp_h265_depay_handle_event (GstRTPBaseDepayload * depay,
@@ -133,7 +134,7 @@ gst_rtp_h265_depay_class_init (GstRtpH265DepayClass * klass)
       "Jurgen Slowack <jurgenslowack@gmail.com>");
   gstelement_class->change_state = gst_rtp_h265_depay_change_state;
 
-  gstrtpbasedepayload_class->process = gst_rtp_h265_depay_process;
+  gstrtpbasedepayload_class->process_rtp_packet = gst_rtp_h265_depay_process;
   gstrtpbasedepayload_class->set_caps = gst_rtp_h265_depay_setcaps;
   gstrtpbasedepayload_class->handle_event = gst_rtp_h265_depay_handle_event;
 }
@@ -530,9 +531,98 @@ gst_rtp_h265_set_src_caps (GstRtpH265Depay * rtph265depay)
     gst_buffer_unref (codec_data);
   }
 
-  res = gst_pad_set_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (rtph265depay),
-      srccaps);
+  if (gst_pad_has_current_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (rtph265depay))) {
+    GstCaps *old_caps =
+        gst_pad_get_current_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (rtph265depay));
+
+    /* Only update the caps if they are not equal. For
+     * AVC we don't update caps if only the codec_data
+     * changes. This is the same behaviour as in h264parse
+     * and gstrtph264depay
+     */
+    if (rtph265depay->byte_stream) {
+      if (!gst_caps_is_equal (srccaps, old_caps))
+        res =
+            gst_pad_set_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (rtph265depay),
+            srccaps);
+      else
+        res = TRUE;
+    } else {
+      GstCaps *tmp_caps = gst_caps_copy (srccaps);
+      GstStructure *old_s, *tmp_s;
+
+      old_s = gst_caps_get_structure (old_caps, 0);
+      tmp_s = gst_caps_get_structure (tmp_caps, 0);
+      if (gst_structure_has_field (old_s, "codec_data"))
+        gst_structure_set_value (tmp_s, "codec_data",
+            gst_structure_get_value (old_s, "codec_data"));
+
+      if (!gst_caps_is_equal (old_caps, tmp_caps))
+        res =
+            gst_pad_set_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (rtph265depay),
+            srccaps);
+      else
+        res = TRUE;
+
+      gst_caps_unref (tmp_caps);
+    }
+  } else {
+    res =
+        gst_pad_set_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (rtph265depay),
+        srccaps);
+  }
+
   gst_caps_unref (srccaps);
+
+  /* Insert SPS and PPS into the stream on next opportunity */
+  if (rtph265depay->sps->len > 0 || rtph265depay->pps->len > 0) {
+    gint i;
+    GstBuffer *codec_data;
+    GstMapInfo map;
+    guint8 *data;
+    guint len = 0;
+
+    for (i = 0; i < rtph265depay->sps->len; i++) {
+      len += 4 + gst_buffer_get_size (g_ptr_array_index (rtph265depay->sps, i));
+    }
+
+    for (i = 0; i < rtph265depay->pps->len; i++) {
+      len += 4 + gst_buffer_get_size (g_ptr_array_index (rtph265depay->pps, i));
+    }
+
+    codec_data = gst_buffer_new_and_alloc (len);
+    gst_buffer_map (codec_data, &map, GST_MAP_WRITE);
+    data = map.data;
+
+    for (i = 0; i < rtph265depay->sps->len; i++) {
+      GstBuffer *sps_buf = g_ptr_array_index (rtph265depay->sps, i);
+      guint sps_size = gst_buffer_get_size (sps_buf);
+
+      if (rtph265depay->byte_stream)
+        memcpy (data, sync_bytes, sizeof (sync_bytes));
+      else
+        GST_WRITE_UINT32_BE (data, sps_size);
+      gst_buffer_extract (sps_buf, 0, data + 4, -1);
+      data += 4 + sps_size;
+    }
+
+    for (i = 0; i < rtph265depay->pps->len; i++) {
+      GstBuffer *pps_buf = g_ptr_array_index (rtph265depay->pps, i);
+      guint pps_size = gst_buffer_get_size (pps_buf);
+
+      if (rtph265depay->byte_stream)
+        memcpy (data, sync_bytes, sizeof (sync_bytes));
+      else
+        GST_WRITE_UINT32_BE (data, pps_size);
+      gst_buffer_extract (pps_buf, 0, data + 4, -1);
+      data += 4 + pps_size;
+    }
+
+    gst_buffer_unmap (codec_data, &map);
+    if (rtph265depay->codec_data)
+      gst_buffer_unref (rtph265depay->codec_data);
+    rtph265depay->codec_data = codec_data;
+  }
 
   if (res)
     rtph265depay->new_codec_data = FALSE;
@@ -636,7 +726,7 @@ gst_rtp_h265_add_vps_sps_pps (GstElement * rtph265, GPtrArray * vps_array,
       gst_buffer_map (pps, &ppsmap, GST_MAP_READ);
       parse_pps (&ppsmap, &tmp_sps_id, &tmp_pps_id);
 
-      if (sps_id == tmp_sps_id && pps_id == tmp_pps_id) {
+      if (pps_id == tmp_pps_id) {
         if (map.size == ppsmap.size &&
             memcmp (map.data, ppsmap.data, ppsmap.size) == 0) {
           GST_LOG_OBJECT (rtph265, "Unchanged PPS %u:%u, not updating", sps_id,
@@ -849,6 +939,60 @@ gst_rtp_h265_complete_au (GstRtpH265Depay * rtph265depay,
 
 #define NAL_TYPE_IS_KEY(nt) (NAL_TYPE_IS_PARAMETER_SET(nt) || NAL_TYPE_IS_CODED_SLICE_SEGMENT(nt))
 
+static gboolean
+foreach_metadata_copy (GstBuffer * inbuf, GstMeta ** meta, gpointer user_data)
+{
+  CopyMetaData *data = user_data;
+  GstElement *element = data->element;
+  GstBuffer *outbuf = data->outbuf;
+  const GstMetaInfo *info = (*meta)->info;
+  const gchar *const *tags = gst_meta_api_type_get_tags (info->api);
+
+  if (!tags || (g_strv_length ((gchar **) tags) == 1
+          && gst_meta_api_type_has_tag (info->api,
+              g_quark_from_string (GST_META_TAG_VIDEO_STR)))) {
+    GstMetaTransformCopy copy_data = { FALSE, 0, -1 };
+    GST_DEBUG_OBJECT (element, "copy metadata %s", g_type_name (info->api));
+    /* simply copy then */
+    info->transform_func (outbuf, *meta, inbuf,
+        _gst_meta_transform_copy, &copy_data);
+  } else {
+    GST_DEBUG_OBJECT (element, "not copying metadata %s",
+        g_type_name (info->api));
+  }
+
+  return TRUE;
+}
+
+/* TODO: Should probably make copy_tag an array at some point */
+void
+gst_rtp_copy_meta (GstElement * element, GstBuffer * outbuf, GstBuffer * inbuf,
+    GQuark copy_tag)
+{
+  CopyMetaData data = { element, outbuf, copy_tag };
+
+  gst_buffer_foreach_meta (inbuf, foreach_metadata_copy, &data);
+}
+
+static gboolean
+foreach_metadata_drop (GstBuffer * inbuf, GstMeta ** meta, gpointer user_data)
+{
+  GstRtpH265Depay *depay = user_data;
+  const GstMetaInfo *info = (*meta)->info;
+  const gchar *const *tags = gst_meta_api_type_get_tags (info->api);
+
+  if (!tags || (g_strv_length ((gchar **) tags) == 1
+          && gst_meta_api_type_has_tag (info->api,
+              g_quark_from_string (GST_META_TAG_VIDEO_STR)))) {
+    GST_DEBUG_OBJECT (depay, "keeping metadata %s", g_type_name (info->api));
+  } else {
+    GST_DEBUG_OBJECT (depay, "dropping metadata %s", g_type_name (info->api));
+    *meta = NULL;
+  }
+
+  return TRUE;
+}
+
 static GstBuffer *
 gst_rtp_h265_depay_handle_nal (GstRtpH265Depay * rtph265depay, GstBuffer * nal,
     GstClockTime in_timestamp, gboolean marker)
@@ -948,13 +1092,18 @@ gst_rtp_h265_depay_handle_nal (GstRtpH265Depay * rtph265depay, GstBuffer * nal,
     /* prepend codec_data */
     if (rtph265depay->codec_data) {
       GST_DEBUG_OBJECT (depayload, "prepending codec_data");
+      gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265depay),
+          rtph265depay->codec_data, outbuf,
+          g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
       outbuf = gst_buffer_append (rtph265depay->codec_data, outbuf);
       rtph265depay->codec_data = NULL;
       out_keyframe = TRUE;
     }
     outbuf = gst_buffer_make_writable (outbuf);
 
-    GST_BUFFER_TIMESTAMP (outbuf) = out_timestamp;
+    gst_buffer_foreach_meta (outbuf, foreach_metadata_drop, depayload);
+
+    GST_BUFFER_PTS (outbuf) = out_timestamp;
 
     if (out_keyframe)
       GST_BUFFER_FLAG_UNSET (outbuf, GST_BUFFER_FLAG_DELTA_UNIT);
@@ -1016,17 +1165,17 @@ not_implemented:
 }
 
 static GstBuffer *
-gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
+gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstRTPBuffer * rtp)
 {
   GstRtpH265Depay *rtph265depay;
+  GstBuffer *buf;
   GstBuffer *outbuf = NULL;
   guint8 nal_unit_type;
-  GstRTPBuffer rtp = { NULL };
 
   rtph265depay = GST_RTP_H265_DEPAY (depayload);
 
   /* flush remaining data on discont */
-  if (GST_BUFFER_IS_DISCONT (buf)) {
+  if (GST_BUFFER_IS_DISCONT (rtp->buffer)) {
     gst_adapter_clear (rtph265depay->adapter);
     rtph265depay->wait_start = TRUE;
     rtph265depay->current_fu_type = 0;
@@ -1047,13 +1196,12 @@ gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
     gboolean donl_present = FALSE;
 #endif
 
-    timestamp = GST_BUFFER_TIMESTAMP (buf);
+    timestamp = GST_BUFFER_PTS (rtp->buffer);
 
-    gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp);
-
-    payload_len = gst_rtp_buffer_get_payload_len (&rtp);
-    payload = gst_rtp_buffer_get_payload (&rtp);
-    marker = gst_rtp_buffer_get_marker (&rtp);
+    payload_len = gst_rtp_buffer_get_payload_len (rtp);
+    payload = gst_rtp_buffer_get_payload (rtp);
+    buf = gst_rtp_buffer_get_payload_buffer (rtp);
+    marker = gst_rtp_buffer_get_marker (rtp);
 
     GST_DEBUG_OBJECT (rtph265depay, "receiving %d bytes", payload_len);
 
@@ -1160,17 +1308,26 @@ gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
           memcpy (map.data + sizeof (sync_bytes), payload, nalu_size);
           gst_buffer_unmap (outbuf, &map);
 
-          gst_adapter_push (rtph265depay->adapter, outbuf);
+          gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265depay), outbuf, buf,
+              g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
+
+          outbuf =
+              gst_rtp_h265_depay_handle_nal (rtph265depay, outbuf, timestamp,
+              marker);
+          if (outbuf)
+            gst_adapter_push (rtph265depay->adapter, outbuf);
 
           payload += nalu_size;
           payload_len -= nalu_size;
         }
 
         outsize = gst_adapter_available (rtph265depay->adapter);
-        outbuf = gst_adapter_take_buffer (rtph265depay->adapter, outsize);
-
-        outbuf = gst_rtp_h265_depay_handle_nal (rtph265depay, outbuf, timestamp,
-            marker);
+        if (outsize > 0) {
+          outbuf = gst_adapter_take_buffer (rtph265depay->adapter, outsize);
+          outbuf =
+              gst_rtp_h265_depay_handle_nal (rtph265depay, outbuf, timestamp,
+              marker);
+        }
         break;
       }
       case 49:
@@ -1252,6 +1409,9 @@ gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
           map.data[sizeof (sync_bytes) + 1] = nal_header & 0xff;
           gst_buffer_unmap (outbuf, &map);
 
+          gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265depay), outbuf, buf,
+              g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
+
           GST_DEBUG_OBJECT (rtph265depay, "queueing %d bytes", outsize);
 
           /* and assemble in the adapter */
@@ -1268,6 +1428,9 @@ gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
           outsize = payload_len;
           outbuf = gst_buffer_new_and_alloc (outsize);
           gst_buffer_fill (outbuf, 0, payload, outsize);
+
+          gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265depay), outbuf, buf,
+              g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
 
           GST_DEBUG_OBJECT (rtph265depay, "queueing %d bytes", outsize);
 
@@ -1312,13 +1475,17 @@ gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
         memcpy (map.data + sizeof (sync_bytes), payload, nalu_size);
         gst_buffer_unmap (outbuf, &map);
 
+        gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265depay), outbuf, buf,
+            g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
+
         outbuf = gst_rtp_h265_depay_handle_nal (rtph265depay, outbuf, timestamp,
             marker);
         break;
       }
     }
-    gst_rtp_buffer_unmap (&rtp);
   }
+
+  gst_buffer_unref (buf);
 
   return outbuf;
 
@@ -1326,13 +1493,13 @@ gst_rtp_h265_depay_process (GstRTPBaseDepayload * depayload, GstBuffer * buf)
 empty_packet:
   {
     GST_DEBUG_OBJECT (rtph265depay, "empty packet");
-    gst_rtp_buffer_unmap (&rtp);
+    gst_buffer_unref (buf);
     return NULL;
   }
 waiting_start:
   {
     GST_DEBUG_OBJECT (rtph265depay, "waiting for start");
-    gst_rtp_buffer_unmap (&rtp);
+    gst_buffer_unref (buf);
     return NULL;
   }
 #if 0
@@ -1340,7 +1507,7 @@ not_implemented_donl_present:
   {
     GST_ELEMENT_ERROR (rtph265depay, STREAM, FORMAT,
         (NULL), ("DONL field present not supported yet"));
-    gst_rtp_buffer_unmap (&rtp);
+    gst_buffer_unref (buf);
     return NULL;
   }
 #endif
@@ -1348,7 +1515,7 @@ not_implemented:
   {
     GST_ELEMENT_ERROR (rtph265depay, STREAM, FORMAT,
         (NULL), ("NAL unit type %d not supported yet", nal_unit_type));
-    gst_rtp_buffer_unmap (&rtp);
+    gst_buffer_unref (buf);
     return NULL;
   }
 }

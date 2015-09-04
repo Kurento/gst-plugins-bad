@@ -357,12 +357,8 @@ _ensure_gl_setup (GstCAOpenGLLayerSink * ca_sink)
   gst_gl_display_filter_gl_api (ca_sink->display, SUPPORTED_GL_APIS);
 
   if (!ca_sink->context) {
-    ca_sink->context = gst_gl_context_new (ca_sink->display);
-    if (!ca_sink->context)
-      goto context_creation_error;
-
-    if (!gst_gl_context_create (ca_sink->context, ca_sink->other_context,
-            &error)) {
+    if (!gst_gl_display_create_context (ca_sink->display,
+            ca_sink->other_context, &ca_sink->context, &error)) {
       goto context_error;
     }
   }
@@ -371,13 +367,6 @@ _ensure_gl_setup (GstCAOpenGLLayerSink * ca_sink)
     _invoke_on_main ((GstGLWindowCB) _create_layer, ca_sink);
 
   return TRUE;
-
-context_creation_error:
-  {
-    GST_ELEMENT_ERROR (ca_sink, RESOURCE, NOT_FOUND,
-        ("Failed to create GL context"), (NULL));
-    return FALSE;
-  }
 
 context_error:
   {
@@ -450,7 +439,6 @@ gst_ca_opengl_layer_sink_query (GstBaseSink * bsink, GstQuery * query)
       gst_buffer_replace (&ca_sink->next_buffer, NULL);
       gst_buffer_replace (&ca_sink->next_sync, NULL);
 
-      res = GST_BASE_SINK_CLASS (parent_class)->query (bsink, query);
       break;
     }
     default:

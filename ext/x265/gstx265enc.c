@@ -297,6 +297,32 @@ gst_x265_enc_get_supported_input_caps (void)
   return caps;
 }
 
+static gboolean
+gst_x265_enc_sink_query (GstVideoEncoder * enc, GstQuery * query)
+{
+  gboolean res;
+
+  switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_ACCEPT_CAPS:{
+      GstCaps *acceptable, *caps;
+
+      acceptable = gst_x265_enc_get_supported_input_caps ();
+      gst_query_parse_accept_caps (query, &caps);
+
+      gst_query_set_accept_caps_result (query,
+          gst_caps_is_subset (caps, acceptable));
+      gst_caps_unref (acceptable);
+      res = TRUE;
+    }
+      break;
+    default:
+      res = GST_VIDEO_ENCODER_CLASS (parent_class)->sink_query (enc, query);
+      break;
+  }
+
+  return res;
+}
+
 static GstCaps *
 gst_x265_enc_sink_getcaps (GstVideoEncoder * enc, GstCaps * filter)
 {
@@ -336,6 +362,7 @@ gst_x265_enc_class_init (GstX265EncClass * klass)
   gstencoder_class->flush = GST_DEBUG_FUNCPTR (gst_x265_enc_flush);
   gstencoder_class->finish = GST_DEBUG_FUNCPTR (gst_x265_enc_finish);
   gstencoder_class->getcaps = GST_DEBUG_FUNCPTR (gst_x265_enc_sink_getcaps);
+  gstencoder_class->sink_query = GST_DEBUG_FUNCPTR (gst_x265_enc_sink_query);
   gstencoder_class->propose_allocation =
       GST_DEBUG_FUNCPTR (gst_x265_enc_propose_allocation);
 
@@ -735,6 +762,7 @@ gst_x265_enc_set_level_tier_and_profile (GstX265Enc * encoder, GstCaps * caps)
   x265_nal *nal, *vps_nal;
   guint32 i_nal;
   int header_return;
+  gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (encoder, "set profile, level and tier");
 
@@ -756,12 +784,12 @@ gst_x265_enc_set_level_tier_and_profile (GstX265Enc * encoder, GstCaps * caps)
           vps_nal->payload + 6, vps_nal->sizeBytes - 6)) {
     GST_ELEMENT_ERROR (encoder, STREAM, ENCODE, ("Encode x265 failed."),
         ("Failed to find correct level, tier or profile in VPS"));
-    return FALSE;
+    ret = FALSE;
   }
 
   x265_nal_free (vps_nal);
 
-  return TRUE;
+  return ret;
 }
 
 static GstBuffer *
@@ -893,7 +921,6 @@ gst_x265_enc_set_format (GstVideoEncoder * video_enc,
 {
   GstX265Enc *encoder = GST_X265_ENC (video_enc);
   GstVideoInfo *info = &state->info;
-  gboolean level_ok = TRUE;
 
   /* If the encoder is initialized, do not reinitialize it again if not
    * necessary */
@@ -916,9 +943,6 @@ gst_x265_enc_set_format (GstVideoEncoder * video_enc,
   if (encoder->input_state)
     gst_video_codec_state_unref (encoder->input_state);
   encoder->input_state = gst_video_codec_state_ref (state);
-
-  if (!level_ok)
-    return FALSE;
 
   if (!gst_x265_enc_init_encoder (encoder))
     return FALSE;

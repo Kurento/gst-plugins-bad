@@ -50,6 +50,17 @@
 GST_DEBUG_CATEGORY_STATIC (gst_gl_upload_debug);
 #define GST_CAT_DEFAULT gst_gl_upload_debug
 
+#define DEBUG_INIT \
+  GST_DEBUG_CATEGORY_INIT (gst_gl_upload_debug, "glupload", 0, "upload");
+
+G_DEFINE_TYPE_WITH_CODE (GstGLUpload, gst_gl_upload, GST_TYPE_OBJECT,
+    DEBUG_INIT);
+static void gst_gl_upload_finalize (GObject * object);
+static void gst_gl_upload_release_buffer_unlocked (GstGLUpload * upload);
+
+#define GST_GL_UPLOAD_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), \
+    GST_TYPE_GL_UPLOAD, GstGLUploadPrivate))
+
 /* Define the maximum number of planes we can upload - handle 2 views per buffer */
 #define GST_GL_UPLOAD_MAX_PLANES (GST_VIDEO_MAX_PLANES * 2)
 
@@ -142,26 +153,17 @@ _gl_memory_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     GstCaps * out_caps)
 {
   struct GLMemoryUpload *upload = impl;
-  GstCapsFeatures *features, *gl_features;
-  gboolean ret = TRUE;
+  GstCapsFeatures *features;
   int i;
 
-  gl_features =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
-
   features = gst_caps_get_features (out_caps, 0);
-  if (!gst_caps_features_is_equal (features, gl_features))
-    ret = FALSE;
+  if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY))
+    return FALSE;
 
   features = gst_caps_get_features (in_caps, 0);
-  if (!gst_caps_features_is_equal (features, gl_features)
-      && !gst_caps_features_is_equal (features,
-          GST_CAPS_FEATURES_MEMORY_SYSTEM_MEMORY))
-    ret = FALSE;
-
-  gst_caps_features_free (gl_features);
-
-  if (!ret)
+  if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)
+      && !gst_caps_features_contains (features,
+          GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY))
     return FALSE;
 
   if (buffer) {
@@ -229,6 +231,8 @@ _gl_memory_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
     /* the normal size of a frame */
     size = info.size;
     gst_buffer_pool_config_set_params (config, caps, size, 0, 0);
+    gst_buffer_pool_config_add_option (config,
+        GST_BUFFER_POOL_OPTION_GL_SYNC_META);
 
     if (!gst_buffer_pool_set_config (pool, config)) {
       gst_object_unref (pool);
@@ -348,25 +352,17 @@ _egl_image_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     GstCaps * out_caps)
 {
   struct EGLImageUpload *image = impl;
-  GstCapsFeatures *features, *gl_features;
+  GstCapsFeatures *features;
   gboolean ret = TRUE;
   int i;
 
-  gl_features =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_EGL_IMAGE);
   features = gst_caps_get_features (in_caps, 0);
-  if (!gst_caps_features_is_equal (features, gl_features))
+  if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_EGL_IMAGE))
     ret = FALSE;
 
-  gst_caps_features_free (gl_features);
-
-  gl_features =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
   features = gst_caps_get_features (out_caps, 0);
-  if (!gst_caps_features_is_equal (features, gl_features))
+  if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY))
     ret = FALSE;
-
-  gst_caps_features_free (gl_features);
 
   if (!ret)
     return FALSE;
@@ -532,27 +528,19 @@ _upload_meta_upload_accept (gpointer impl, GstBuffer * buffer,
     GstCaps * in_caps, GstCaps * out_caps)
 {
   struct GLUploadMeta *upload = impl;
-  GstCapsFeatures *features, *gl_features;
+  GstCapsFeatures *features;
   GstVideoGLTextureUploadMeta *meta;
   gboolean ret = TRUE;
 
   features = gst_caps_get_features (in_caps, 0);
-  gl_features =
-      gst_caps_features_from_string
-      (GST_CAPS_FEATURE_META_GST_VIDEO_GL_TEXTURE_UPLOAD_META);
 
-  if (!gst_caps_features_is_equal (features, gl_features))
+  if (!gst_caps_features_contains (features,
+          GST_CAPS_FEATURE_META_GST_VIDEO_GL_TEXTURE_UPLOAD_META))
     ret = FALSE;
 
-  gst_caps_features_free (gl_features);
-
-  gl_features =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
   features = gst_caps_get_features (out_caps, 0);
-  if (!gst_caps_features_is_equal (features, gl_features))
+  if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY))
     ret = FALSE;
-
-  gst_caps_features_free (gl_features);
 
   if (!ret)
     return ret;
@@ -710,11 +698,64 @@ static const UploadMethod _upload_meta_upload = {
   &_upload_meta_upload_free
 };
 
+struct RawUploadFrame
+{
+  gint ref_count;
+  GstVideoFrame frame;
+};
+
 struct RawUpload
 {
   GstGLUpload *upload;
-  GstVideoFrame in_frame;
+  struct RawUploadFrame *in_frame;
 };
+
+static struct RawUploadFrame *
+_raw_upload_frame_new (struct RawUpload *raw, GstBuffer * buffer)
+{
+  struct RawUploadFrame *frame;
+  GstVideoInfo *info;
+  gint i;
+
+  if (!buffer)
+    return NULL;
+
+  frame = g_slice_new (struct RawUploadFrame);
+  frame->ref_count = 1;
+
+  if (!gst_video_frame_map (&frame->frame, &raw->upload->priv->in_info,
+          buffer, GST_MAP_READ)) {
+    g_slice_free (struct RawUploadFrame, frame);
+    return NULL;
+  }
+
+  raw->upload->priv->in_info = frame->frame.info;
+  info = &raw->upload->priv->in_info;
+
+  /* Recalculate the offsets (and size) */
+  info->size = 0;
+  for (i = 0; i < GST_VIDEO_INFO_N_PLANES (info); i++) {
+    info->offset[i] = info->size;
+    info->size += gst_gl_get_plane_data_size (info, NULL, i);
+  }
+
+  return frame;
+}
+
+static void
+_raw_upload_frame_ref (struct RawUploadFrame *frame)
+{
+  g_atomic_int_inc (&frame->ref_count);
+}
+
+static void
+_raw_upload_frame_unref (struct RawUploadFrame *frame)
+{
+  if (g_atomic_int_dec_and_test (&frame->ref_count)) {
+    gst_video_frame_unmap (&frame->frame);
+    g_slice_free (struct RawUploadFrame, frame);
+  }
+}
 
 static gpointer
 _raw_data_upload_new (GstGLUpload * upload)
@@ -746,29 +787,15 @@ _raw_data_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     GstCaps * out_caps)
 {
   struct RawUpload *raw = impl;
-  GstCapsFeatures *features, *gl_features;
-  gboolean ret = TRUE;
+  GstCapsFeatures *features;
 
-  gl_features =
-      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
   features = gst_caps_get_features (out_caps, 0);
-  if (!gst_caps_features_is_equal (features, gl_features))
-    ret = FALSE;
+  if (!gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY))
+    return FALSE;
 
-  gst_caps_features_free (gl_features);
+  raw->in_frame = _raw_upload_frame_new (raw, buffer);
 
-  if (!ret)
-    return ret;
-
-  if (buffer) {
-    if (!gst_video_frame_map (&raw->in_frame, &raw->upload->priv->in_info,
-            buffer, GST_MAP_READ))
-      return FALSE;
-
-    raw->upload->priv->in_info = raw->in_frame.info;
-  }
-
-  return TRUE;
+  return (raw->in_frame != NULL);
 }
 
 static void
@@ -794,10 +821,13 @@ _raw_data_upload_perform (gpointer impl, GstBuffer * buffer,
     max_planes *= GST_VIDEO_INFO_VIEWS (in_info);
 
   gst_gl_memory_setup_wrapped (raw->upload->context,
-      &raw->upload->priv->in_info, NULL, raw->in_frame.data, in_tex);
+      &raw->upload->priv->in_info, NULL, raw->in_frame->frame.data, in_tex,
+      raw->in_frame, (GDestroyNotify) _raw_upload_frame_unref);
 
+  /* FIXME Use a buffer pool to cache the generated textures */
   *outbuf = gst_buffer_new ();
   for (i = 0; i < max_planes; i++) {
+    _raw_upload_frame_ref (raw->in_frame);
     gst_buffer_append_memory (*outbuf, (GstMemory *) in_tex[i]);
   }
 
@@ -808,8 +838,8 @@ static void
 _raw_data_upload_release (gpointer impl, GstBuffer * buffer)
 {
   struct RawUpload *raw = impl;
-
-  gst_video_frame_unmap (&raw->in_frame);
+  _raw_upload_frame_unref (raw->in_frame);
+  raw->in_frame = NULL;
 }
 
 static void
@@ -861,22 +891,11 @@ gst_gl_upload_get_input_template_caps (void)
   }
 
   ret = gst_caps_simplify (ret);
-
+  ret = gst_gl_overlay_compositor_add_caps (ret);
   g_mutex_unlock (&upload_global_lock);
 
   return ret;
 }
-
-#define DEBUG_INIT \
-  GST_DEBUG_CATEGORY_INIT (gst_gl_upload_debug, "glupload", 0, "upload");
-
-G_DEFINE_TYPE_WITH_CODE (GstGLUpload, gst_gl_upload, GST_TYPE_OBJECT,
-    DEBUG_INIT);
-static void gst_gl_upload_finalize (GObject * object);
-static void gst_gl_upload_release_buffer_unlocked (GstGLUpload * upload);
-
-#define GST_GL_UPLOAD_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), \
-    GST_TYPE_GL_UPLOAD, GstGLUploadPrivate))
 
 static void
 gst_gl_upload_class_init (GstGLUploadClass * klass)
@@ -967,12 +986,16 @@ gst_gl_upload_transform_caps (GstGLContext * context, GstPadDirection direction,
   tmp = gst_caps_new_empty ();
 
   for (i = 0; i < G_N_ELEMENTS (upload_methods); i++) {
-    GstCaps *tmp2 =
-        upload_methods[i]->transform_caps (context, direction, caps);
+    GstCaps *tmp2;
+
+    tmp2 = upload_methods[i]->transform_caps (context, direction, caps);
 
     if (tmp2)
       tmp = gst_caps_merge (tmp, tmp2);
   }
+
+  tmp = gst_gl_overlay_compositor_add_caps (tmp);
+
 
   if (filter) {
     result = gst_caps_intersect_full (filter, tmp, GST_CAPS_INTERSECT_FIRST);

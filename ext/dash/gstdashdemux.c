@@ -145,9 +145,12 @@
 #endif
 
 #include <string.h>
+#include <stdio.h>
 #include <inttypes.h>
+#include <gio/gio.h>
 #include <gst/base/gsttypefindhelper.h>
 #include <gst/tag/tag.h>
+#include <gst/net/gstnet.h>
 #include "gst/gst-i18n-plugin.h"
 #include "gstdashdemux.h"
 #include "gstdash_debug.h"
@@ -186,6 +189,25 @@ enum
 #define DEFAULT_MAX_BUFFERING_TIME       30     /* in seconds */
 #define DEFAULT_BANDWIDTH_USAGE         0.8     /* 0 to 1     */
 #define DEFAULT_MAX_BITRATE        24000000     /* in bit/s  */
+
+/* Clock drift compensation for live streams */
+#define SLOW_CLOCK_UPDATE_INTERVAL  (1000000 * 30 * 60) /* 30 minutes */
+#define FAST_CLOCK_UPDATE_INTERVAL  (1000000 * 30)      /* 30 seconds */
+#define SUPPORTED_CLOCK_FORMATS (GST_MPD_UTCTIMING_TYPE_NTP | GST_MPD_UTCTIMING_TYPE_HTTP_HEAD | GST_MPD_UTCTIMING_TYPE_HTTP_XSDATE | GST_MPD_UTCTIMING_TYPE_HTTP_ISO | GST_MPD_UTCTIMING_TYPE_HTTP_NTP)
+#define NTP_TO_UNIX_EPOCH G_GUINT64_CONSTANT(2208988800)        /* difference (in seconds) between NTP epoch and Unix epoch */
+
+struct _GstDashDemuxClockDrift
+{
+  GMutex clock_lock;            /* used to protect access to struct */
+  guint selected_url;
+  gint64 next_update;
+  GCond clock_cond;             /* used for waiting until got_clock==TRUE */
+  /* @clock_compensation: amount (in usecs) to add to client's idea of
+     now to map it to the server's idea of now */
+  GTimeSpan clock_compensation;
+  gboolean got_clock;           /* indicates time source has returned a valid clock at least once */
+  GstClock *ntp_clock;
+};
 
 /* GObject */
 static void gst_dash_demux_set_property (GObject * object, guint prop_id,
@@ -236,10 +258,18 @@ static GstCaps *gst_dash_demux_get_input_caps (GstDashDemux * demux,
     GstActiveStream * stream);
 static GstPad *gst_dash_demux_create_pad (GstDashDemux * demux,
     GstActiveStream * stream);
+static GstDashDemuxClockDrift *gst_dash_demux_clock_drift_new (void);
+static void gst_dash_demux_clock_drift_free (GstDashDemuxClockDrift *);
+static gboolean gst_dash_demux_poll_clock_drift (GstDashDemux * demux);
+static GTimeSpan gst_dash_demux_get_clock_compensation (GstDashDemux * demux);
+static GDateTime *gst_dash_demux_get_server_now_utc (GstDashDemux * demux);
 
 #define SIDX(s) (&(s)->sidx_parser.sidx)
 #define SIDX_ENTRY(s,i) (&(SIDX(s)->entries[(i)]))
 #define SIDX_CURRENT_ENTRY(s) SIDX_ENTRY(s, SIDX(s)->entry_index)
+
+static void gst_dash_demux_send_content_protection_event (gpointer cp_data,
+    gpointer stream);
 
 #define gst_dash_demux_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstDashDemux, gst_dash_demux, GST_TYPE_ADAPTIVE_DEMUX,
@@ -261,6 +291,8 @@ gst_dash_demux_dispose (GObject * obj)
 
   g_mutex_clear (&demux->client_lock);
 
+  gst_dash_demux_clock_drift_free (demux->clock_drift);
+  demux->clock_drift = NULL;
   G_OBJECT_CLASS (parent_class)->dispose (obj);
 }
 
@@ -269,7 +301,7 @@ gst_dash_demux_get_live_seek_range (GstAdaptiveDemux * demux, gint64 * start,
     gint64 * stop)
 {
   GstDashDemux *self = GST_DASH_DEMUX (demux);
-  GDateTime *now = g_date_time_new_now_utc ();
+  GDateTime *now = gst_dash_demux_get_server_now_utc (self);
   GDateTime *mstart =
       gst_date_time_to_g_date_time (self->client->
       mpd_node->availabilityStartTime);
@@ -379,6 +411,10 @@ gst_dash_demux_class_init (GstDashDemuxClass * klass)
       gst_dash_demux_get_live_seek_range;
   gstadaptivedemux_class->get_presentation_offset =
       gst_dash_demux_get_presentation_offset;
+
+  gstadaptivedemux_class->finish_fragment =
+      gst_dash_demux_stream_fragment_finished;
+  gstadaptivedemux_class->data_received = gst_dash_demux_data_received;
 }
 
 static void
@@ -525,10 +561,50 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
           (stream), tags);
     stream->index = i;
     stream->pending_seek_ts = GST_CLOCK_TIME_NONE;
+    if (active_stream->cur_adapt_set &&
+        active_stream->cur_adapt_set->RepresentationBase &&
+        active_stream->cur_adapt_set->RepresentationBase->ContentProtection) {
+      GST_DEBUG_OBJECT (demux, "Adding ContentProtection events to source pad");
+      g_list_foreach (active_stream->cur_adapt_set->
+          RepresentationBase->ContentProtection,
+          gst_dash_demux_send_content_protection_event, stream);
+    }
+
     gst_isoff_sidx_parser_init (&stream->sidx_parser);
   }
 
   return TRUE;
+}
+
+static void
+gst_dash_demux_send_content_protection_event (gpointer data, gpointer userdata)
+{
+  GstDescriptorType *cp = (GstDescriptorType *) data;
+  GstDashDemuxStream *stream = (GstDashDemuxStream *) userdata;
+  GstEvent *event;
+  GstBuffer *pssi;
+  glong pssi_len;
+  gchar *schemeIdUri;
+
+  if (cp->schemeIdUri == NULL)
+    return;
+
+  GST_TRACE_OBJECT (stream, "check schemeIdUri %s", cp->schemeIdUri);
+  /* RFC 2141 states: The leading "urn:" sequence is case-insensitive */
+  schemeIdUri = g_ascii_strdown (cp->schemeIdUri, -1);
+  if (g_str_has_prefix (schemeIdUri, "urn:uuid:")) {
+    pssi_len = strlen (cp->value);
+    pssi = gst_buffer_new_wrapped (g_memdup (cp->value, pssi_len), pssi_len);
+    GST_LOG_OBJECT (stream, "Queuing Protection event on source pad");
+    /* RFC 4122 states that the hex part of a UUID is in lower case,
+     * but some streams seem to ignore this and use upper case for the
+     * protection system ID */
+    event = gst_event_new_protection (cp->schemeIdUri + 9, pssi, "dash/mpd");
+    gst_adaptive_demux_stream_queue_event ((GstAdaptiveDemuxStream *) stream,
+        event);
+    gst_buffer_unref (pssi);
+  }
+  g_free (schemeIdUri);
 }
 
 static GstClockTime
@@ -563,9 +639,21 @@ gst_dash_demux_setup_streams (GstAdaptiveDemux * demux)
    * non-live */
   period_idx = 0;
   if (gst_mpd_client_is_live (dashdemux->client)) {
-
+    GDateTime *g_now;
+    if (dashdemux->clock_drift == NULL) {
+      gchar **urls;
+      urls =
+          gst_mpd_client_get_utc_timing_sources (dashdemux->client,
+          SUPPORTED_CLOCK_FORMATS, NULL);
+      if (urls) {
+        GST_DEBUG_OBJECT (dashdemux, "Found a supported UTCTiming element");
+        dashdemux->clock_drift = gst_dash_demux_clock_drift_new ();
+        gst_dash_demux_poll_clock_drift (dashdemux);
+      }
+    }
     /* get period index for period encompassing the current time */
-    now = gst_date_time_new_now_utc ();
+    g_now = gst_dash_demux_get_server_now_utc (dashdemux);
+    now = gst_date_time_new_from_g_date_time (g_now);
     if (dashdemux->client->mpd_node->suggestedPresentationDelay != -1) {
       GstDateTime *target = gst_mpd_client_add_time_difference (now,
           dashdemux->client->mpd_node->suggestedPresentationDelay * -1000);
@@ -618,7 +706,6 @@ done:
 static gboolean
 gst_dash_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
 {
-  GstAdaptiveDemuxClass *klass;
   GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (demux);
   gboolean ret = FALSE;
   gchar *manifest;
@@ -638,13 +725,6 @@ gst_dash_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
   if (gst_buffer_map (buf, &mapinfo, GST_MAP_READ)) {
     manifest = (gchar *) mapinfo.data;
     if (gst_mpd_parse (dashdemux->client, manifest, mapinfo.size)) {
-      if (gst_mpd_client_has_isoff_ondemand_profile (dashdemux->client)) {
-        klass = GST_ADAPTIVE_DEMUX_GET_CLASS (dashdemux);
-
-        klass->data_received = gst_dash_demux_data_received;
-        klass->finish_fragment = gst_dash_demux_stream_fragment_finished;
-      }
-
       if (gst_mpd_client_setup_media_presentation (dashdemux->client)) {
         ret = TRUE;
       } else {
@@ -708,6 +788,8 @@ gst_dash_demux_reset (GstAdaptiveDemux * ademux)
     gst_mpd_client_free (demux->client);
     demux->client = NULL;
   }
+  gst_dash_demux_clock_drift_free (demux->clock_drift);
+  demux->clock_drift = NULL;
   demux->client = gst_mpd_client_new ();
 
   demux->n_audio_streams = 0;
@@ -869,6 +951,7 @@ gst_dash_demux_stream_update_fragment_info (GstAdaptiveDemuxStream * stream)
   if (gst_mpd_client_get_next_fragment_timestamp (dashdemux->client,
           dashstream->index, &ts)) {
     if (GST_ADAPTIVE_DEMUX_STREAM_NEED_HEADER (stream)) {
+      gst_adaptive_demux_stream_fragment_clear (&stream->fragment);
       gst_dash_demux_stream_update_headers_info (stream);
     }
 
@@ -1100,10 +1183,13 @@ gst_dash_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
     period = list->data;
     current_pos = period->start;
     current_period = period->number;
-    GST_DEBUG_OBJECT (demux, "Looking at period %u pos %" GST_TIME_FORMAT,
-        current_period, GST_TIME_ARGS (current_pos));
+    GST_DEBUG_OBJECT (demux, "Looking at period %u) start:%"
+        GST_TIME_FORMAT " - duration:%"
+        GST_TIME_FORMAT ") for position %" GST_TIME_FORMAT,
+        current_period, GST_TIME_ARGS (current_pos),
+        GST_TIME_ARGS (period->duration), GST_TIME_ARGS (target_pos));
     if (current_pos <= target_pos
-        && target_pos < current_pos + period->duration) {
+        && target_pos <= current_pos + period->duration) {
       break;
     }
   }
@@ -1142,7 +1228,8 @@ static gint64
 gst_dash_demux_get_manifest_update_interval (GstAdaptiveDemux * demux)
 {
   GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (demux);
-  return dashdemux->client->mpd_node->minimumUpdatePeriod * 1000;
+  return MIN (dashdemux->client->mpd_node->minimumUpdatePeriod * 1000,
+      SLOW_CLOCK_UPDATE_INTERVAL);
 }
 
 static GstFlowReturn
@@ -1238,6 +1325,9 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
     dashdemux->client = new_client;
 
     GST_DEBUG_OBJECT (demux, "Manifest file successfully updated");
+    if (dashdemux->clock_drift) {
+      gst_dash_demux_poll_clock_drift (dashdemux);
+    }
   } else {
     /* In most cases, this will happen if we set a wrong url in the
      * source element and we have received the 404 HTML response instead of
@@ -1273,7 +1363,10 @@ gst_dash_demux_stream_get_fragment_waiting_time (GstAdaptiveDemuxStream *
     diff = gst_mpd_client_calculate_time_difference (cur_time, seg_end_time);
     gst_date_time_unref (seg_end_time);
     gst_date_time_unref (cur_time);
-    return diff;
+    /* subtract the server's clock drift, so that if the server's
+       time is behind our idea of UTC, we need to sleep for longer
+       before requesting a fragment */
+    return diff - gst_dash_demux_get_clock_compensation (dashdemux);
   }
   return 0;
 }
@@ -1334,15 +1427,15 @@ gst_dash_demux_stream_fragment_finished (GstAdaptiveDemux * demux,
   GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
 
   if (gst_mpd_client_has_isoff_ondemand_profile (dashdemux->client) &&
-      dashstream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED) {
+      dashstream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED)
     /* fragment is advanced on data_received when byte limits are reached */
     return GST_FLOW_OK;
-  } else {
-    if (G_UNLIKELY (stream->downloading_header || stream->downloading_index))
-      return GST_FLOW_OK;
-    return gst_adaptive_demux_stream_advance_fragment (demux, stream,
-        stream->fragment.duration);
-  }
+
+  if (G_UNLIKELY (stream->downloading_header || stream->downloading_index))
+    return GST_FLOW_OK;
+
+  return gst_adaptive_demux_stream_advance_fragment (demux, stream,
+      stream->fragment.duration);
 }
 
 static GstFlowReturn
@@ -1350,9 +1443,14 @@ gst_dash_demux_data_received (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream)
 {
   GstDashDemuxStream *dash_stream = (GstDashDemuxStream *) stream;
+  GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (demux);
   GstFlowReturn ret = GST_FLOW_OK;
   GstBuffer *buffer;
   gsize available;
+
+  if (!gst_mpd_client_has_isoff_ondemand_profile (dashdemux->client))
+    return GST_ADAPTIVE_DEMUX_CLASS (parent_class)->data_received (demux,
+        stream);
 
   if (stream->downloading_index) {
     GstIsoffParserResult res;
@@ -1436,4 +1534,444 @@ gst_dash_demux_stream_free (GstAdaptiveDemuxStream * stream)
   GstDashDemuxStream *dash_stream = (GstDashDemuxStream *) stream;
 
   gst_isoff_sidx_parser_clear (&dash_stream->sidx_parser);
+}
+
+static GstDashDemuxClockDrift *
+gst_dash_demux_clock_drift_new (void)
+{
+  GstDashDemuxClockDrift *clock_drift;
+
+  clock_drift = g_slice_new0 (GstDashDemuxClockDrift);
+  g_mutex_init (&clock_drift->clock_lock);
+  g_cond_init (&clock_drift->clock_cond);
+  clock_drift->next_update = g_get_monotonic_time ();
+  return clock_drift;
+}
+
+static void
+gst_dash_demux_clock_drift_free (GstDashDemuxClockDrift * clock_drift)
+{
+  if (clock_drift) {
+    g_mutex_lock (&clock_drift->clock_lock);
+    if (clock_drift->ntp_clock)
+      g_object_unref (clock_drift->ntp_clock);
+    g_cond_clear (&clock_drift->clock_cond);
+    g_mutex_unlock (&clock_drift->clock_lock);
+    g_mutex_clear (&clock_drift->clock_lock);
+    g_slice_free (GstDashDemuxClockDrift, clock_drift);
+  }
+}
+
+/*
+ * The value attribute of the UTCTiming element contains a white-space
+ * separated list of servers that are recommended to be used in
+ * combination with the NTP protocol as defined in IETF RFC 5905 for
+ * getting the appropriate time.
+ *
+ * The DASH standard does not specify which version of NTP. This
+ * function only works with NTPv4 servers.
+*/
+static GstDateTime *
+gst_dash_demux_poll_ntp_server (GstDashDemuxClockDrift * clock_drift,
+    gchar ** urls)
+{
+  GstClockTime ntp_clock_time;
+  GDateTime *dt, *dt2;
+
+  if (!clock_drift->ntp_clock) {
+    GResolver *resolver;
+    GList *inet_addrs;
+    GError *err;
+    gchar *ip_addr;
+
+    resolver = g_resolver_get_default ();
+    /* We don't round-robin NTP servers. If the manifest specifies multiple
+       NTP time servers, select one at random */
+    clock_drift->selected_url = g_random_int_range (0, g_strv_length (urls));
+    GST_DEBUG ("Connecting to NTP time server %s",
+        urls[clock_drift->selected_url]);
+    inet_addrs = g_resolver_lookup_by_name (resolver,
+        urls[clock_drift->selected_url], NULL, &err);
+    g_object_unref (resolver);
+    if (!inet_addrs || g_list_length (inet_addrs) == 0) {
+      GST_ERROR ("Failed to resolve hostname of NTP server: %s",
+          err ? (err->message) : "unknown error");
+      if (inet_addrs)
+        g_resolver_free_addresses (inet_addrs);
+      if (err)
+        g_error_free (err);
+      return NULL;
+    }
+    ip_addr =
+        g_inet_address_to_string ((GInetAddress
+            *) (g_list_first (inet_addrs)->data));
+    clock_drift->ntp_clock = gst_ntp_clock_new ("dashntp", ip_addr, 123, 0);
+    g_free (ip_addr);
+    g_resolver_free_addresses (inet_addrs);
+    if (!clock_drift->ntp_clock) {
+      GST_ERROR ("Failed to create NTP clock");
+      return NULL;
+    }
+    if (!gst_clock_wait_for_sync (clock_drift->ntp_clock, 5 * GST_SECOND)) {
+      g_object_unref (clock_drift->ntp_clock);
+      clock_drift->ntp_clock = NULL;
+      GST_ERROR ("Failed to lock to NTP clock");
+      return NULL;
+    }
+  }
+  ntp_clock_time = gst_clock_get_time (clock_drift->ntp_clock);
+  if (ntp_clock_time == GST_CLOCK_TIME_NONE) {
+    GST_ERROR ("Failed to get time from NTP clock");
+    return NULL;
+  }
+  ntp_clock_time -= NTP_TO_UNIX_EPOCH * GST_SECOND;
+  dt = g_date_time_new_from_unix_utc (ntp_clock_time / GST_SECOND);
+  if (!dt) {
+    GST_ERROR ("Failed to create GstDateTime");
+    return NULL;
+  }
+  ntp_clock_time =
+      gst_util_uint64_scale (ntp_clock_time % GST_SECOND, 1000000, GST_SECOND);
+  dt2 = g_date_time_add (dt, ntp_clock_time);
+  g_date_time_unref (dt);
+  return gst_date_time_new_from_g_date_time (dt2);
+}
+
+struct Rfc822TimeZone
+{
+  const gchar *name;
+  gfloat tzoffset;
+};
+
+/*
+ Parse an RFC822 (section 5) date-time from the Date: field in the
+ HTTP response. 
+ See https://tools.ietf.org/html/rfc822#section-5
+*/
+static GstDateTime *
+gst_dash_demux_parse_http_head (GstDashDemuxClockDrift * clock_drift,
+    GstFragment * download)
+{
+  static const gchar *months[] = { NULL, "Jan", "Feb", "Mar", "Apr",
+    "May", "Jun", "Jul", "Aug",
+    "Sep", "Oct", "Nov", "Dec", NULL
+  };
+  static const struct Rfc822TimeZone timezones[] = {
+    {"Z", 0},
+    {"UT", 0},
+    {"GMT", 0},
+    {"BST", 1},
+    {"EST", -5},
+    {"EDT", -4},
+    {"CST", -6},
+    {"CDT", -5},
+    {"MST", -7},
+    {"MDT", -6},
+    {"PST", -8},
+    {"PDT", -7},
+    {NULL, 0}
+  };
+  GstDateTime *value = NULL;
+  const GstStructure *response_headers;
+  const gchar *http_date;
+  const GValue *val;
+  gint ret;
+  const gchar *pos;
+  gint year = -1, month = -1, day = -1, hour = -1, minute = -1, second = -1;
+  gchar zone[6];
+  gchar monthstr[4];
+  gfloat tzoffset = 0;
+  gboolean parsed_tz = FALSE;
+
+  g_return_val_if_fail (download != NULL, NULL);
+  g_return_val_if_fail (download->headers != NULL, NULL);
+
+  val = gst_structure_get_value (download->headers, "response-headers");
+  if (!val) {
+    return NULL;
+  }
+  response_headers = gst_value_get_structure (val);
+  http_date = gst_structure_get_string (response_headers, "Date");
+  if (!http_date) {
+    return NULL;
+  }
+
+  /* skip optional text version of day of the week */
+  pos = strchr (http_date, ',');
+  if (pos)
+    pos++;
+  else
+    pos = http_date;
+  ret =
+      sscanf (pos, "%02d %3s %04d %02d:%02d:%02d %5s", &day, monthstr, &year,
+      &hour, &minute, &second, zone);
+  if (ret == 7) {
+    gchar *z = zone;
+    for (int i = 1; months[i]; ++i) {
+      if (g_ascii_strncasecmp (months[i], monthstr, strlen (months[i])) == 0) {
+        month = i;
+        break;
+      }
+    }
+    while (*z == ' ') {
+      ++z;
+    }
+    for (int i = 0; timezones[i].name && !parsed_tz; ++i) {
+      if (g_ascii_strncasecmp (timezones[i].name, z,
+              strlen (timezones[i].name)) == 0) {
+        tzoffset = timezones[i].tzoffset;
+        parsed_tz = TRUE;
+      }
+    }
+    if (!parsed_tz) {
+      gint hh, mm;
+      gboolean neg = FALSE;
+      /* check if it is in the form +-HHMM */
+      if (*z == '+' || *z == '-') {
+        if (*z == '+')
+          ++z;
+        else if (*z == '-') {
+          ++z;
+          neg = TRUE;
+        }
+        ret = sscanf (z, "%02d%02d", &hh, &mm);
+        if (ret == 2) {
+          tzoffset = hh;
+          tzoffset += mm / 60.0;
+          if (neg)
+            tzoffset = -tzoffset;
+          parsed_tz = TRUE;
+        }
+      }
+    }
+  }
+  if (month > 0 && parsed_tz) {
+    value = gst_date_time_new (tzoffset,
+        year, month, day, hour, minute, second);
+  }
+  return value;
+}
+
+/*
+   The timing information is contained in the message body of the HTTP
+   response and contains a time value formatted according to NTP timestamp
+   format in IETF RFC 5905.
+
+       0                   1                   2                   3
+       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+      |                            Seconds                            |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+      |                            Fraction                           |
+      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                             NTP Timestamp Format
+*/
+static GstDateTime *
+gst_dash_demux_parse_http_ntp (GstDashDemuxClockDrift * clock_drift,
+    GstBuffer * buffer)
+{
+  gint64 seconds;
+  guint64 fraction;
+  GDateTime *dt, *dt2;
+  GstMapInfo mapinfo;
+
+  /* See https://tools.ietf.org/html/rfc5905#page-12 for details of
+     the NTP Timestamp Format */
+  gst_buffer_map (buffer, &mapinfo, GST_MAP_READ);
+  if (mapinfo.size != 8) {
+    gst_buffer_unmap (buffer, &mapinfo);
+    return NULL;
+  }
+  seconds = GST_READ_UINT32_BE (mapinfo.data);
+  fraction = GST_READ_UINT32_BE (mapinfo.data + 4);
+  gst_buffer_unmap (buffer, &mapinfo);
+  fraction = gst_util_uint64_scale (fraction, 1000000,
+      G_GUINT64_CONSTANT (1) << 32);
+  /* subtract constant to convert from 1900 based time to 1970 based time */
+  seconds -= NTP_TO_UNIX_EPOCH;
+  dt = g_date_time_new_from_unix_utc (seconds);
+  dt2 = g_date_time_add (dt, fraction);
+  g_date_time_unref (dt);
+  return gst_date_time_new_from_g_date_time (dt2);
+}
+
+/*
+  The timing information is contained in the message body of the
+  HTTP response and contains a time value formatted according to
+  xs:dateTime as defined in W3C XML Schema Part 2: Datatypes specification.
+*/
+static GstDateTime *
+gst_dash_demux_parse_http_xsdate (GstDashDemuxClockDrift * clock_drift,
+    GstBuffer * buffer)
+{
+  GstDateTime *value;
+  GstMapInfo mapinfo;
+
+  /* the string from the server might not be zero terminated */
+  gst_buffer_resize (buffer, 0, gst_buffer_get_size (buffer) + 1);
+  gst_buffer_map (buffer, &mapinfo, GST_MAP_READ | GST_MAP_WRITE);
+  mapinfo.data[mapinfo.size - 1] = '\0';
+  value = gst_date_time_new_from_iso8601_string ((const gchar *) mapinfo.data);
+  gst_buffer_unmap (buffer, &mapinfo);
+  return value;
+}
+
+static gboolean
+gst_dash_demux_poll_clock_drift (GstDashDemux * demux)
+{
+  GstDashDemuxClockDrift *clock_drift;
+  GDateTime *start = NULL, *end;
+  GstBuffer *buffer = NULL;
+  GstDateTime *value = NULL;
+  gboolean ret = FALSE;
+  gint64 now;
+  GstMPDUTCTimingType method;
+  gchar **urls;
+
+  g_return_val_if_fail (demux != NULL, FALSE);
+  g_return_val_if_fail (demux->clock_drift != NULL, FALSE);
+  clock_drift = demux->clock_drift;
+  now = g_get_monotonic_time ();
+  if (now < clock_drift->next_update) {
+    /*TODO: If a fragment fails to download in adaptivedemux, it waits
+       for a manifest reload before another attempt to fetch a fragment.
+       Section 10.8.6 of the DVB-DASH standard states that the DASH client
+       shall refresh the manifest and resynchronise to one of the time sources.
+
+       Currently the fact that the manifest refresh follows a download failure
+       does not make it into dashdemux. */
+    return TRUE;
+  }
+  urls = gst_mpd_client_get_utc_timing_sources (demux->client,
+      SUPPORTED_CLOCK_FORMATS, &method);
+  if (!urls) {
+    return FALSE;
+  }
+  /* Update selected_url just in case the number of URLs in the UTCTiming
+     element has shrunk since the last poll */
+  clock_drift->selected_url = clock_drift->selected_url % g_strv_length (urls);
+  g_mutex_lock (&clock_drift->clock_lock);
+
+  if (method == GST_MPD_UTCTIMING_TYPE_NTP) {
+    value = gst_dash_demux_poll_ntp_server (clock_drift, urls);
+    if (!value) {
+      GST_ERROR_OBJECT (demux, "Failed to fetch time from NTP server %s",
+          urls[clock_drift->selected_url]);
+      g_mutex_unlock (&clock_drift->clock_lock);
+      goto quit;
+    }
+  }
+  start = g_date_time_new_now_utc ();
+  if (!value) {
+    GstFragment *download;
+    gint64 range_start = 0, range_end = -1;
+    GST_DEBUG_OBJECT (demux, "Fetching current time from %s",
+        urls[clock_drift->selected_url]);
+    if (method == GST_MPD_UTCTIMING_TYPE_HTTP_HEAD) {
+      range_start = -1;
+    }
+    download =
+        gst_uri_downloader_fetch_uri_with_range (GST_ADAPTIVE_DEMUX_CAST
+        (demux)->downloader, urls[clock_drift->selected_url], NULL, TRUE, TRUE,
+        TRUE, range_start, range_end, NULL);
+    if (download) {
+      if (method == GST_MPD_UTCTIMING_TYPE_HTTP_HEAD && download->headers) {
+        value = gst_dash_demux_parse_http_head (clock_drift, download);
+      } else {
+        buffer = gst_fragment_get_buffer (download);
+      }
+      g_object_unref (download);
+    }
+  }
+  g_mutex_unlock (&clock_drift->clock_lock);
+  if (!value && !buffer) {
+    GST_ERROR_OBJECT (demux, "Failed to fetch time from %s",
+        urls[clock_drift->selected_url]);
+    goto quit;
+  }
+  end = g_date_time_new_now_utc ();
+  if (!value && method == GST_MPD_UTCTIMING_TYPE_HTTP_NTP) {
+    value = gst_dash_demux_parse_http_ntp (clock_drift, buffer);
+  } else if (!value) {
+    /* GST_MPD_UTCTIMING_TYPE_HTTP_XSDATE or GST_MPD_UTCTIMING_TYPE_HTTP_ISO */
+    value = gst_dash_demux_parse_http_xsdate (clock_drift, buffer);
+  }
+  if (buffer)
+    gst_buffer_unref (buffer);
+  if (value) {
+    GTimeSpan download_duration = g_date_time_difference (end, start);
+    GDateTime *client_now, *server_now;
+    /* We don't know when the server sampled its clock, but we know
+       it must have been before "end" and probably after "start".
+       A reasonable estimate is to use (start+end)/2
+     */
+    client_now = g_date_time_add (start, download_duration / 2);
+    server_now = gst_date_time_to_g_date_time (value);
+    /* If gst_date_time_new_from_iso8601_string is given an unsupported
+       ISO 8601 format, it can return a GstDateTime that is not valid,
+       which causes gst_date_time_to_g_date_time to return NULL */
+    if (server_now) {
+      g_mutex_lock (&clock_drift->clock_lock);
+      clock_drift->clock_compensation =
+          g_date_time_difference (server_now, client_now);
+      clock_drift->got_clock = TRUE;
+      g_cond_broadcast (&clock_drift->clock_cond);
+      g_mutex_unlock (&clock_drift->clock_lock);
+      GST_DEBUG_OBJECT (demux,
+          "Difference between client and server clocks is %lfs",
+          ((double) clock_drift->clock_compensation) / 1000000.0);
+      g_date_time_unref (server_now);
+      ret = TRUE;
+    } else {
+      GST_ERROR_OBJECT (demux, "Failed to parse DateTime from server");
+    }
+    g_date_time_unref (client_now);
+    gst_date_time_unref (value);
+  } else {
+    GST_ERROR_OBJECT (demux, "Failed to parse DateTime from server");
+  }
+  g_date_time_unref (end);
+quit:
+  if (start)
+    g_date_time_unref (start);
+  /* if multiple URLs were specified, use a simple round-robin to
+     poll each server */
+  g_mutex_lock (&clock_drift->clock_lock);
+  if (method == GST_MPD_UTCTIMING_TYPE_NTP) {
+    clock_drift->next_update = now + FAST_CLOCK_UPDATE_INTERVAL;
+  } else {
+    clock_drift->selected_url =
+        (1 + clock_drift->selected_url) % g_strv_length (urls);
+    if (ret) {
+      clock_drift->next_update = now + SLOW_CLOCK_UPDATE_INTERVAL;
+    } else {
+      clock_drift->next_update = now + FAST_CLOCK_UPDATE_INTERVAL;
+    }
+  }
+  g_mutex_unlock (&clock_drift->clock_lock);
+  return ret;
+}
+
+static GTimeSpan
+gst_dash_demux_get_clock_compensation (GstDashDemux * demux)
+{
+  GTimeSpan rv = 0;
+  if (demux->clock_drift) {
+    g_mutex_lock (&demux->clock_drift->clock_lock);
+    rv = demux->clock_drift->clock_compensation;
+    g_mutex_unlock (&demux->clock_drift->clock_lock);
+  }
+  GST_LOG_OBJECT (demux, "Clock drift %" GST_STIME_FORMAT, GST_STIME_ARGS (rv));
+  return rv;
+}
+
+static GDateTime *
+gst_dash_demux_get_server_now_utc (GstDashDemux * demux)
+{
+  GDateTime *client_now = g_date_time_new_now_utc ();
+  GDateTime *server_now = g_date_time_add (client_now,
+      gst_dash_demux_get_clock_compensation (demux));
+  g_date_time_unref (client_now);
+  return server_now;
 }

@@ -164,6 +164,7 @@ gst_h264_parse_init (GstH264Parse * h264parse)
   h264parse->frame_out = gst_adapter_new ();
   gst_base_parse_set_pts_interpolation (GST_BASE_PARSE (h264parse), FALSE);
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (h264parse));
+  GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (h264parse));
 }
 
 
@@ -386,7 +387,8 @@ gst_h264_parse_negotiate (GstH264Parse * h264parse, gint in_format,
     }
   }
 
-  if (caps) {
+  /* FIXME We could fail the negotiation immediatly if caps are empty */
+  if (caps && !gst_caps_is_empty (caps)) {
     /* fixate to avoid ambiguity with lists when parsing */
     caps = gst_caps_fixate (caps);
     gst_h264_parse_format_from_caps (caps, &format, &align);
@@ -492,13 +494,18 @@ static const gchar *nal_names[] = {
   "Filler Data",
   "SPS extension",
   "Prefix",
-  "SPS Subset"
+  "SPS Subset",
+  "Depth Parameter Set",
+  "Reserved", "Reserved",
+  "Slice Aux Unpartitioned",
+  "Slice Extension",
+  "Slice Depth/3D-AVC Extension"
 };
 
 static const gchar *
 _nal_name (GstH264NalUnitType nal_type)
 {
-  if (nal_type <= GST_H264_NAL_SUBSET_SPS)
+  if (nal_type <= GST_H264_NAL_SLICE_DEPTH)
     return nal_names[nal_type];
   return "Invalid";
 }
@@ -740,6 +747,7 @@ gst_h264_parse_process_nal (GstH264Parse * h264parse, GstH264NalUnit * nalu)
       }
 
       gst_h264_parser_store_nal (h264parse, sps.id, nal_type, nalu);
+      gst_h264_sps_clear (&sps);
       h264parse->state |= GST_H264_PARSE_STATE_GOT_SPS;
       h264parse->header |= TRUE;
       break;
@@ -855,6 +863,12 @@ gst_h264_parse_process_nal (GstH264Parse * h264parse, GstH264NalUnit * nalu)
         GST_DEBUG_OBJECT (h264parse, "moved IDR mark to SEI position %d",
             h264parse->idr_pos);
       }
+      break;
+    case GST_H264_NAL_AU_DELIMITER:
+      /* Just accumulate AU Delimiter, whether it's before SPS or not */
+      pres = gst_h264_parser_parse_nal (nalparser, nalu);
+      if (pres != GST_H264_PARSER_OK)
+        return FALSE;
       break;
     default:
       /* drop anything before the initial SPS */
@@ -2200,8 +2214,8 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
         GST_TAG_VIDEO_CODEC, caps);
     gst_caps_unref (caps);
 
-    gst_pad_push_event (GST_BASE_PARSE_SRC_PAD (h264parse),
-        gst_event_new_tag (taglist));
+    gst_base_parse_merge_tags (parse, taglist, GST_TAG_MERGE_REPLACE);
+    gst_tag_list_unref (taglist);
 
     /* also signals the end of first-frame processing */
     h264parse->sent_codec_tag = TRUE;

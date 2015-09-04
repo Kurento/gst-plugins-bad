@@ -877,6 +877,11 @@ gst_adaptive_demux_stream_free (GstAdaptiveDemuxStream * stream)
     stream->pending_segment = NULL;
   }
 
+  if (stream->pending_events) {
+    g_list_free_full (stream->pending_events, (GDestroyNotify) gst_event_unref);
+    stream->pending_events = NULL;
+  }
+
   if (stream->src_srcpad) {
     gst_object_unref (stream->src_srcpad);
     stream->src_srcpad = NULL;
@@ -1138,7 +1143,7 @@ gst_adaptive_demux_src_query (GstPad * pad, GstObject * parent,
         }
       }
       GST_MANIFEST_UNLOCK (demux);
-      GST_DEBUG_OBJECT (demux, "GST_QUERY_DURATION returns %s with duration %"
+      GST_LOG_OBJECT (demux, "GST_QUERY_DURATION returns %s with duration %"
           GST_TIME_FORMAT, ret ? "TRUE" : "FALSE", GST_TIME_ARGS (duration));
       break;
     }
@@ -1296,6 +1301,13 @@ gst_adaptive_demux_stream_set_tags (GstAdaptiveDemuxStream * stream,
   stream->pending_tags = tags;
 }
 
+void
+gst_adaptive_demux_stream_queue_event (GstAdaptiveDemuxStream * stream,
+    GstEvent * event)
+{
+  stream->pending_events = g_list_append (stream->pending_events, event);
+}
+
 static guint64
 _update_average_bitrate (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream, guint64 new_bitrate)
@@ -1446,6 +1458,15 @@ gst_adaptive_demux_stream_push_buffer (GstAdaptiveDemuxStream * stream,
         stream->pending_tags);
     gst_pad_push_event (stream->pad, gst_event_new_tag (stream->pending_tags));
     stream->pending_tags = NULL;
+  }
+  while (stream->pending_events != NULL) {
+    GstEvent *event = stream->pending_events->data;
+
+    if (!gst_pad_push_event (stream->pad, event))
+      GST_ERROR_OBJECT (stream->pad, "Failed to send pending event");
+
+    stream->pending_events =
+        g_list_delete_link (stream->pending_events, stream->pending_events);
   }
 
   ret = gst_pad_push (stream->pad, buffer);
@@ -1624,6 +1645,9 @@ gst_adaptive_demux_stream_wait_manifest_update (GstAdaptiveDemux * demux,
       break;
     }
 
+    GST_DEBUG_OBJECT (demux, "No fragment left but live playlist, wait a bit");
+    g_cond_wait (&demux->manifest_cond, GST_MANIFEST_GET_LOCK (demux));
+
     /* Got a new fragment or not live anymore? */
     if (gst_adaptive_demux_stream_has_next_fragment (demux, stream)) {
       GST_DEBUG_OBJECT (demux, "new fragment available, "
@@ -1638,9 +1662,6 @@ gst_adaptive_demux_stream_wait_manifest_update (GstAdaptiveDemux * demux,
       ret = FALSE;
       break;
     }
-
-    GST_DEBUG_OBJECT (demux, "No fragment left but live playlist, wait a bit");
-    g_cond_wait (&demux->manifest_cond, GST_MANIFEST_GET_LOCK (demux));
   }
   GST_DEBUG_OBJECT (demux, "Retrying now");
   return ret;
@@ -1931,12 +1952,22 @@ gst_adaptive_demux_stream_download_fragment (GstAdaptiveDemuxStream * stream)
         stream->last_ret, gst_flow_get_name (stream->last_ret));
     if (ret != GST_FLOW_OK) {
       /* TODO check if we are truly stoping */
-      if (ret != GST_FLOW_ERROR && gst_adaptive_demux_is_live (demux)) {
+      if (ret == GST_FLOW_CUSTOM_ERROR && gst_adaptive_demux_is_live (demux)) {
         if (++stream->download_error_count <= MAX_DOWNLOAD_ERROR_COUNT) {
           /* looks like there is no way of knowing when a live stream has ended
            * Have to assume we are falling behind and cause a manifest reload */
+          GST_DEBUG_OBJECT (stream->pad,
+              "Converting error of live stream to EOS");
           return GST_FLOW_EOS;
         }
+      } else if (ret == GST_FLOW_CUSTOM_ERROR
+          && !gst_adaptive_demux_stream_has_next_fragment (demux, stream)) {
+        /* If this is the last fragment, consider failures EOS and not actual
+         * errors. Due to rounding errors in the durations, the last fragment
+         * might not actually exist */
+        GST_DEBUG_OBJECT (stream->pad,
+            "Converting error for last fragment to EOS");
+        return GST_FLOW_EOS;
       }
     }
   }

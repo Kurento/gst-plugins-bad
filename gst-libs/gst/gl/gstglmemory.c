@@ -740,18 +740,20 @@ static gpointer
 _pbo_download_transfer (GstGLMemory * gl_mem, GstMapInfo * info, gsize size)
 {
   GstGLBaseBufferAllocatorClass *alloc_class;
-  gpointer data;
-
-  GST_DEBUG ("downloading texture %u using pbo %u", gl_mem->tex_id,
-      gl_mem->mem.id);
+  gpointer data = NULL;
 
   alloc_class =
       GST_GL_BASE_BUFFER_ALLOCATOR_CLASS (gst_gl_allocator_parent_class);
 
   /* texture -> pbo */
-  if (info->flags & GST_MAP_READ)
+  if (info->flags & GST_MAP_READ
+      && gl_mem->transfer_state & GST_GL_MEMORY_TRANSFER_NEED_DOWNLOAD) {
+    GST_CAT_TRACE (GST_CAT_GL_MEMORY, "attempting download of texture %u "
+        "using pbo %u", gl_mem->tex_id, gl_mem->mem.id);
+
     if (!_read_pixels_to_pbo (gl_mem))
       return NULL;
+  }
 
   /* get a cpu accessible mapping from the pbo */
   gl_mem->mem.target = GL_PIXEL_PACK_BUFFER;
@@ -779,11 +781,12 @@ _gl_mem_download_get_tex_image (GstGLMemory * gl_mem, GstMapInfo * info,
       && gl_mem->tex_type != GST_VIDEO_GL_TEXTURE_TYPE_LUMINANCE_ALPHA)
     return NULL;
 
-  gst_gl_base_buffer_alloc_data ((GstGLBaseBuffer *) gl_mem);
-
   if (info->flags & GST_MAP_READ
       && gl_mem->transfer_state & GST_GL_MEMORY_TRANSFER_NEED_DOWNLOAD) {
     guint format, type;
+
+    GST_CAT_TRACE (GST_CAT_GL_MEMORY, "attempting download of texture %u "
+        "using glGetTexImage", gl_mem->tex_id);
 
     format = gst_gl_format_from_gl_texture_type (gl_mem->tex_type);
     type = GL_UNSIGNED_BYTE;
@@ -805,10 +808,10 @@ _gl_mem_download_read_pixels (GstGLMemory * gl_mem, GstMapInfo * info,
   if (size != -1 && size != ((GstMemory *) gl_mem)->maxsize)
     return NULL;
 
-  gst_gl_base_buffer_alloc_data ((GstGLBaseBuffer *) gl_mem);
-
   if (info->flags & GST_MAP_READ
       && gl_mem->transfer_state & GST_GL_MEMORY_TRANSFER_NEED_DOWNLOAD) {
+    GST_CAT_TRACE (GST_CAT_GL_MEMORY, "attempting download of texture %u "
+        "using glReadPixels", gl_mem->tex_id);
     if (!_gl_mem_read_pixels (gl_mem, gl_mem->mem.data))
       return NULL;
   }
@@ -819,9 +822,13 @@ _gl_mem_download_read_pixels (GstGLMemory * gl_mem, GstMapInfo * info,
 static gpointer
 _gl_mem_map_cpu_access (GstGLMemory * gl_mem, GstMapInfo * info, gsize size)
 {
-  gpointer data;
+  gpointer data = NULL;
 
-  data = _pbo_download_transfer (gl_mem, info, size);
+  gst_gl_base_buffer_alloc_data ((GstGLBaseBuffer *) gl_mem);
+
+  if (!data && gl_mem->mem.id
+      && CONTEXT_SUPPORTS_PBO_DOWNLOAD (gl_mem->mem.context))
+    data = _pbo_download_transfer (gl_mem, info, size);
   if (!data)
     data = _gl_mem_download_get_tex_image (gl_mem, info, size);
 
@@ -1347,7 +1354,9 @@ _download_transfer (GstGLContext * context, GstGLMemory * gl_mem)
   GstGLBaseBuffer *mem = (GstGLBaseBuffer *) gl_mem;
 
   g_mutex_lock (&mem->lock);
-  _read_pixels_to_pbo (gl_mem);
+  if (_read_pixels_to_pbo (gl_mem))
+    GST_CAT_TRACE (GST_CAT_GL_MEMORY, "optimistic download of texture %u "
+        "using pbo %u", gl_mem->tex_id, gl_mem->mem.id);
   g_mutex_unlock (&mem->lock);
 }
 
@@ -1499,22 +1508,26 @@ gst_gl_memory_setup_buffer (GstGLContext * context,
  * @valign: a #GstVideoInfo
  * @data: a list of per plane data pointers
  * @textures: (transfer out): a list of #GstGLMemory
+ * @user_data: user data for the destroy function
+ * @notify: A function called each time a memory is freed
  *
  * Wraps per plane data pointer in @data into the corresponding entry in
- * @textures based on @info and padding from @valign.
+ * @textures based on @info and padding from @valign. Note that the @notify
+ * will be called as many time as there is planes.
  *
  * Returns: whether the memory's were sucessfully created.
  */
 gboolean
 gst_gl_memory_setup_wrapped (GstGLContext * context, GstVideoInfo * info,
     GstVideoAlignment * valign, gpointer data[GST_VIDEO_MAX_PLANES],
-    GstGLMemory * textures[GST_VIDEO_MAX_PLANES])
+    GstGLMemory * textures[GST_VIDEO_MAX_PLANES], gpointer user_data,
+    GDestroyNotify notify)
 {
   gint i;
 
   for (i = 0; i < GST_VIDEO_INFO_N_PLANES (info); i++) {
     textures[i] = (GstGLMemory *) gst_gl_memory_wrapped (context, info, i,
-        valign, data[i], NULL, NULL);
+        valign, data[i], user_data, notify);
   }
 
   return TRUE;

@@ -185,7 +185,7 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
 
       if (profile_string) {
         amc_profile.key = "profile";    /* named profile ? */
-        amc_profile.id = gst_amc_avc_mpeg4_profile_from_string (profile_string);
+        amc_profile.id = gst_amc_mpeg4_profile_from_string (profile_string);
       }
 
       if (level_string) {
@@ -261,9 +261,8 @@ create_amc_format (GstAmcVideoEnc * encoder, GstVideoCodecState * input_state,
     /* gst_amc_format_set_int (format, amc_level.key, amc_level.id); */
   }
 
-  if (encoder->i_frame_int)
-    gst_amc_format_set_int (format, "i-frame-interval", encoder->i_frame_int,
-        &err);
+  gst_amc_format_set_int (format, "i-frame-interval", encoder->i_frame_int,
+      &err);
   if (err)
     GST_ELEMENT_WARNING_FROM_ERROR (encoder, err);
 

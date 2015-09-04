@@ -523,8 +523,7 @@ gst_ts_demux_srcpad_query (GstPad * pad, GstObject * parent, GstQuery * query)
            PTS/DTS. We therefore allow a latency of 700ms for that.
          */
         gst_query_parse_latency (query, &live, &min_lat, &max_lat);
-        if (min_lat)
-          min_lat += TS_LATENCY;
+        min_lat += TS_LATENCY;
         if (GST_CLOCK_TIME_IS_VALID (max_lat))
           max_lat += TS_LATENCY;
         gst_query_set_latency (query, live, min_lat, max_lat);
@@ -1196,6 +1195,12 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
               "stream-format", G_TYPE_STRING, "byte-stream",
               "alignment", G_TYPE_STRING, "nal", NULL);
           break;
+        case DRF_ID_KLVA:
+          sparse = TRUE;
+          is_private = TRUE;
+          caps = gst_caps_new_simple ("meta/x-klv",
+              "parsed", G_TYPE_BOOLEAN, TRUE, NULL);
+          break;
       }
       if (caps)
         break;
@@ -1851,7 +1856,7 @@ gst_ts_demux_parse_pes_header (GstTSDemux * demux, TSDemuxStream * stream,
       stream->expected_size -= header.header_size;
     } else {
       /* next packet will have to complete this one */
-      GST_ERROR ("invalid header and packet size combination");
+      GST_WARNING ("invalid header and packet size combination, empty packet");
       stream->expected_size = 0;
     }
   }

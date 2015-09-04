@@ -82,6 +82,8 @@ gst_png_parse_class_init (GstPngParseClass * klass)
 static void
 gst_png_parse_init (GstPngParse * pngparse)
 {
+  GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (pngparse));
+  GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (pngparse));
 }
 
 static gboolean
@@ -221,6 +223,8 @@ gst_png_parse_handle_frame (GstBaseParse * parse,
           } else {
             GST_WARNING_OBJECT (pngparse, "No framerate set");
           }
+
+          gst_caps_unref (sink_caps);
         }
 
         if (!gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (parse), caps))
@@ -263,8 +267,8 @@ gst_png_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
         GST_TAG_VIDEO_CODEC, caps);
     gst_caps_unref (caps);
 
-    gst_pad_push_event (GST_BASE_PARSE_SRC_PAD (pngparse),
-        gst_event_new_tag (taglist));
+    gst_base_parse_merge_tags (parse, taglist, GST_TAG_MERGE_REPLACE);
+    gst_tag_list_unref (taglist);
 
     /* also signals the end of first-frame processing */
     pngparse->sent_codec_tag = TRUE;

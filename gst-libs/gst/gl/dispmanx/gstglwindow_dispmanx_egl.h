@@ -23,7 +23,24 @@
 
 #include <gst/video/gstvideosink.h>
 #include <gst/gl/gl.h>
+#include <gst/gl/egl/gstegl.h>
+
+#if defined (USE_EGL_RPI) && defined(__GNUC__)
+#ifndef __VCCOREVER__
+#define __VCCOREVER__ 0x04000000
+#endif
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
+#pragma GCC optimize ("gnu89-inline")
+#endif
+
 #include <bcm_host.h>
+
+#if defined (USE_EGL_RPI) && defined(__GNUC__)
+#pragma GCC reset_options
+#pragma GCC diagnostic pop
+#endif
 
 G_BEGIN_DECLS
 
@@ -66,7 +83,7 @@ struct _GstGLWindowDispmanxEGLClass {
 
 GType gst_gl_window_dispmanx_egl_get_type     (void);
 
-GstGLWindowDispmanxEGL * gst_gl_window_dispmanx_egl_new  (void);
+GstGLWindowDispmanxEGL * gst_gl_window_dispmanx_egl_new  (GstGLDisplay * display);
 gboolean gst_gl_window_dispmanx_egl_create_window (GstGLWindowDispmanxEGL * window_egl);
 
 G_END_DECLS

@@ -69,8 +69,6 @@ static gboolean gst_gl_base_filter_start (GstBaseTransform * bt);
 static gboolean gst_gl_base_filter_stop (GstBaseTransform * bt);
 static gboolean gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
     GstQuery * query);
-static gboolean gst_gl_base_filter_propose_allocation (GstBaseTransform * trans,
-    GstQuery * decide_query, GstQuery * query);
 
 /* GstGLContextThreadFunc */
 static void gst_gl_base_filter_gl_start (GstGLContext * context, gpointer data);
@@ -95,8 +93,6 @@ gst_gl_base_filter_class_init (GstGLBaseFilterClass * klass)
   GST_BASE_TRANSFORM_CLASS (klass)->stop = gst_gl_base_filter_stop;
   GST_BASE_TRANSFORM_CLASS (klass)->decide_allocation =
       gst_gl_base_filter_decide_allocation;
-  GST_BASE_TRANSFORM_CLASS (klass)->propose_allocation =
-      gst_gl_base_filter_propose_allocation;
 
   element_class->set_context = gst_gl_base_filter_set_context;
   element_class->change_state = gst_gl_base_filter_change_state;
@@ -327,6 +323,10 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
 {
   GstGLBaseFilter *filter = GST_GL_BASE_FILTER (trans);
   GError *error = NULL;
+  gboolean new_context = FALSE;
+
+  if (!filter->context)
+    new_context = TRUE;
 
   _find_local_gl_context (filter);
 
@@ -339,14 +339,8 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
       filter->context =
           gst_gl_display_get_gl_context_for_thread (filter->display, NULL);
       if (!filter->context) {
-        filter->context = gst_gl_context_new (filter->display);
-        if (!filter->context) {
-          GST_OBJECT_UNLOCK (filter->display);
-          goto context_null_error;
-        }
-
-        if (!gst_gl_context_create (filter->context,
-                filter->priv->other_context, &error)) {
+        if (!gst_gl_display_create_context (filter->display,
+                filter->priv->other_context, &filter->context, &error)) {
           GST_OBJECT_UNLOCK (filter->display);
           goto context_error;
         }
@@ -355,27 +349,25 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
     GST_OBJECT_UNLOCK (filter->display);
   }
 
-  if (filter->priv->gl_started)
-    gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_stop,
+  if (new_context) {
+    if (filter->priv->gl_started)
+      gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_stop,
+          filter);
+
+    gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_start,
         filter);
 
-  gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_start,
-      filter);
-  if (!filter->priv->gl_result)
-    goto error;
+    if (!filter->priv->gl_result)
+      goto error;
+  }
 
-  return TRUE;
+  return GST_BASE_TRANSFORM_CLASS (parent_class)->decide_allocation (trans,
+      query);
 
 context_error:
   {
     GST_ELEMENT_ERROR (trans, RESOURCE, NOT_FOUND, ("%s", error->message),
         (NULL));
-    return FALSE;
-  }
-context_null_error:
-  {
-    GST_ELEMENT_ERROR (trans, RESOURCE, FAILED,
-        ("Failed to create context."), (NULL));
     return FALSE;
   }
 error:
@@ -384,13 +376,6 @@ error:
         ("Subclass failed to initialize."), (NULL));
     return FALSE;
   }
-}
-
-static gboolean
-gst_gl_base_filter_propose_allocation (GstBaseTransform * trans,
-    GstQuery * decide_query, GstQuery * query)
-{
-  return FALSE;
 }
 
 static GstStateChangeReturn

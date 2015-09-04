@@ -97,6 +97,7 @@ static void
 gst_h263_parse_init (GstH263Parse * h263parse)
 {
   GST_PAD_SET_ACCEPT_INTERSECT (GST_BASE_PARSE_SINK_PAD (h263parse));
+  GST_PAD_SET_ACCEPT_TEMPLATE (GST_BASE_PARSE_SINK_PAD (h263parse));
 }
 
 static gboolean
@@ -277,6 +278,8 @@ gst_h263_parse_set_src_caps (GstH263Parse * h263parse,
 
   gst_pad_set_caps (GST_BASE_PARSE_SRC_PAD (GST_BASE_PARSE (h263parse)), caps);
   gst_caps_unref (caps);
+  if (sink_caps)
+    gst_caps_unref (sink_caps);
 }
 
 static GstFlowReturn
@@ -444,8 +447,8 @@ gst_h263_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
         GST_TAG_VIDEO_CODEC, caps);
     gst_caps_unref (caps);
 
-    gst_pad_push_event (GST_BASE_PARSE_SRC_PAD (h263parse),
-        gst_event_new_tag (taglist));
+    gst_base_parse_merge_tags (parse, taglist, GST_TAG_MERGE_REPLACE);
+    gst_tag_list_unref (taglist);
 
     /* also signals the end of first-frame processing */
     h263parse->sent_codec_tag = TRUE;

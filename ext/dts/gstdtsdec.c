@@ -209,6 +209,10 @@ gst_dtsdec_init (GstDtsDec * dtsdec)
   dtsdec->request_channels = DCA_CHANNEL;
   dtsdec->dynamic_range_compression = FALSE;
 
+  gst_audio_decoder_set_use_default_pad_acceptcaps (GST_AUDIO_DECODER_CAST
+      (dtsdec), TRUE);
+  GST_PAD_SET_ACCEPT_TEMPLATE (GST_AUDIO_DECODER_SINK_PAD (dtsdec));
+
   /* retrieve and intercept base class chain.
    * Quite HACKish, but that's dvd specs for you,
    * since one buffer needs to be split into 2 frames */
@@ -442,6 +446,8 @@ gst_dtsdec_update_streaminfo (GstDtsDec * dts)
         (guint) dts->bit_rate, NULL);
     gst_audio_decoder_merge_tags (GST_AUDIO_DECODER (dts), taglist,
         GST_TAG_MERGE_REPLACE);
+    if (taglist)
+      gst_tag_list_unref (taglist);
   }
 }
 
@@ -455,7 +461,7 @@ gst_dtsdec_handle_frame (GstAudioDecoder * bdec, GstBuffer * buffer)
   gsize size;
   GstMapInfo map;
   gint chans;
-  gint length = 0, flags, sample_rate, bit_rate, frame_length;
+  gint length, flags, sample_rate, bit_rate, frame_length;
   GstFlowReturn result = GST_FLOW_OK;
   GstBuffer *outbuf;
 

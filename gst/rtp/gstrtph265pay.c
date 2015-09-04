@@ -27,6 +27,7 @@
 
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/pbutils/pbutils.h>
+#include <gst/video/video.h>
 
 /* Included to not duplicate gst_rtp_h265_add_vps_sps_pps () */
 #include "gstrtph265depay.h"
@@ -874,7 +875,7 @@ gst_rtp_h265_pay_send_vps_sps_pps (GstRTPBasePayload * basepayload,
     /* Not critical here; but throw a warning */
     if (ret != GST_FLOW_OK) {
       sent_all_vps_sps_pps = FALSE;
-      GST_WARNING ("Problem pushing VPS");
+      GST_WARNING_OBJECT (basepayload, "Problem pushing VPS");
     }
   }
   for (i = 0; i < rtph265pay->sps->len; i++) {
@@ -888,7 +889,7 @@ gst_rtp_h265_pay_send_vps_sps_pps (GstRTPBasePayload * basepayload,
     /* Not critical here; but throw a warning */
     if (ret != GST_FLOW_OK) {
       sent_all_vps_sps_pps = FALSE;
-      GST_WARNING ("Problem pushing SPS");
+      GST_WARNING_OBJECT (basepayload, "Problem pushing SPS");
     }
   }
   for (i = 0; i < rtph265pay->pps->len; i++) {
@@ -995,8 +996,10 @@ gst_rtp_h265_pay_payload_nal (GstRTPBasePayload * basepayload,
      * checking when we need to send SPS/PPS but convert to running_time first. */
     rtph265pay->send_vps_sps_pps = FALSE;
     ret = gst_rtp_h265_pay_send_vps_sps_pps (basepayload, rtph265pay, dts, pts);
-    if (ret != GST_FLOW_OK)
+    if (ret != GST_FLOW_OK) {
+      gst_buffer_unref (paybuf);
       return ret;
+    }
   }
 
   packet_len = gst_rtp_buffer_calc_packet_len (size, 0, 0);
@@ -1025,6 +1028,8 @@ gst_rtp_h265_pay_payload_nal (GstRTPBasePayload * basepayload,
     GST_BUFFER_DTS (outbuf) = dts;
 
     /* insert payload memory block */
+    gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265pay), outbuf, paybuf,
+        g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
     outbuf = gst_buffer_append (outbuf, paybuf);
 
     list = gst_buffer_list_new ();
@@ -1046,8 +1051,6 @@ gst_rtp_h265_pay_payload_nal (GstRTPBasePayload * basepayload,
 
     pos += 2;
     size -= 2;
-
-    ret = GST_FLOW_OK;
 
     GST_DEBUG_OBJECT (basepayload, "Using FU fragmentation for data size=%d",
         size);
@@ -1094,13 +1097,12 @@ gst_rtp_h265_pay_payload_nal (GstRTPBasePayload * basepayload,
       gst_rtp_buffer_unmap (&rtp);
 
       /* insert payload memory block */
-      gst_buffer_append (outbuf,
-          gst_buffer_copy_region (paybuf, GST_BUFFER_COPY_MEMORY, pos,
-              limitedSize));
-
+      gst_rtp_copy_meta (GST_ELEMENT_CAST (rtph265pay), outbuf, paybuf,
+          g_quark_from_static_string (GST_META_TAG_VIDEO_STR));
+      gst_buffer_copy_into (outbuf, paybuf, GST_BUFFER_COPY_MEMORY, pos,
+          limitedSize);
       /* add the buffer to the buffer list */
       gst_buffer_list_add (list, outbuf);
-
 
       size -= limitedSize;
       pos += limitedSize;
@@ -1210,7 +1212,7 @@ gst_rtp_h265_pay_handle_buffer (GstRTPBasePayload * basepayload,
         end_of_au = TRUE;
       }
 
-      paybuf = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_MEMORY, offset,
+      paybuf = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL, offset,
           nal_len);
 
       ret =
@@ -1431,6 +1433,13 @@ gst_rtp_h265_pay_change_state (GstElement * element, GstStateChange transition)
       rtph265pay->send_vps_sps_pps = FALSE;
       gst_adapter_clear (rtph265pay->adapter);
       break;
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+
+  switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       rtph265pay->last_vps_sps_pps = -1;
       gst_rtp_h265_pay_clear_vps_sps_pps (rtph265pay);
@@ -1438,8 +1447,6 @@ gst_rtp_h265_pay_change_state (GstElement * element, GstStateChange transition)
     default:
       break;
   }
-
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
 
   return ret;
 }

@@ -6,10 +6,10 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: gst-plugins-bad 1.4.1\n"
+"Project-Id-Version: gst-plugins-bad 1.5.1\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/\n"
-"POT-Creation-Date: 2015-06-24 22:59+0200\n"
-"PO-Revision-Date: 2015-06-03 09:39+0100\n"
+"POT-Creation-Date: 2015-08-19 12:49+0300\n"
+"PO-Revision-Date: 2015-07-11 01:15+0100\n"
 "Last-Translator: Johnny A. Solbu <johnny@solbu.net>\n"
 "Language-Team: Norwegian Bokmaal <i18n-nb@lister.ping.uio.no>\n"
 "Language: nb_NO\n"
@@ -24,7 +24,6 @@ msgstr "formatet ble ikke forhandlet før get-funksjon"
 msgid "default GStreamer sound events audiosink"
 msgstr "standard GStreamer lydhendelser-audiosink"
 
-#, fuzzy
 msgid ""
 "GStreamer can play audio using any number of output elements. Some possible "
 "choices are osssink, pulsesink and alsasink. The audiosink can be a partial "
@@ -128,7 +127,7 @@ msgid "Describes the selected visualization element."
 msgstr "Beskriver valgt visualiseringselement."
 
 msgid "OpenCV failed to load template image"
-msgstr ""
+msgstr "OpenCV kunne ikke laste mal-bilde"
 
 msgid "Could not read title information for DVD."
 msgstr "Kunne ikke lese tittelinformasjonen til DVD-en."
@@ -182,8 +181,9 @@ msgid "File location is set to NULL, please set it to a valid filename"
 msgstr ""
 "Filplassering er satt til NULL, vennligst sett den til et gyldig filnavn"
 
-msgid "Digitalzoom element cound't be created"
-msgstr ""
+#, fuzzy
+msgid "Digitalzoom element couldn't be created"
+msgstr "Digitalzoom element kunne ikke opprettes"
 
 msgid "Subpicture format was not configured before data flow"
 msgstr "Underbildeformat er ikke konfigurert før dataflyt"

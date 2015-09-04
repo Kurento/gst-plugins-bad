@@ -8,8 +8,12 @@ lib_LTLIBRARIES =
 
 # source
 sources = \
+	gtkgstbasewidget.c \
+	gtkgstbasewidget.h \
 	gtkgstwidget.c \
 	gtkgstwidget.h \
+	gstgtkbasesink.c \
+	gstgtkbasesink.h \
 	gstgtksink.c \
 	gstgtksink.h \
 	gstplugin.c \

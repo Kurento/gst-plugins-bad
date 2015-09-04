@@ -29,6 +29,7 @@
  */
 
 #include "gstglcontext_egl.h"
+#include <gst/gl/egl/gstegl.h>
 
 #if GST_GL_HAVE_WINDOW_X11
 #include "../x11/gstglwindow_x11.h"
@@ -99,11 +100,11 @@ gst_gl_context_egl_init (GstGLContextEGL * context)
 
 /* Must be called in the gl thread */
 GstGLContextEGL *
-gst_gl_context_egl_new (void)
+gst_gl_context_egl_new (GstGLDisplay * display)
 {
-  GstGLContextEGL *window = g_object_new (GST_GL_TYPE_CONTEXT_EGL, NULL);
-
-  return window;
+  /* XXX: display type could theoretically be anything, as long as
+   * eglGetDisplay supports it. */
+  return g_object_new (GST_GL_TYPE_CONTEXT_EGL, NULL);
 }
 
 static const gchar *
@@ -388,14 +389,14 @@ gst_gl_context_egl_create_context (GstGLContext * context,
         gst_gl_context_egl_get_error_string ());
     goto failure;
   }
+  /* FIXME do we want a window vfunc ? */
+#if GST_GL_HAVE_WINDOW_X11
+  if (GST_GL_IS_WINDOW_X11 (context->window)) {
+    gst_gl_window_x11_create_window ((GstGLWindowX11 *) context->window);
+  }
+#endif
 
   if (other_context == NULL) {
-    /* FIXME do we want a window vfunc ? */
-#if GST_GL_HAVE_WINDOW_X11
-    if (GST_GL_IS_WINDOW_X11 (context->window)) {
-      gst_gl_window_x11_create_window ((GstGLWindowX11 *) context->window);
-    }
-#endif
 #if GST_GL_HAVE_WINDOW_WAYLAND
     if (GST_GL_IS_WINDOW_WAYLAND_EGL (context->window)) {
       gst_gl_window_wayland_egl_create_window ((GstGLWindowWaylandEGL *)
@@ -621,13 +622,40 @@ load_egl_module (gpointer user_data)
 }
 
 gpointer
-gst_gl_context_egl_get_proc_address (GstGLContext * context, const gchar * name)
+gst_gl_context_egl_get_proc_address (GstGLAPI gl_api, const gchar * name)
 {
   gpointer result = NULL;
   static GOnce g_once = G_ONCE_INIT;
-  GstGLAPI gl_api = gst_gl_context_get_gl_api (context);
 
-  result = gst_gl_context_default_get_proc_address (gl_api, name);
+#ifdef __APPLE__
+#if GST_GL_HAVE_OPENGL && !defined(GST_GL_LIBGL_MODULE_NAME)
+  if (!result && (gl_api & (GST_GL_API_OPENGL | GST_GL_API_OPENGL3))) {
+    static GModule *module_opengl = NULL;
+    if (g_once_init_enter (&module_opengl)) {
+      GModule *setup_module_opengl =
+          g_module_open ("libGL.dylib", G_MODULE_BIND_LAZY);
+      g_once_init_leave (&module_opengl, setup_module_opengl);
+    }
+    if (module_opengl)
+      g_module_symbol (module_opengl, name, &result);
+  }
+#endif
+#if GST_GL_HAVE_GLES2 && !defined(GST_GL_LIBGLESV2_MODULE_NAME)
+  if (!result && (gl_api & (GST_GL_API_GLES2))) {
+    static GModule *module_gles2 = NULL;
+    if (g_once_init_enter (&module_gles2)) {
+      GModule *setup_module_gles2 =
+          g_module_open ("libGLESv2.dylib", G_MODULE_BIND_LAZY);
+      g_once_init_leave (&module_gles2, setup_module_gles2);
+    }
+    if (module_gles2)
+      g_module_symbol (module_gles2, name, &result);
+  }
+#endif
+#endif // __APPLE__
+
+  if (!result)
+    result = gst_gl_context_default_get_proc_address (gl_api, name);
 
   g_once (&g_once, load_egl_module, NULL);
 

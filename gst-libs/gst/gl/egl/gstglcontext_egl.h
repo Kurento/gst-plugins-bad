@@ -23,12 +23,14 @@
 
 #include <gst/gst.h>
 #include <gst/gl/gl.h>
+#include <gst/gl/egl/gstegl.h>
 
 G_BEGIN_DECLS
 
 typedef struct _GstGLContextEGL GstGLContextEGL;
 typedef struct _GstGLContextEGLClass GstGLContextEGLClass;
 
+GType gst_gl_context_egl_get_type     (void);
 #define GST_GL_TYPE_CONTEXT_EGL         (gst_gl_context_egl_get_type())
 #define GST_GL_CONTEXT_EGL(o)           (G_TYPE_CHECK_INSTANCE_CAST((o), GST_GL_TYPE_CONTEXT_EGL, GstGLContextEGL))
 #define GST_GL_CONTEXT_EGL_CLASS(k)     (G_TYPE_CHECK_CLASS((k), GST_GL_TYPE_CONTEXT_EGL, GstGLContextEGLClass))
@@ -58,10 +60,9 @@ struct _GstGLContextEGLClass {
   GstGLContextClass parent;
 };
 
-GType gst_gl_context_egl_get_type     (void);
-GstGLContextEGL *   gst_gl_context_egl_new                  (void);
+GstGLContextEGL *   gst_gl_context_egl_new                  (GstGLDisplay * display);
 guintptr            gst_gl_context_egl_get_current_context  (void);
-gpointer            gst_gl_context_egl_get_proc_address     (GstGLContext * context, const gchar * name);
+gpointer            gst_gl_context_egl_get_proc_address     (GstGLAPI gl_api, const gchar * name);
 
 /* TODO:
  * add support for EGL_NO_CONTEXT

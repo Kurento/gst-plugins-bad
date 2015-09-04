@@ -69,9 +69,11 @@ _set_sync_point (GstGLContext * context, GstGLSyncMeta * sync_meta)
       gl->DeleteSync (sync_meta->glsync);
     }
     sync_meta->glsync = gl->FenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl->Flush ();
     GST_LOG ("setting sync object %p", sync_meta->glsync);
+  } else {
+    gl->Finish ();
   }
-  gl->Flush ();
 }
 
 void
@@ -132,7 +134,11 @@ _gst_gl_sync_meta_transform (GstBuffer * dest, GstMeta * meta,
        * metas after data */
       gst_gl_sync_meta_set_sync_point (dmeta, smeta->context);
     }
+  } else {
+    /* return FALSE, if transform type is not supported */
+    return FALSE;
   }
+
   return TRUE;
 }
 
