@@ -51,10 +51,10 @@ extra_files =
 # contains GtkObjects/GObjects and you want to document signals and properties.
 GTKDOC_CFLAGS = -DGST_USE_UNSTABLE_API $(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS)
 GTKDOC_LIBS = \
-	$(top_builddir)/gst-libs/gst/codecparsers/libgstcodecparsers-@GST_API_VERSION@.la \
-	$(top_builddir)/gst-libs/gst/gl/libgstgl-@GST_API_VERSION@.la \
-	$(top_builddir)/gst-libs/gst/insertbin/libgstinsertbin-@GST_API_VERSION@.la \
-	$(top_builddir)/gst-libs/gst/mpegts/libgstmpegts-@GST_API_VERSION@.la \
+	$(top_builddir)/gst-libs/gst/codecparsers/.libs/libgstcodecparsers-@GST_API_VERSION@.so \
+	$(top_builddir)/gst-libs/gst/gl/.libs/libgstgl-@GST_API_VERSION@.so \
+	$(top_builddir)/gst-libs/gst/insertbin/.libs/libgstinsertbin-@GST_API_VERSION@.so \
+	$(top_builddir)/gst-libs/gst/mpegts/.libs/libgstmpegts-@GST_API_VERSION@.so \
   $(GST_BASE_LIBS)
 
 # If you need to override some of the declarations, place them in this file
