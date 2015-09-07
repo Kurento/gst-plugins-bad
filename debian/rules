@@ -131,7 +131,6 @@ pre-build::
 			-e 's,@cdaudio@,$(cdaudio),g' \
 			-e 's,@resindvd@,$(resindvd),g' \
 			-e 's,@uvch264@,$(uvch264),g' \
-			-e 's,@bluez@,$(bluez),g' \
 			-e 's,@sbc@,$(sbc),g' \
 			-e 's,@waylandsink@,$(waylandsink),g' \
 			-e 's/@GST_ABI@/$(gst_abi)/g' \

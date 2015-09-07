@@ -10,7 +10,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstaudiovisualizers.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstautoconvert.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstbayer.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstbs2b.so
-@bluez@
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstbz2.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcamerabin2.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstchromaprint.so
