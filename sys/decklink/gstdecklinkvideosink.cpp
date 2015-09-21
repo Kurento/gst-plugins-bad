@@ -354,12 +354,34 @@ convert_to_internal_clock (GstDecklinkVideoSink * self,
     gst_clock_get_calibration (self->output->clock, &internal, &external,
         &rate_n, &rate_d);
 
-    if (rate_n != rate_d && self->internal_base_time != GST_CLOCK_TIME_NONE) {
+    if (self->internal_base_time != GST_CLOCK_TIME_NONE) {
       GstClockTime external_timestamp = *timestamp;
+      GstClockTime base_time;
 
       // Convert to the running time corresponding to both clock times
-      internal -= self->internal_base_time;
-      external -= self->external_base_time;
+      if (internal < self->internal_base_time)
+        internal = 0;
+      else
+        internal -= self->internal_base_time;
+
+      if (external < self->external_base_time)
+        external = 0;
+      else
+        external -= self->external_base_time;
+
+      // Convert timestamp to the "running time" since we started scheduled
+      // playback, that is the difference between the pipeline's base time
+      // and our own base time.
+      base_time = gst_element_get_base_time (GST_ELEMENT_CAST (self));
+      if (base_time > self->external_base_time)
+        base_time = 0;
+      else
+        base_time = self->external_base_time - base_time;
+
+      if (external_timestamp < base_time)
+        external_timestamp = 0;
+      else
+        external_timestamp = external_timestamp - base_time;
 
       // Get the difference in the external time, note
       // that the running time is external time.
@@ -398,7 +420,7 @@ convert_to_internal_clock (GstDecklinkVideoSink * self,
             GST_TIME_ARGS (external), ((gdouble) rate_n) / ((gdouble) rate_d));
       }
     } else {
-      GST_LOG_OBJECT (self, "No clock conversion needed, relative rate is 1.0");
+      GST_LOG_OBJECT (self, "No clock conversion needed, not started yet");
     }
   } else {
     GST_LOG_OBJECT (self, "No clock conversion needed, same clocks");
@@ -416,6 +438,8 @@ gst_decklink_video_sink_prepare (GstBaseSink * bsink, GstBuffer * buffer)
   HRESULT ret;
   GstClockTime timestamp, duration;
   GstClockTime running_time, running_time_duration;
+  GstClockTime latency, render_delay;
+  GstClockTimeDiff ts_offset;
   gint i;
 
   GST_DEBUG_OBJECT (self, "Preparing buffer %p", buffer);
@@ -438,6 +462,28 @@ gst_decklink_video_sink_prepare (GstBaseSink * bsink, GstBuffer * buffer)
   running_time_duration =
       gst_segment_to_running_time (&GST_BASE_SINK_CAST (self)->segment,
       GST_FORMAT_TIME, timestamp + duration) - running_time;
+
+  /* See gst_base_sink_adjust_time() */
+  latency = gst_base_sink_get_latency (bsink);
+  render_delay = gst_base_sink_get_render_delay (bsink);
+  ts_offset = gst_base_sink_get_ts_offset (bsink);
+
+  running_time += latency;
+
+  if (ts_offset < 0) {
+    ts_offset = -ts_offset;
+    if ((GstClockTime) ts_offset < running_time)
+      running_time -= ts_offset;
+    else
+      running_time = 0;
+  } else {
+    running_time += ts_offset;
+  }
+
+  if (running_time > render_delay)
+    running_time -= render_delay;
+  else
+    running_time = 0;
 
   ret = self->output->output->CreateVideoFrame (self->info.width,
       self->info.height, self->info.stride[0], bmdFormat8BitYUV,

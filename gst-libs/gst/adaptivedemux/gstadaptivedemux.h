@@ -63,7 +63,14 @@ G_BEGIN_DECLS
 
 #define GST_ADAPTIVE_DEMUX_STREAM_NEED_HEADER(obj) (((GstAdaptiveDemuxStream *) (obj))->need_header)
 
-#define STATISTICS_MESSAGE_NAME "adaptive-streaming-statistics"
+/**
+ * GST_ADAPTIVE_DEMUX_STATISTICS_MESSAGE_NAME:
+ *
+ * Name of the ELEMENT type messages posted by dashdemux with statistics.
+ *
+ * Since: 1.6
+ */
+#define GST_ADAPTIVE_DEMUX_STATISTICS_MESSAGE_NAME "adaptive-streaming-statistics"
 
 #define GST_MANIFEST_GET_LOCK(d) (&(GST_ADAPTIVE_DEMUX_CAST(d)->manifest_lock))
 #define GST_MANIFEST_LOCK(d) (g_mutex_lock (GST_MANIFEST_GET_LOCK (d)))
@@ -408,6 +415,19 @@ struct _GstAdaptiveDemuxClass
    * @stream.
    */
   GstClockTime (*get_presentation_offset) (GstAdaptiveDemux *demux, GstAdaptiveDemuxStream *stream);
+
+  /**
+   * get_period_start_time:
+   * @demux: #GstAdaptiveDemux
+   *
+   * Gets the start time of the current period. Timestamps are resetting to 0
+   * after each period but we have to maintain a continuous stream and running
+   * time so need to know the start time of the current period.
+   *
+   * Return: a #GstClockTime representing the start time of the currently
+   * selected period.
+   */
+  GstClockTime (*get_period_start_time) (GstAdaptiveDemux *demux);
 };
 
 GType    gst_adaptive_demux_get_type (void);

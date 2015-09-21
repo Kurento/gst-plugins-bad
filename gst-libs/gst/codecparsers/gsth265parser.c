@@ -123,8 +123,8 @@ static const guint8 default_scaling_list1[64] = {
  *  Default scaling list of 32x32 matrix for matrixId = 1
  */
 static const guint8 default_scaling_list2[64] = {
-  16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17,
-  17, 17, 17, 17, 18, 18, 18, 18, 18, 20, 20, 20,
+  16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 17,
+  17, 17, 17, 18, 18, 18, 18, 18, 18, 20, 20, 20,
   20, 20, 20, 20, 24, 24, 24, 24, 24, 24, 24, 24,
   25, 25, 25, 25, 25, 25, 25, 28, 28, 28, 28, 28,
   28, 33, 33, 33, 33, 33, 41, 41, 41, 41, 54, 54,
@@ -1985,7 +1985,6 @@ gst_h265_parser_parse_slice_hdr (GstH265Parser * parser,
   GstH265PPS *pps;
   GstH265SPS *sps;
   guint i;
-  guint CurrRpsIdx = 0;
   GstH265ShortTermRefPicSet *stRPS = NULL;
   guint32 UsedByCurrPicLt[16];
   guint32 PicSizeInCtbsY;
@@ -2150,10 +2149,10 @@ gst_h265_parser_parse_slice_hdr (GstH265Parser * parser,
 
       /* calculate NumPocTotalCurr */
       if (slice->short_term_ref_pic_set_sps_flag)
-        CurrRpsIdx = slice->short_term_ref_pic_set_idx;
+        stRPS = &sps->short_term_ref_pic_set[slice->short_term_ref_pic_set_idx];
       else
-        CurrRpsIdx = sps->num_short_term_ref_pic_sets;
-      stRPS = &sps->short_term_ref_pic_set[CurrRpsIdx];
+        stRPS = &slice->short_term_ref_pic_sets;
+
       for (i = 0; i < stRPS->NumNegativePics; i++)
         if (stRPS->UsedByCurrPicS0[i])
           NumPocTotalCurr++;

@@ -108,11 +108,16 @@ CFSTR ("RequireHardwareAcceleratedVideoDecoder");
 #define GST_VTDEC_VIDEO_FORMAT_STR "UYVY"
 #endif
 
+#ifdef HAVE_IOS
 #define VIDEO_SRC_CAPS \
-    GST_VIDEO_CAPS_MAKE(GST_VTDEC_VIDEO_FORMAT_STR) ";" \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES \
     (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, \
-        "RGBA") ";"
+        "RGBA") ";" \
+    GST_VIDEO_CAPS_MAKE(GST_VTDEC_VIDEO_FORMAT_STR) ";"
+#else
+#define VIDEO_SRC_CAPS \
+    GST_VIDEO_CAPS_MAKE(GST_VTDEC_VIDEO_FORMAT_STR) ";"
+#endif
 
 G_DEFINE_TYPE (GstVtdec, gst_vtdec, GST_TYPE_VIDEO_DECODER);
 
@@ -230,8 +235,23 @@ gst_vtdec_decide_allocation (GstVideoDecoder * decoder, GstQuery * query)
       gst_query_unref (query);
 
       if (context) {
+        GstVideoFormat internal_format;
+        GstVideoCodecState *output_state =
+            gst_video_decoder_get_output_state (decoder);
+
         GST_INFO_OBJECT (decoder, "pushing textures. GL context %p", context);
+        if (vtdec->texture_cache)
+          gst_core_video_texture_cache_free (vtdec->texture_cache);
+
+#ifdef HAVE_IOS
+        internal_format = GST_VIDEO_FORMAT_NV12;
+#else
+        internal_format = GST_VIDEO_FORMAT_UYVY;
+#endif
         vtdec->texture_cache = gst_core_video_texture_cache_new (gl_context);
+        gst_core_video_texture_cache_set_format (vtdec->texture_cache,
+            internal_format, output_state->caps);
+        gst_video_codec_state_unref (output_state);
         gst_object_unref (gl_context);
       } else {
         GST_WARNING_OBJECT (decoder,
@@ -244,24 +264,48 @@ out:
   return ret;
 }
 
-static GstVideoFormat
-gst_vtdec_negotiate_output_format (GstVtdec * vtdec)
+static gboolean
+gst_vtdec_negotiate_output_format (GstVtdec * vtdec,
+    GstVideoCodecState * input_state)
 {
-  GstCaps *caps = NULL;
-  GstVideoFormat format;
+  GstCaps *caps = NULL, *peercaps = NULL, *templcaps;
+  GstVideoFormat output_format;
+  GstVideoCodecState *output_state = NULL;
+  GstCapsFeatures *features;
   GstStructure *structure;
   const gchar *s;
 
-  caps = gst_pad_get_allowed_caps (GST_VIDEO_DECODER_SRC_PAD (vtdec));
-  if (!caps)
-    caps = gst_pad_query_caps (GST_VIDEO_DECODER_SRC_PAD (vtdec), NULL);
+  peercaps = gst_pad_peer_query_caps (GST_VIDEO_DECODER_SRC_PAD (vtdec), NULL);
+
+  /* Check if output supports GL caps by preference */
+  templcaps = gst_pad_get_pad_template_caps (GST_VIDEO_DECODER_SRC_PAD (vtdec));
+  caps =
+      gst_caps_intersect_full (templcaps, peercaps, GST_CAPS_INTERSECT_FIRST);
+
+  gst_caps_unref (peercaps);
+  gst_caps_unref (templcaps);
+
   caps = gst_caps_truncate (caps);
   structure = gst_caps_get_structure (caps, 0);
   s = gst_structure_get_string (structure, "format");
-  format = gst_video_format_from_string (s);
+  output_format = gst_video_format_from_string (s);
+  features = gst_caps_features_copy (gst_caps_get_features (caps, 0));
+
   gst_caps_unref (caps);
 
-  return format;
+  if (!gst_vtdec_create_session (vtdec, output_format)) {
+    gst_caps_features_free (features);
+    return FALSE;
+  }
+
+  output_state = gst_video_decoder_set_output_state (GST_VIDEO_DECODER (vtdec),
+      output_format, vtdec->video_info.width, vtdec->video_info.height,
+      input_state);
+
+  output_state->caps = gst_video_info_to_caps (&output_state->info);
+  gst_caps_set_features (output_state->caps, 0, features);
+
+  return TRUE;
 }
 
 static gboolean
@@ -272,8 +316,6 @@ gst_vtdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   CMFormatDescriptionRef format_description = NULL;
   const char *caps_name;
   GstVtdec *vtdec = GST_VTDEC (decoder);
-  GstVideoFormat output_format;
-  GstVideoCodecState *output_state;
 
   GST_DEBUG_OBJECT (vtdec, "set_format");
 
@@ -313,17 +355,8 @@ gst_vtdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     CFRelease (vtdec->format_description);
   vtdec->format_description = format_description;
 
-  output_format = gst_vtdec_negotiate_output_format (vtdec);
-  if (!gst_vtdec_create_session (vtdec, output_format))
+  if (!gst_vtdec_negotiate_output_format (vtdec, state))
     return FALSE;
-
-  output_state = gst_video_decoder_set_output_state (decoder,
-      output_format, vtdec->video_info.width, vtdec->video_info.height, state);
-  output_state->caps = gst_video_info_to_caps (&output_state->info);
-  if (output_state->info.finfo->format == GST_VIDEO_FORMAT_RGBA) {
-    gst_caps_set_features (output_state->caps, 0,
-        gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, NULL));
-  }
 
   return TRUE;
 }
@@ -757,23 +790,8 @@ gst_vtdec_push_frames_if_needed (GstVtdec * vtdec, gboolean drain,
    */
   /* negotiate now so that we know whether we need to use the GL upload meta or
    * not */
-  if (gst_pad_check_reconfigure (decoder->srcpad)) {
+  if (gst_pad_check_reconfigure (decoder->srcpad))
     gst_video_decoder_negotiate (decoder);
-    if (vtdec->texture_cache) {
-      GstVideoFormat internal_format;
-      GstVideoCodecState *output_state =
-          gst_video_decoder_get_output_state (decoder);
-
-#ifdef HAVE_IOS
-      internal_format = GST_VIDEO_FORMAT_NV12;
-#else
-      internal_format = GST_VIDEO_FORMAT_UYVY;
-#endif
-      gst_core_video_texture_cache_set_format (vtdec->texture_cache,
-          internal_format, output_state->caps);
-      gst_video_codec_state_unref (output_state);
-    }
-  }
 
   if (drain)
     VTDecompressionSessionWaitForAsynchronousFrames (vtdec->session);

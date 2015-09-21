@@ -327,6 +327,14 @@ gst_dash_demux_get_presentation_offset (GstAdaptiveDemux * demux,
       dashstream->index);
 }
 
+static GstClockTime
+gst_dash_demux_get_period_start_time (GstAdaptiveDemux * demux)
+{
+  GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (demux);
+
+  return gst_mpd_parser_get_period_start_time (dashdemux->client);
+}
+
 static void
 gst_dash_demux_class_init (GstDashDemuxClass * klass)
 {
@@ -411,6 +419,8 @@ gst_dash_demux_class_init (GstDashDemuxClass * klass)
       gst_dash_demux_get_live_seek_range;
   gstadaptivedemux_class->get_presentation_offset =
       gst_dash_demux_get_presentation_offset;
+  gstadaptivedemux_class->get_period_start_time =
+      gst_dash_demux_get_period_start_time;
 
   gstadaptivedemux_class->finish_fragment =
       gst_dash_demux_stream_fragment_finished;
@@ -1025,6 +1035,24 @@ gst_dash_demux_stream_seek (GstAdaptiveDemuxStream * stream, GstClockTime ts)
 }
 
 static gboolean
+gst_dash_demux_stream_has_next_subfragment (GstAdaptiveDemuxStream * stream)
+{
+  GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
+  GstSidxBox *sidx = SIDX (dashstream);
+
+  if (dashstream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED) {
+    if (stream->demux->segment.rate > 0.0) {
+      if (sidx->entry_index + 1 < sidx->entries_count)
+        return TRUE;
+    } else {
+      if (sidx->entry_index >= 1)
+        return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static gboolean
 gst_dash_demux_stream_advance_subfragment (GstAdaptiveDemuxStream * stream)
 {
   GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
@@ -1061,6 +1089,11 @@ gst_dash_demux_stream_has_next_fragment (GstAdaptiveDemuxStream * stream)
 {
   GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (stream->demux);
   GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
+
+  if (gst_mpd_client_has_isoff_ondemand_profile (dashdemux->client)) {
+    if (gst_dash_demux_stream_has_next_subfragment (stream))
+      return TRUE;
+  }
 
   return gst_mpd_client_has_next_segment (dashdemux->client,
       dashstream->active_stream, stream->demux->segment.rate > 0.0);
@@ -1427,9 +1460,12 @@ gst_dash_demux_stream_fragment_finished (GstAdaptiveDemux * demux,
   GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
 
   if (gst_mpd_client_has_isoff_ondemand_profile (dashdemux->client) &&
-      dashstream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED)
+      dashstream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED) {
     /* fragment is advanced on data_received when byte limits are reached */
-    return GST_FLOW_OK;
+    if (gst_dash_demux_stream_has_next_fragment (stream))
+      return GST_FLOW_OK;
+    return GST_FLOW_EOS;
+  }
 
   if (G_UNLIKELY (stream->downloading_header || stream->downloading_index))
     return GST_FLOW_OK;

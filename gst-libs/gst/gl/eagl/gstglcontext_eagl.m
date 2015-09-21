@@ -191,17 +191,14 @@ gst_gl_context_eagl_update_layer (GstGLContext * context)
       height);
   glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
       GL_RENDERBUFFER, depth_renderbuffer);
-  [EAGLContext setCurrentContext:nil];
 
-  [EAGLContext setCurrentContext:priv->eagl_context];
-
-  glBindFramebuffer (GL_FRAMEBUFFER, framebuffer);
   /* check creation status */
   status = glCheckFramebufferStatus (GL_FRAMEBUFFER);
   if (status != GL_FRAMEBUFFER_COMPLETE) {
     GST_ERROR ("Failed to make complete framebuffer object %x", status);
     goto out;
   }
+  glBindRenderbuffer (GL_RENDERBUFFER, 0);
   glBindFramebuffer (GL_FRAMEBUFFER, 0);
 
   priv->eagl_layer = eagl_layer;
