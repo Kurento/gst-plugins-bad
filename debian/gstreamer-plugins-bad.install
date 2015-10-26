@@ -46,7 +46,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstjpegformat.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstjp2kdecimator.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstladspa.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstlibde265.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstliveadder.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmidi.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmimic.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmms.so
