@@ -185,8 +185,8 @@ gst_amc_codec_free (GstAmcCodec * codec)
 }
 
 gboolean
-gst_amc_codec_configure (GstAmcCodec * codec, GstAmcFormat * format, gint flags,
-    GError ** err)
+gst_amc_codec_configure (GstAmcCodec * codec, GstAmcFormat * format,
+    jobject surface, gint flags, GError ** err)
 {
   JNIEnv *env;
 
@@ -195,7 +195,7 @@ gst_amc_codec_configure (GstAmcCodec * codec, GstAmcFormat * format, gint flags,
 
   env = gst_amc_jni_get_env ();
   return gst_amc_jni_call_void_method (env, err, codec->object,
-      media_codec.configure, format->object, NULL, NULL, flags);
+      media_codec.configure, format->object, surface, NULL, flags);
 }
 
 GstAmcFormat *
@@ -591,7 +591,7 @@ gst_amc_codec_queue_input_buffer (GstAmcCodec * codec, gint index,
 
 gboolean
 gst_amc_codec_release_output_buffer (GstAmcCodec * codec, gint index,
-    GError ** err)
+    gboolean render, GError ** err)
 {
   JNIEnv *env;
 
@@ -599,7 +599,7 @@ gst_amc_codec_release_output_buffer (GstAmcCodec * codec, gint index,
 
   env = gst_amc_jni_get_env ();
   return gst_amc_jni_call_void_method (env, err, codec->object,
-      media_codec.release_output_buffer, index, JNI_FALSE);
+      media_codec.release_output_buffer, index, render);
 }
 
 GstAmcFormat *
@@ -1567,6 +1567,7 @@ scan_codecs (GstPlugin * plugin)
       goto next_codec;
     }
     gst_codec_info->is_encoder = is_encoder;
+    gst_codec_info->gl_output_only = FALSE;
 
     supported_types =
         (*env)->CallObjectMethod (env, codec_info, get_supported_types_id);
@@ -1710,12 +1711,13 @@ scan_codecs (GstPlugin * plugin)
           goto next_supported_type;
         }
 
-        if (!ignore_unknown_color_formats
-            && !accepted_color_formats (gst_codec_type, is_encoder)) {
-          GST_ERROR ("%s codec has unknown color formats, ignoring",
-              is_encoder ? "Encoder" : "Decoder");
-          valid_codec = FALSE;
-          goto next_supported_type;
+        if (!accepted_color_formats (gst_codec_type, is_encoder)) {
+          if (!ignore_unknown_color_formats) {
+            gst_codec_info->gl_output_only = TRUE;
+            GST_WARNING
+                ("%s %s has unknown color formats, only direct rendering will be supported",
+                gst_codec_type->mime, is_encoder ? "encoder" : "decoder");
+          }
         }
       }
 
@@ -1989,6 +1991,7 @@ static const struct
   COLOR_QCOM_FormatYUV420SemiPlanar, GST_VIDEO_FORMAT_NV12}, {
   COLOR_QCOM_FormatYUV420PackedSemiPlanar64x32Tile2m8ka, GST_VIDEO_FORMAT_NV12}, {
   COLOR_QCOM_FormatYVU420SemiPlanar32m, GST_VIDEO_FORMAT_NV12}, {
+  COLOR_QCOM_FormatYVU420SemiPlanar32mMultiView, GST_VIDEO_FORMAT_NV12}, {
   COLOR_OMX_SEC_FormatNV12Tiled, GST_VIDEO_FORMAT_NV12}, {
   COLOR_FormatYCbYCr, GST_VIDEO_FORMAT_YUY2}, {
   COLOR_FormatYV12, GST_VIDEO_FORMAT_YV12}
@@ -2003,8 +2006,10 @@ accepted_color_formats (GstAmcCodecType * type, gboolean is_encoder)
   for (i = 0; i < type->n_color_formats; i++) {
     gboolean found = FALSE;
     /* We ignore this one */
-    if (type->color_formats[i] == COLOR_FormatAndroidOpaque)
+    if (type->color_formats[i] == COLOR_FormatAndroidOpaque) {
       all--;
+      continue;
+    }
 
     for (j = 0; j < G_N_ELEMENTS (color_format_mapping_table); j++) {
       if (color_format_mapping_table[j].color_format == type->color_formats[i]) {
@@ -2015,7 +2020,7 @@ accepted_color_formats (GstAmcCodecType * type, gboolean is_encoder)
     }
 
     if (!found) {
-      GST_DEBUG ("Unknown color format 0x%x, ignoring", type->color_formats[i]);
+      GST_ERROR ("Unknown color format 0x%x, ignoring", type->color_formats[i]);
     }
   }
 
@@ -2216,6 +2221,7 @@ gst_amc_color_format_info_set (GstAmcColorFormatInfo * color_format_info,
     }
     case COLOR_QCOM_FormatYUV420SemiPlanar:
     case COLOR_QCOM_FormatYVU420SemiPlanar32m:
+    case COLOR_QCOM_FormatYVU420SemiPlanar32mMultiView:
     case COLOR_FormatYUV420SemiPlanar:{
       if (stride == 0 || slice_height == 0) {
         GST_ERROR ("Stride or slice height is 0");
@@ -2290,8 +2296,9 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
     goto done;
   }
 
-  GST_DEBUG ("Sizes not equal (%d vs %d), doing slow line-by-line copying",
-      cbuffer_info->size, gst_buffer_get_size (vbuffer));
+  GST_DEBUG ("Sizes not equal (%d vs %" G_GSIZE_FORMAT
+      "), doing slow line-by-line copying", cbuffer_info->size,
+      gst_buffer_get_size (vbuffer));
 
   /* Different video format, try to convert */
   switch (cinfo->color_format) {
@@ -2397,6 +2404,7 @@ gst_amc_color_format_copy (GstAmcColorFormatInfo * cinfo,
     }
     case COLOR_QCOM_FormatYUV420SemiPlanar:
     case COLOR_QCOM_FormatYVU420SemiPlanar32m:
+    case COLOR_QCOM_FormatYVU420SemiPlanar32mMultiView:
     case COLOR_FormatYUV420SemiPlanar:{
       gint i, j, height;
       gint c_stride, v_stride;
@@ -3455,7 +3463,8 @@ gst_amc_codec_info_to_caps (const GstAmcCodecInfo * codec_info,
               gst_amc_color_format_to_video_format (codec_info,
               type->mime, type->color_formats[j]);
           if (format == GST_VIDEO_FORMAT_UNKNOWN) {
-            GST_WARNING ("Unknown color format 0x%08x", type->color_formats[j]);
+            GST_WARNING ("Unknown color format 0x%08x for codec %s",
+                type->color_formats[j], type->mime);
             continue;
           }
 

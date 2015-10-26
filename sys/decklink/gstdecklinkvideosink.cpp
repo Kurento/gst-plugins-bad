@@ -142,6 +142,7 @@ static GstFlowReturn gst_decklink_video_sink_render (GstBaseSink * bsink,
     GstBuffer * buffer);
 static gboolean gst_decklink_video_sink_open (GstBaseSink * bsink);
 static gboolean gst_decklink_video_sink_close (GstBaseSink * bsink);
+static gboolean gst_decklink_video_sink_stop (GstDecklinkVideoSink * self);
 static gboolean gst_decklink_video_sink_propose_allocation (GstBaseSink * bsink,
     GstQuery * query);
 
@@ -539,7 +540,7 @@ gst_decklink_video_sink_open (GstBaseSink * bsink)
   GstDecklinkVideoSink *self = GST_DECKLINK_VIDEO_SINK_CAST (bsink);
   const GstDecklinkMode *mode;
 
-  GST_DEBUG_OBJECT (self, "Starting");
+  GST_DEBUG_OBJECT (self, "Stopping");
 
   self->output =
       gst_decklink_acquire_nth_output (self->device_number,
@@ -557,6 +558,7 @@ gst_decklink_video_sink_open (GstBaseSink * bsink)
   self->output->start_scheduled_playback =
       gst_decklink_video_sink_start_scheduled_playback;
   self->output->clock_start_time = GST_CLOCK_TIME_NONE;
+  self->output->clock_epoch += self->output->clock_last_time;
   self->output->clock_last_time = 0;
   self->output->clock_offset = 0;
   g_mutex_unlock (&self->output->lock);
@@ -569,7 +571,7 @@ gst_decklink_video_sink_close (GstBaseSink * bsink)
 {
   GstDecklinkVideoSink *self = GST_DECKLINK_VIDEO_SINK_CAST (bsink);
 
-  GST_DEBUG_OBJECT (self, "Stopping");
+  GST_DEBUG_OBJECT (self, "Closing");
 
   if (self->output) {
     g_mutex_lock (&self->output->lock);
@@ -580,10 +582,26 @@ gst_decklink_video_sink_close (GstBaseSink * bsink)
     g_mutex_unlock (&self->output->lock);
 
     self->output->output->DisableVideoOutput ();
-    self->output->output->SetScheduledFrameCompletionCallback (NULL);
     gst_decklink_release_nth_output (self->device_number,
         GST_ELEMENT_CAST (self), FALSE);
     self->output = NULL;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+gst_decklink_video_sink_stop (GstDecklinkVideoSink * self)
+{
+  GST_DEBUG_OBJECT (self, "Stopping");
+
+  if (self->output && self->output->video_enabled) {
+    g_mutex_lock (&self->output->lock);
+    self->output->video_enabled = FALSE;
+    g_mutex_unlock (&self->output->lock);
+
+    self->output->output->DisableVideoOutput ();
+    self->output->output->SetScheduledFrameCompletionCallback (NULL);
   }
 
   return TRUE;
@@ -689,6 +707,7 @@ gst_decklink_video_sink_change_state (GstElement * element,
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       g_mutex_lock (&self->output->lock);
       self->output->clock_start_time = GST_CLOCK_TIME_NONE;
+      self->output->clock_epoch += self->output->clock_last_time;
       self->output->clock_last_time = 0;
       self->output->clock_offset = 0;
       g_mutex_unlock (&self->output->lock);
@@ -729,9 +748,11 @@ gst_decklink_video_sink_change_state (GstElement * element,
       gst_clock_set_calibration (self->output->clock, 0, 0, 1, 1);
       g_mutex_lock (&self->output->lock);
       self->output->clock_start_time = GST_CLOCK_TIME_NONE;
+      self->output->clock_epoch += self->output->clock_last_time;
       self->output->clock_last_time = 0;
       self->output->clock_offset = 0;
       g_mutex_unlock (&self->output->lock);
+      gst_decklink_video_sink_stop (self);
       break;
     case GST_STATE_CHANGE_PLAYING_TO_PAUSED:{
       GstClockTime start_time;

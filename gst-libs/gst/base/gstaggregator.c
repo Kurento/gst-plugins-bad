@@ -215,6 +215,8 @@ struct _GstAggregatorPadPrivate
   gboolean pending_flush_stop;
   gboolean pending_eos;
 
+  gboolean first_buffer;
+
   GQueue buffers;
   guint num_buffers;
   GstClockTime head_position;
@@ -311,6 +313,7 @@ typedef struct
   GstEvent *event;
   gboolean result;
   gboolean flush;
+  gboolean only_to_active_pads;
 
   gboolean one_actually_seeked;
 } EventData;
@@ -1086,6 +1089,8 @@ gst_aggregator_default_sink_event (GstAggregator * self,
         GST_OBJECT_UNLOCK (self);
       }
 
+      aggpad->priv->first_buffer = TRUE;
+
       /* We never forward the event */
       goto eat;
     }
@@ -1303,23 +1308,19 @@ gst_aggregator_release_pad (GstElement * element, GstPad * pad)
   SRC_UNLOCK (self);
 }
 
-static GstPad *
-gst_aggregator_request_new_pad (GstElement * element,
+static GstAggregatorPad *
+gst_aggregator_default_create_new_pad (GstAggregator * self,
     GstPadTemplate * templ, const gchar * req_name, const GstCaps * caps)
 {
-  GstAggregator *self;
   GstAggregatorPad *agg_pad;
-
-  GstElementClass *klass = GST_ELEMENT_GET_CLASS (element);
-  GstAggregatorPrivate *priv = GST_AGGREGATOR (element)->priv;
-
-  self = GST_AGGREGATOR (element);
+  GstElementClass *klass = GST_ELEMENT_GET_CLASS (self);
+  GstAggregatorPrivate *priv = self->priv;
 
   if (templ == gst_element_class_get_pad_template (klass, "sink_%u")) {
     gint serial = 0;
     gchar *name = NULL;
 
-    GST_OBJECT_LOCK (element);
+    GST_OBJECT_LOCK (self);
     if (req_name == NULL || strlen (req_name) < 6
         || !g_str_has_prefix (req_name, "sink_")) {
       /* no name given when requesting the pad, use next available int */
@@ -1336,9 +1337,28 @@ gst_aggregator_request_new_pad (GstElement * element,
         "name", name, "direction", GST_PAD_SINK, "template", templ, NULL);
     g_free (name);
 
-    GST_OBJECT_UNLOCK (element);
+    GST_OBJECT_UNLOCK (self);
 
+    return agg_pad;
   } else {
+    return NULL;
+  }
+}
+
+static GstPad *
+gst_aggregator_request_new_pad (GstElement * element,
+    GstPadTemplate * templ, const gchar * req_name, const GstCaps * caps)
+{
+  GstAggregator *self;
+  GstAggregatorPad *agg_pad;
+  GstAggregatorClass *klass = GST_AGGREGATOR_GET_CLASS (element);
+  GstAggregatorPrivate *priv = GST_AGGREGATOR (element)->priv;
+
+  self = GST_AGGREGATOR (element);
+
+  agg_pad = klass->create_new_pad (self, templ, req_name, caps);
+  if (!agg_pad) {
+    GST_ERROR_OBJECT (element, "Couldn't create new pad");
     return NULL;
   }
 
@@ -1554,17 +1574,21 @@ gst_aggregator_event_forward_func (GstPad * pad, gpointer user_data)
   GstAggregatorPad *aggpad = GST_AGGREGATOR_PAD (pad);
 
   if (peer) {
-    ret = gst_pad_send_event (peer, gst_event_ref (evdata->event));
-    GST_DEBUG_OBJECT (pad, "return of event push is %d", ret);
-    gst_object_unref (peer);
+    if (evdata->only_to_active_pads && aggpad->priv->first_buffer) {
+      GST_DEBUG_OBJECT (pad, "not sending event to inactive pad");
+      ret = TRUE;
+    } else {
+      ret = gst_pad_send_event (peer, gst_event_ref (evdata->event));
+      GST_DEBUG_OBJECT (pad, "return of event push is %d", ret);
+      gst_object_unref (peer);
+    }
   }
 
   if (ret == FALSE) {
-    if (GST_EVENT_TYPE (evdata->event) == GST_EVENT_SEEK)
-      GST_ERROR_OBJECT (pad, "Event %" GST_PTR_FORMAT " failed", evdata->event);
-
     if (GST_EVENT_TYPE (evdata->event) == GST_EVENT_SEEK) {
       GstQuery *seeking = gst_query_new_seeking (GST_FORMAT_TIME);
+
+      GST_DEBUG_OBJECT (pad, "Event %" GST_PTR_FORMAT " failed", evdata->event);
 
       if (gst_pad_query (peer, seeking)) {
         gboolean seekable;
@@ -1602,7 +1626,7 @@ gst_aggregator_event_forward_func (GstPad * pad, gpointer user_data)
 
 static EventData
 gst_aggregator_forward_event_to_all_sinkpads (GstAggregator * self,
-    GstEvent * event, gboolean flush)
+    GstEvent * event, gboolean flush, gboolean only_to_active_pads)
 {
   EventData evdata;
 
@@ -1610,6 +1634,7 @@ gst_aggregator_forward_event_to_all_sinkpads (GstAggregator * self,
   evdata.result = TRUE;
   evdata.flush = flush;
   evdata.one_actually_seeked = FALSE;
+  evdata.only_to_active_pads = only_to_active_pads;
 
   /* We first need to set all pads as flushing in a first pass
    * as flush_start flush_stop is sometimes sent synchronously
@@ -1669,7 +1694,8 @@ gst_aggregator_do_seek (GstAggregator * self, GstEvent * event)
   GST_OBJECT_UNLOCK (self);
 
   /* forward the seek upstream */
-  evdata = gst_aggregator_forward_event_to_all_sinkpads (self, event, flush);
+  evdata =
+      gst_aggregator_forward_event_to_all_sinkpads (self, event, flush, FALSE);
   event = NULL;
 
   if (!evdata.result || !evdata.one_actually_seeked) {
@@ -1712,7 +1738,12 @@ gst_aggregator_default_src_event (GstAggregator * self, GstEvent * event)
     }
   }
 
-  evdata = gst_aggregator_forward_event_to_all_sinkpads (self, event, FALSE);
+  /* Don't forward QOS events to pads that had no active buffer yet. Otherwise
+   * they will receive a QOS event that has earliest_time=0 (because we can't
+   * have negative timestamps), and consider their buffer as too late */
+  evdata =
+      gst_aggregator_forward_event_to_all_sinkpads (self, event, FALSE,
+      GST_EVENT_TYPE (event) == GST_EVENT_QOS);
   res = evdata.result;
 
 done:
@@ -1933,6 +1964,8 @@ gst_aggregator_class_init (GstAggregatorClass * klass)
   klass->src_event = gst_aggregator_default_src_event;
   klass->src_query = gst_aggregator_default_src_query;
 
+  klass->create_new_pad = gst_aggregator_default_create_new_pad;
+
   gstelement_class->request_new_pad =
       GST_DEBUG_FUNCPTR (gst_aggregator_request_new_pad);
   gstelement_class->send_event = GST_DEBUG_FUNCPTR (gst_aggregator_send_event);
@@ -2132,6 +2165,8 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
 
   buf_pts = GST_BUFFER_PTS (actual_buf);
 
+  aggpad->priv->first_buffer = FALSE;
+
   for (;;) {
     SRC_LOCK (self);
     PAD_LOCK (aggpad);
@@ -2197,8 +2232,6 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
         self->segment.position = start_time;
       else
         self->segment.position = MIN (start_time, self->segment.position);
-      self->segment.start = MIN (start_time, self->segment.start);
-      self->segment.time = MIN (start_time, self->segment.time);
 
       GST_DEBUG_OBJECT (self, "Selecting start time %" GST_TIME_FORMAT,
           GST_TIME_ARGS (start_time));
@@ -2417,6 +2450,8 @@ gst_aggregator_pad_init (GstAggregatorPad * pad)
 
   g_mutex_init (&pad->priv->flush_lock);
   g_mutex_init (&pad->priv->lock);
+
+  pad->priv->first_buffer = TRUE;
 }
 
 /**

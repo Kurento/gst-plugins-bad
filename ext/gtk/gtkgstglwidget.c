@@ -25,6 +25,7 @@
 #include <stdio.h>
 
 #include "gtkgstglwidget.h"
+#include "gstgtkutils.h"
 #include <gst/video/video.h>
 
 #if GST_GL_HAVE_WINDOW_X11 && GST_GL_HAVE_PLATFORM_GLX && defined (GDK_WINDOWING_X11)
@@ -51,8 +52,7 @@ GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
 G_DEFINE_TYPE_WITH_CODE (GtkGstGLWidget, gtk_gst_gl_widget, GTK_TYPE_GL_AREA,
     GST_DEBUG_CATEGORY_INIT (GST_CAT_DEFAULT, "gtkgstglwidget", 0,
-        "Gtk Gst GL Widget");
-    );
+        "Gtk Gst GL Widget"););
 
 #define GTK_GST_GL_WIDGET_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), \
     GTK_TYPE_GST_GL_WIDGET, GtkGstGLWidgetPrivate))
@@ -118,11 +118,18 @@ gtk_gst_gl_widget_init_redisplay (GtkGstGLWidget * gst_widget)
 {
   GtkGstGLWidgetPrivate *priv = gst_widget->priv;
   const GstGLFuncs *gl = priv->context->gl_vtable;
+  GError *error = NULL;
 
-  priv->shader = gst_gl_shader_new (priv->context);
+  gst_gl_insert_debug_marker (priv->other_context, "initializing redisplay");
+  if (!(priv->shader = gst_gl_shader_new_default (priv->context, &error))) {
+    GST_ERROR ("Failed to initialize shader: %s", error->message);
+    return;
+  }
 
-  gst_gl_shader_compile_with_default_vf_and_check (priv->shader,
-      &priv->attr_position, &priv->attr_texture);
+  priv->attr_position =
+      gst_gl_shader_get_attribute_location (priv->shader, "a_position");
+  priv->attr_texture =
+      gst_gl_shader_get_attribute_location (priv->shader, "a_texcoord");
 
   if (gl->GenVertexArrays) {
     gl->GenVertexArrays (1, &priv->vao);
@@ -206,6 +213,7 @@ _draw_black (GstGLContext * context)
 {
   const GstGLFuncs *gl = context->gl_vtable;
 
+  gst_gl_insert_debug_marker (context, "no buffer.  rendering black");
   gl->ClearColor (0.0, 0.0, 0.0, 0.0);
   gl->Clear (GL_COLOR_BUFFER_BIT);
 }
@@ -243,6 +251,10 @@ gtk_gst_gl_widget_render (GtkGLArea * widget, GdkGLContext * context)
       goto done;
     }
 
+    priv->current_tex = *(guint *) gl_frame.data[0];
+    gst_gl_insert_debug_marker (priv->other_context, "redrawing texture %u",
+        priv->current_tex);
+
     gst_gl_overlay_compositor_upload_overlays (priv->overlay_compositor,
         buffer);
 
@@ -251,8 +263,6 @@ gtk_gst_gl_widget_render (GtkGLArea * widget, GdkGLContext * context)
       gst_gl_sync_meta_set_sync_point (sync_meta, priv->context);
       gst_gl_sync_meta_wait (sync_meta, priv->other_context);
     }
-
-    priv->current_tex = *(guint *) gl_frame.data[0];
 
     gst_video_frame_unmap (&gl_frame);
 
@@ -270,58 +280,15 @@ gtk_gst_gl_widget_render (GtkGLArea * widget, GdkGLContext * context)
   _redraw_texture (GTK_GST_GL_WIDGET (widget), priv->current_tex);
   gst_gl_overlay_compositor_draw_overlays (priv->overlay_compositor);
 
+  gst_gl_insert_debug_marker (priv->other_context, "texture %u redrawn",
+      priv->current_tex);
+
 done:
   if (priv->other_context)
     gst_gl_context_activate (priv->other_context, FALSE);
 
   GTK_GST_BASE_WIDGET_UNLOCK (widget);
   return FALSE;
-}
-
-typedef void (*ThreadFunc) (gpointer data);
-
-struct invoke_context
-{
-  ThreadFunc func;
-  gpointer data;
-  GMutex lock;
-  GCond cond;
-  gboolean fired;
-};
-
-static gboolean
-_invoke_func (struct invoke_context *info)
-{
-  g_mutex_lock (&info->lock);
-  info->func (info->data);
-  info->fired = TRUE;
-  g_cond_signal (&info->cond);
-  g_mutex_unlock (&info->lock);
-
-  return G_SOURCE_REMOVE;
-}
-
-static void
-_invoke_on_main (ThreadFunc func, gpointer data)
-{
-  GMainContext *main_context = g_main_context_default ();
-  struct invoke_context info;
-
-  g_mutex_init (&info.lock);
-  g_cond_init (&info.cond);
-  info.fired = FALSE;
-  info.func = func;
-  info.data = data;
-
-  g_main_context_invoke (main_context, (GSourceFunc) _invoke_func, &info);
-
-  g_mutex_lock (&info.lock);
-  while (!info.fired)
-    g_cond_wait (&info.cond, &info.lock);
-  g_mutex_unlock (&info.lock);
-
-  g_mutex_clear (&info.lock);
-  g_cond_clear (&info.cond);
 }
 
 static void
@@ -380,7 +347,7 @@ gtk_gst_gl_widget_finalize (GObject * object)
   GtkGstBaseWidget *base_widget = GTK_GST_BASE_WIDGET (object);
 
   if (priv->other_context)
-    _invoke_on_main ((ThreadFunc) _reset_gl, base_widget);
+    gst_gtk_invoke_on_main ((GThreadFunc) _reset_gl, base_widget);
 
   if (priv->context)
     gst_object_unref (priv->context);
@@ -534,11 +501,11 @@ gtk_gst_gl_widget_init_winsys (GtkGstGLWidget * gst_widget)
 
   if (!priv->other_context) {
     GTK_GST_BASE_WIDGET_UNLOCK (gst_widget);
-    _invoke_on_main ((ThreadFunc) _get_gl_context, gst_widget);
+    gst_gtk_invoke_on_main ((GThreadFunc) _get_gl_context, gst_widget);
     GTK_GST_BASE_WIDGET_LOCK (gst_widget);
   }
 
-  if (!GST_GL_IS_CONTEXT (priv->other_context)) {
+  if (!GST_IS_GL_CONTEXT (priv->other_context)) {
     GTK_GST_BASE_WIDGET_UNLOCK (gst_widget);
     return FALSE;
   }

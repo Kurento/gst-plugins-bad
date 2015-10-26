@@ -150,7 +150,7 @@ static gboolean
 gst_gl_context_egl_choose_format (GstGLContext * context, GError ** error)
 {
 #if GST_GL_HAVE_WINDOW_X11
-  if (GST_GL_IS_WINDOW_X11 (context->window)) {
+  if (GST_IS_GL_WINDOW_X11 (context->window)) {
     GstGLWindow *window = gst_gl_context_get_window (context);
     GstGLWindowX11 *window_x11 = GST_GL_WINDOW_X11 (window);
     gint ret;
@@ -391,25 +391,25 @@ gst_gl_context_egl_create_context (GstGLContext * context,
   }
   /* FIXME do we want a window vfunc ? */
 #if GST_GL_HAVE_WINDOW_X11
-  if (GST_GL_IS_WINDOW_X11 (context->window)) {
+  if (GST_IS_GL_WINDOW_X11 (context->window)) {
     gst_gl_window_x11_create_window ((GstGLWindowX11 *) context->window);
   }
 #endif
 
   if (other_context == NULL) {
 #if GST_GL_HAVE_WINDOW_WAYLAND
-    if (GST_GL_IS_WINDOW_WAYLAND_EGL (context->window)) {
+    if (GST_IS_GL_WINDOW_WAYLAND_EGL (context->window)) {
       gst_gl_window_wayland_egl_create_window ((GstGLWindowWaylandEGL *)
           context->window);
     }
 #endif
 #if GST_GL_HAVE_WINDOW_WIN32
-    if (GST_GL_IS_WINDOW_WIN32 (context->window)) {
+    if (GST_IS_GL_WINDOW_WIN32 (context->window)) {
       gst_gl_window_win32_create_window ((GstGLWindowWin32 *) context->window);
     }
 #endif
 #if GST_GL_HAVE_WINDOW_DISPMANX
-    if (GST_GL_IS_WINDOW_DISPMANX_EGL (context->window)) {
+    if (GST_IS_GL_WINDOW_DISPMANX_EGL (context->window)) {
       gst_gl_window_dispmanx_egl_create_window ((GstGLWindowDispmanxEGL *)
           context->window);
     }
@@ -610,7 +610,7 @@ load_egl_module (gpointer user_data)
 #else
   /* On Linux the .so is only in -dev packages, try with a real soname
    * Proper compilers will optimize away the strcmp */
-  if (strcmp (G_MODULE_SUFFIX, "so") == 0)
+  if (g_strcmp0 (G_MODULE_SUFFIX, "so") == 0)
     module_egl = g_module_open ("libEGL.so.1", G_MODULE_BIND_LAZY);
 
   /* This automatically handles the suffix and even .la files */

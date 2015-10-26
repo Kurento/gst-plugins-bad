@@ -81,7 +81,8 @@ dump_bytes (guint8 * data, guint16 len)
 static void
 dump_rle_data (GstDVDSpu * dvdspu, guint8 * data, guint32 len)
 {
-  guint16 obj_h G_GNUC_UNUSED;
+#if DUMP_FULL_IMAGE
+  guint16 obj_h;
   guint16 obj_w;
   guint8 *end = data + len;
   guint x = 0;
@@ -141,7 +142,6 @@ dump_rle_data (GstDVDSpu * dvdspu, guint8 * data, guint32 len)
       }
     }
 
-#if DUMP_FULL_IMAGE
     {
       gint i;
 #if 1
@@ -159,7 +159,6 @@ dump_rle_data (GstDVDSpu * dvdspu, guint8 * data, guint32 len)
       PGS_DUMP ("Run x: %d pix: %d col: %d\n", x, run_len, pal_id);
 #endif
     }
-#endif
 
     x += run_len;
     if (!run_len || x > obj_w)
@@ -167,6 +166,7 @@ dump_rle_data (GstDVDSpu * dvdspu, guint8 * data, guint32 len)
   };
 
   PGS_DUMP ("\n");
+#endif
 }
 
 static void
@@ -484,8 +484,8 @@ parse_set_palette (GstDVDSpu * dvdspu, guint8 type, guint8 * payload,
     guint8 n, Y, U, V, A;
     n = payload[0];
     Y = payload[1];
-    U = payload[2];
-    V = payload[3];
+    V = payload[2];
+    U = payload[3];
     A = payload[4];
 
 #if DUMP_FULL_PALETTE

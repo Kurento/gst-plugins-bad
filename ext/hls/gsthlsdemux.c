@@ -57,22 +57,8 @@ static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
 GST_DEBUG_CATEGORY_STATIC (gst_hls_demux_debug);
 #define GST_CAT_DEFAULT gst_hls_demux_debug
 
-enum
-{
-  PROP_0,
-
-  PROP_FRAGMENTS_CACHE,
-  PROP_LAST
-};
-
-#define DEFAULT_FRAGMENTS_CACHE 1
-
 /* GObject */
-static void gst_hls_demux_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec);
-static void gst_hls_demux_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec);
-static void gst_hls_demux_dispose (GObject * obj);
+static void gst_hls_demux_finalize (GObject * obj);
 
 /* GstElement */
 static GstStateChangeReturn
@@ -81,8 +67,6 @@ gst_hls_demux_change_state (GstElement * element, GstStateChange transition);
 /* GstHLSDemux */
 static gboolean gst_hls_demux_update_playlist (GstHLSDemux * demux,
     gboolean update, GError ** err);
-static gboolean gst_hls_demux_set_location (GstHLSDemux * demux,
-    const gchar * uri, const gchar * base_uri);
 static gchar *gst_hls_src_buf_to_utf8_playlist (GstBuffer * buf);
 
 static gboolean gst_hls_demux_change_playlist (GstHLSDemux * demux,
@@ -125,14 +109,14 @@ static gboolean gst_hls_demux_get_live_seek_range (GstAdaptiveDemux * demux,
 G_DEFINE_TYPE (GstHLSDemux, gst_hls_demux, GST_TYPE_ADAPTIVE_DEMUX);
 
 static void
-gst_hls_demux_dispose (GObject * obj)
+gst_hls_demux_finalize (GObject * obj)
 {
   GstHLSDemux *demux = GST_HLS_DEMUX (obj);
 
   gst_hls_demux_reset (GST_ADAPTIVE_DEMUX_CAST (demux));
   gst_m3u8_client_free (demux->client);
 
-  G_OBJECT_CLASS (parent_class)->dispose (obj);
+  G_OBJECT_CLASS (parent_class)->finalize (obj);
 }
 
 static void
@@ -146,18 +130,7 @@ gst_hls_demux_class_init (GstHLSDemuxClass * klass)
   element_class = (GstElementClass *) klass;
   adaptivedemux_class = (GstAdaptiveDemuxClass *) klass;
 
-  gobject_class->set_property = gst_hls_demux_set_property;
-  gobject_class->get_property = gst_hls_demux_get_property;
-  gobject_class->dispose = gst_hls_demux_dispose;
-
-#ifndef GST_REMOVE_DEPRECATED
-  g_object_class_install_property (gobject_class, PROP_FRAGMENTS_CACHE,
-      g_param_spec_uint ("fragments-cache", "Fragments cache",
-          "Number of fragments needed to be cached to start playing "
-          "(DEPRECATED: Has no effect since 1.3.1)",
-          1, G_MAXUINT, DEFAULT_FRAGMENTS_CACHE,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_DEPRECATED));
-#endif
+  gobject_class->finalize = gst_hls_demux_finalize;
 
   element_class->change_state = GST_DEBUG_FUNCPTR (gst_hls_demux_change_state);
 
@@ -202,33 +175,6 @@ static void
 gst_hls_demux_init (GstHLSDemux * demux)
 {
   demux->do_typefind = TRUE;
-}
-
-static void
-gst_hls_demux_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec)
-{
-  switch (prop_id) {
-    case PROP_FRAGMENTS_CACHE:
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
-}
-
-static void
-gst_hls_demux_get_property (GObject * object, guint prop_id, GValue * value,
-    GParamSpec * pspec)
-{
-  switch (prop_id) {
-    case PROP_FRAGMENTS_CACHE:
-      g_value_set_uint (value, 1);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
 }
 
 static GstStateChangeReturn
@@ -416,8 +362,14 @@ gst_hls_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
   GstHLSDemux *hlsdemux = GST_HLS_DEMUX_CAST (demux);
   gchar *playlist = NULL;
 
-  gst_hls_demux_set_location (hlsdemux, demux->manifest_uri,
-      demux->manifest_base_uri);
+  if (hlsdemux->client)
+    gst_m3u8_client_free (hlsdemux->client);
+
+  hlsdemux->client =
+      gst_m3u8_client_new (demux->manifest_uri, demux->manifest_base_uri);
+
+  GST_INFO_OBJECT (demux, "Changed location: %s (base uri: %s)",
+      demux->manifest_uri, GST_STR_NULL (demux->manifest_base_uri));
 
   playlist = gst_hls_src_buf_to_utf8_playlist (buf);
   if (playlist == NULL) {
@@ -802,18 +754,6 @@ gst_hls_demux_reset (GstAdaptiveDemux * ademux)
   gst_hls_demux_decrypt_end (demux);
 }
 
-static gboolean
-gst_hls_demux_set_location (GstHLSDemux * demux, const gchar * uri,
-    const gchar * base_uri)
-{
-  if (demux->client)
-    gst_m3u8_client_free (demux->client);
-  demux->client = gst_m3u8_client_new (uri, base_uri);
-  GST_INFO_OBJECT (demux, "Changed location: %s (base uri: %s)", uri,
-      GST_STR_NULL (base_uri));
-  return TRUE;
-}
-
 static gchar *
 gst_hls_src_buf_to_utf8_playlist (GstBuffer * buf)
 {
@@ -955,18 +895,26 @@ retry:
    * three fragments before the end of the list */
   if (update == FALSE && demux->client->current &&
       gst_m3u8_client_is_live (demux->client)) {
-    gint64 last_sequence;
+    gint64 last_sequence, first_sequence;
 
     GST_M3U8_CLIENT_LOCK (demux->client);
     last_sequence =
         GST_M3U8_MEDIA_FILE (g_list_last (demux->client->current->
             files)->data)->sequence;
+    first_sequence =
+        GST_M3U8_MEDIA_FILE (demux->client->current->files->data)->sequence;
 
+    GST_DEBUG_OBJECT (demux,
+        "sequence:%" G_GINT64_FORMAT " , first_sequence:%" G_GINT64_FORMAT
+        " , last_sequence:%" G_GINT64_FORMAT, demux->client->sequence,
+        first_sequence, last_sequence);
     if (demux->client->sequence >= last_sequence - 3) {
-      GST_DEBUG_OBJECT (demux, "Sequence is beyond playlist. Moving back to %u",
-          (guint) (last_sequence - 3));
       //demux->need_segment = TRUE;
-      demux->client->sequence = last_sequence - 3;
+      /* Make sure we never go below the minimum sequence number */
+      demux->client->sequence = MAX (first_sequence, last_sequence - 3);
+      GST_DEBUG_OBJECT (demux,
+          "Sequence is beyond playlist. Moving back to %" G_GINT64_FORMAT,
+          demux->client->sequence);
     }
     GST_M3U8_CLIENT_UNLOCK (demux->client);
   } else if (demux->client->current && !gst_m3u8_client_is_live (demux->client)) {

@@ -403,7 +403,7 @@ gst_wayland_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
     g_value_init (&list, GST_TYPE_LIST);
     g_value_init (&value, G_TYPE_STRING);
 
-    formats = sink->display->formats;
+    formats = sink->display->shm_formats;
     for (i = 0; i < formats->len; i++) {
       fmt = g_array_index (formats, uint32_t, i);
       g_value_set_string (&value, gst_wl_shm_format_to_string (fmt));
@@ -454,7 +454,7 @@ gst_wayland_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
     goto invalid_format;
 
   /* verify we support the requested format */
-  formats = sink->display->formats;
+  formats = sink->display->shm_formats;
   for (i = 0; i < formats->len; i++) {
     if (g_array_index (formats, uint32_t, i) == format)
       break;
@@ -652,7 +652,7 @@ gst_wayland_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
 
       /* the first time we acquire a buffer,
        * we need to attach a wl_buffer on it */
-      wlbuffer = gst_buffer_get_wl_buffer (buffer);
+      wlbuffer = gst_buffer_get_wl_buffer (to_render);
       if (G_UNLIKELY (!wlbuffer)) {
         mem = gst_buffer_peek_memory (to_render, 0);
         wbuf = gst_wl_shm_memory_construct_wl_buffer (mem, sink->display,
@@ -660,7 +660,7 @@ gst_wayland_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
         if (G_UNLIKELY (!wbuf))
           goto no_wl_buffer;
 
-        gst_buffer_add_wl_buffer (buffer, wbuf, sink->display);
+        gst_buffer_add_wl_buffer (to_render, wbuf, sink->display);
       }
 
       gst_buffer_map (buffer, &src, GST_MAP_READ);

@@ -49,6 +49,8 @@
 #include <gst/video/video.h>
 #include <gst/video/navigation.h>
 
+#include <cv.h>
+
 #include "gstopencvvideofilter.h"
 /* opencv */
 #include <opencv2/core/version.hpp>
@@ -83,20 +85,19 @@ struct _GstHanddetect
   gchar *profile_fist;
   gchar *profile_palm;
   /* region of interest */
-  guint roi_x;
-  guint roi_y;
-  guint roi_width;
-  guint roi_height;
+  gint roi_x;
+  gint roi_y;
+  gint roi_width;
+  gint roi_height;
 
   /* opencv
    * cvGray - image to gray colour
    */
   IplImage *cvGray;
-  CvHaarClassifierCascade *cvCascade_fist;
-  CvHaarClassifierCascade *cvCascade_palm;
-  CvMemStorage *cvStorage;
-  CvRect *prev_r;
-  CvRect *best_r;
+  cv::CascadeClassifier *cvCascade_fist;
+  cv::CascadeClassifier *cvCascade_palm;
+  cv::Rect *prev_r;
+  cv::Rect *best_r;
 };
 
 struct _GstHanddetectClass

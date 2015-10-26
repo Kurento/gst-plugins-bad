@@ -33,8 +33,8 @@ G_BEGIN_DECLS
 #define GST_GL_TYPE_WINDOW         (gst_gl_window_get_type())
 #define GST_GL_WINDOW(o)           (G_TYPE_CHECK_INSTANCE_CAST((o), GST_GL_TYPE_WINDOW, GstGLWindow))
 #define GST_GL_WINDOW_CLASS(k)     (G_TYPE_CHECK_CLASS_CAST((k), GST_GL_TYPE_WINDOW, GstGLWindowClass))
-#define GST_GL_IS_WINDOW(o)        (G_TYPE_CHECK_INSTANCE_TYPE((o), GST_GL_TYPE_WINDOW))
-#define GST_GL_IS_WINDOW_CLASS(k)  (G_TYPE_CHECK_CLASS_TYPE((k), GST_GL_TYPE_WINDOW))
+#define GST_IS_GL_WINDOW(o)        (G_TYPE_CHECK_INSTANCE_TYPE((o), GST_GL_TYPE_WINDOW))
+#define GST_IS_GL_WINDOW_CLASS(k)  (G_TYPE_CHECK_CLASS_TYPE((k), GST_GL_TYPE_WINDOW))
 #define GST_GL_WINDOW_GET_CLASS(o) (G_TYPE_INSTANCE_GET_CLASS((o), GST_GL_TYPE_WINDOW, GstGLWindowClass))
 
 #define GST_GL_WINDOW_LOCK(w) g_mutex_lock(&GST_GL_WINDOW(w)->lock)
@@ -108,7 +108,6 @@ struct _GstGLWindow {
  * @set_window_handle: Set a window to render into
  * @get_window_handle: Gets the current window that this #GstGLWindow is
  *                     rendering into
- * @draw_unlocked: redraw the window with the specified dimensions
  * @draw: redraw the window with the specified dimensions
  * @run: run the mainloop
  * @quit: send a quit to the mainloop
@@ -131,7 +130,6 @@ struct _GstGLWindowClass {
   guintptr (*get_display)        (GstGLWindow *window);
   void     (*set_window_handle)  (GstGLWindow *window, guintptr id);
   guintptr (*get_window_handle)  (GstGLWindow *window);
-  void     (*draw_unlocked)      (GstGLWindow *window);
   void     (*draw)               (GstGLWindow *window);
   void     (*run)                (GstGLWindow *window);
   void     (*quit)               (GstGLWindow *window);
@@ -216,7 +214,6 @@ void     gst_gl_window_send_mouse_event     (GstGLWindow * window,
 
 /* surfaces/rendering */
 void     gst_gl_window_queue_resize         (GstGLWindow *window);
-void     gst_gl_window_draw_unlocked        (GstGLWindow *window);
 void     gst_gl_window_draw                 (GstGLWindow *window);
 void     gst_gl_window_show                 (GstGLWindow *window);
 void     gst_gl_window_set_preferred_size   (GstGLWindow * window,

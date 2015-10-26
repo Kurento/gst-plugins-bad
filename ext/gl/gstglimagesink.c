@@ -409,7 +409,7 @@ gst_glimage_sink_navigation_send_event (GstNavigation * navigation, GstStructure
     return;
 
   window = gst_gl_context_get_window (sink->context);
-  g_return_if_fail (GST_GL_IS_WINDOW (window));
+  g_return_if_fail (GST_IS_GL_WINDOW (window));
 
   width = GST_VIDEO_SINK_WIDTH (sink);
   height = GST_VIDEO_SINK_HEIGHT (sink);
@@ -914,6 +914,8 @@ gst_glimage_sink_set_context (GstElement * element, GstContext * context)
 
   if (gl_sink->display)
     gst_gl_display_filter_gl_api (gl_sink->display, SUPPORTED_GL_APIS);
+
+  GST_ELEMENT_CLASS (parent_class)->set_context (element, context);
 }
 
 static GstStateChangeReturn
@@ -935,11 +937,11 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         return GST_STATE_CHANGE_FAILURE;
 
       gst_gl_display_filter_gl_api (glimage_sink->display, SUPPORTED_GL_APIS);
-      break;
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
+
       if (!_ensure_gl_setup (glimage_sink))
         return GST_STATE_CHANGE_FAILURE;
-
+      break;
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
       glimage_sink->overlay_compositor =
           gst_gl_overlay_compositor_new (glimage_sink->context);
 
@@ -997,7 +999,9 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         gst_caps_unref (glimage_sink->out_caps);
         glimage_sink->out_caps = NULL;
       }
-
+      break;
+    }
+    case GST_STATE_CHANGE_READY_TO_NULL:
       if (glimage_sink->context) {
         GstGLWindow *window = gst_gl_context_get_window (glimage_sink->context);
 
@@ -1022,9 +1026,7 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         gst_object_unref (glimage_sink->context);
         glimage_sink->context = NULL;
       }
-      break;
-    }
-    case GST_STATE_CHANGE_READY_TO_NULL:
+
       if (glimage_sink->other_context) {
         gst_object_unref (glimage_sink->other_context);
         glimage_sink->other_context = NULL;
@@ -1680,13 +1682,23 @@ static void
 gst_glimage_sink_thread_init_redisplay (GstGLImageSink * gl_sink)
 {
   const GstGLFuncs *gl = gl_sink->context->gl_vtable;
+  GError *error = NULL;
 
-  gl_sink->redisplay_shader = gst_gl_shader_new (gl_sink->context);
-
-  if (!gst_gl_shader_compile_with_default_vf_and_check
-      (gl_sink->redisplay_shader, &gl_sink->attr_position,
-          &gl_sink->attr_texture))
+  if (!(gl_sink->redisplay_shader =
+          gst_gl_shader_new_link_with_stages (gl_sink->context, &error,
+              gst_glsl_stage_new_default_vertex (gl_sink->context),
+              gst_glsl_stage_new_default_fragment (gl_sink->context), NULL))) {
+    GST_ERROR_OBJECT (gl_sink, "Failed to link shader: %s", error->message);
     gst_glimage_sink_cleanup_glthread (gl_sink);
+    return;
+  }
+
+  gl_sink->attr_position =
+      gst_gl_shader_get_attribute_location (gl_sink->redisplay_shader,
+      "a_position");
+  gl_sink->attr_texture =
+      gst_gl_shader_get_attribute_location (gl_sink->redisplay_shader,
+      "a_texcoord");
 
   if (gl->GenVertexArrays) {
     gl->GenVertexArrays (1, &gl_sink->vao);
@@ -1781,6 +1793,9 @@ gst_glimage_sink_on_resize (GstGLImageSink * gl_sink, gint width, gint height)
         gst_event_new_reconfigure ());
   }
 
+  gst_gl_insert_debug_marker (gl_sink->context, "%s window resize to %ix%i",
+      GST_OBJECT_NAME (gl_sink), width, height);
+
   /* default reshape */
   if (!do_reshape) {
     if (gl_sink->keep_aspect_ratio) {
@@ -1850,6 +1865,8 @@ gst_glimage_sink_on_draw (GstGLImageSink * gl_sink)
   window->is_drawing = TRUE;
 
   /* opengl scene */
+  gst_gl_insert_debug_marker (gl_sink->context, "%s element drawing texture %u",
+      GST_OBJECT_NAME (gl_sink), gl_sink->redisplay_texture);
   GST_TRACE ("redrawing texture:%u", gl_sink->redisplay_texture);
 
   sync_meta = gst_buffer_get_gl_sync_meta (gl_sink->stored_sync);

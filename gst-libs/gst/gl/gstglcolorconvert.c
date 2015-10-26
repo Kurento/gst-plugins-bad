@@ -22,6 +22,7 @@
 #include "config.h"
 #endif
 
+#include <string.h>
 #include <stdio.h>
 
 #include "gl.h"
@@ -1355,9 +1356,8 @@ _init_convert (GstGLColorConvert * convert)
   if (!info->frag_prog || info->in_n_textures == 0 || info->out_n_textures == 0)
     goto unhandled_format;
 
-  /* multiple draw targets not supported on GLES2...yet */
-  if (info->out_n_textures > 1 && (!gl->DrawBuffers ||
-          USING_GLES2 (convert->context))) {
+  /* multiple draw targets not supported on GLES2... */
+  if (info->out_n_textures > 1 && !gl->DrawBuffers) {
     g_free (info->frag_prog);
     GST_ERROR ("Conversion requires output to multiple draw buffers");
     goto incompatible_api;
@@ -1732,6 +1732,10 @@ _do_convert (GstGLContext * context, GstGLColorConvert * convert)
   else
     views = 1;
 
+  gst_gl_insert_debug_marker (context, "%s converting from %s to %s",
+      GST_OBJECT_NAME (convert),
+      gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (in_info)),
+      gst_video_format_to_string (GST_VIDEO_INFO_FORMAT (&convert->out_info)));
   /* Handle all views on input and output one at a time */
   for (v = 0; res && v < views; v++)
     res = _do_convert_one_view (context, convert, v);

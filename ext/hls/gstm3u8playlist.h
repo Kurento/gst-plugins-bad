@@ -23,21 +23,10 @@
 #define __GST_M3U8_PLAYLIST_H__
 
 #include <glib.h>
-#include <gio/gio.h>
 
 G_BEGIN_DECLS
 
 typedef struct _GstM3U8Playlist GstM3U8Playlist;
-typedef struct _GstM3U8Entry GstM3U8Entry;
-
-
-struct _GstM3U8Entry
-{
-  gfloat duration;
-  gchar *title;
-  gchar *url;
-  gboolean discontinuous;
-};
 
 struct _GstM3U8Playlist
 {
@@ -50,23 +39,24 @@ struct _GstM3U8Playlist
 
   /*< Private >*/
   GQueue *entries;
-  GString *playlist_str;
 };
 
 
 GstM3U8Playlist * gst_m3u8_playlist_new (guint version, 
 				         guint window_size,
 					 gboolean allow_cache);
-void gst_m3u8_playlist_free (GstM3U8Playlist * playlist);
-gboolean gst_m3u8_playlist_add_entry (GstM3U8Playlist * playlist,
-    				     const gchar * url,
-				     const gchar *title,
-				     gfloat duration,
-				     guint index,
-				     gboolean discontinuous);
-gchar * gst_m3u8_playlist_render (GstM3U8Playlist * playlist); 
-void gst_m3u8_playlist_clear (GstM3U8Playlist * playlist); 
-guint gst_m3u8_playlist_n_entries (GstM3U8Playlist * playlist); 
+
+void              gst_m3u8_playlist_free (GstM3U8Playlist * playlist);
+
+gboolean          gst_m3u8_playlist_add_entry (GstM3U8Playlist * playlist,
+                                               const gchar     * url,
+                                               const gchar     * title,
+                                               gfloat            duration,
+                                               guint             index,
+                                               gboolean          discontinuous);
+
+gchar *           gst_m3u8_playlist_render (GstM3U8Playlist * playlist);
 
 G_END_DECLS
+
 #endif /* __M3U8_H__ */

@@ -325,7 +325,6 @@ gst_adaptive_demux_init (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxClass * klass)
 {
   GstPadTemplate *pad_template;
-  GstPad *pad;
 
   GST_DEBUG_OBJECT (demux, "gst_adaptive_demux_init");
 
@@ -355,7 +354,7 @@ gst_adaptive_demux_init (GstAdaptiveDemux * demux,
       gst_element_class_get_pad_template (GST_ELEMENT_CLASS (klass), "sink");
   g_return_if_fail (pad_template != NULL);
 
-  demux->sinkpad = pad = gst_pad_new_from_template (pad_template, "sink");
+  demux->sinkpad = gst_pad_new_from_template (pad_template, "sink");
   gst_pad_set_event_function (demux->sinkpad,
       GST_DEBUG_FUNCPTR (gst_adaptive_demux_sink_event));
   gst_pad_set_chain_function (demux->sinkpad,
@@ -1928,6 +1927,10 @@ gst_adaptive_demux_stream_download_uri (GstAdaptiveDemux * demux,
   if (gst_element_set_state (stream->src,
           GST_STATE_READY) != GST_STATE_CHANGE_FAILURE) {
     if (start != 0 || end != -1) {
+      /* HTTP ranges are inclusive, GStreamer segments are exclusive for the
+       * stop position */
+      if (end != -1)
+        end += 1;
       if (!gst_element_send_event (stream->src, gst_event_new_seek (1.0,
                   GST_FORMAT_BYTES, (GstSeekFlags) GST_SEEK_FLAG_FLUSH,
                   GST_SEEK_TYPE_SET, start, GST_SEEK_TYPE_SET, end))) {

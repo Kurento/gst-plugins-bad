@@ -37,11 +37,16 @@ typedef struct _GstGLFilterShaderClass GstGLFilterShaderClass;
 struct _GstGLFilterShader
 {
   GstGLFilter filter;
-  GstGLShader *shader0;
-  int compiled;
-  gchar *filename;
-  gchar *presetfile;
-  int texSet;
+
+  /* properties */
+  GstGLShader *shader;
+  gchar *vertex;
+  gchar *fragment;
+  gboolean update_shader; /* update the shader on the next draw */
+  GstStructure *uniforms;
+
+  gboolean new_source;
+  gboolean new_uniforms;
   gdouble time;
 
   gint attr_position_loc;

@@ -150,6 +150,8 @@ gst_gl_base_filter_set_context (GstElement * element, GstContext * context)
   if (filter->display)
     gst_gl_display_filter_gl_api (filter->display,
         filter_class->supported_gl_api);
+
+  GST_ELEMENT_CLASS (parent_class)->set_context (element, context);
 }
 
 static gboolean
@@ -294,6 +296,9 @@ gst_gl_base_filter_gl_start (GstGLContext * context, gpointer data)
   GstGLBaseFilter *filter = GST_GL_BASE_FILTER (data);
   GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
 
+  gst_gl_insert_debug_marker (filter->context,
+      "starting element %s", GST_OBJECT_NAME (filter));
+
   if (filter_class->gl_start) {
     filter->priv->gl_result = filter_class->gl_start (filter);
   } else {
@@ -308,6 +313,9 @@ gst_gl_base_filter_gl_stop (GstGLContext * context, gpointer data)
 {
   GstGLBaseFilter *filter = GST_GL_BASE_FILTER (data);
   GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
+
+  gst_gl_insert_debug_marker (filter->context,
+      "stopping element %s", GST_OBJECT_NAME (filter));
 
   if (filter->priv->gl_started) {
     if (filter_class->gl_stop)

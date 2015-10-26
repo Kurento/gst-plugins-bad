@@ -2567,7 +2567,9 @@ GST_START_TEST (dash_mpdparser_various_duration_formats)
   ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
   assert_equals_int (ret, TRUE);
 
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   periodNode =
@@ -2643,7 +2645,9 @@ GST_START_TEST (dash_mpdparser_setup_media_presentation)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   gst_mpd_client_free (mpdclient);
@@ -2678,7 +2682,9 @@ GST_START_TEST (dash_mpdparser_setup_streaming)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the first adaptation set of the first period */
@@ -2725,7 +2731,9 @@ GST_START_TEST (dash_mpdparser_period_selection)
   fail_unless (mpdclient->periods == NULL);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* check the periods */
@@ -2791,7 +2799,9 @@ GST_START_TEST (dash_mpdparser_get_period_at_time)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* request period for a time before availabilityStartTime, expect period index 0 */
@@ -2858,7 +2868,9 @@ GST_START_TEST (dash_mpdparser_adaptationSet_handling)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* period0 has 1 adaptation set */
@@ -2920,7 +2932,9 @@ GST_START_TEST (dash_mpdparser_representation_selection)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   adaptationSets = gst_mpd_client_get_adaptation_sets (mpdclient);
@@ -2993,7 +3007,9 @@ GST_START_TEST (dash_mpdparser_activeStream_selection)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3064,7 +3080,8 @@ GST_START_TEST (dash_mpdparser_activeStream_parameters)
   GstAdaptationSetNode *adapt_set;
   guint activeStreams;
   GstActiveStream *activeStream;
-  const gchar *mimeType;
+  GstCaps *caps;
+  GstStructure *s;
   gboolean bitstreamSwitchingFlag;
   guint videoStreamWidth;
   guint videoStreamHeight;
@@ -3093,7 +3110,9 @@ GST_START_TEST (dash_mpdparser_activeStream_parameters)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3115,8 +3134,11 @@ GST_START_TEST (dash_mpdparser_activeStream_parameters)
   fail_if (activeStream == NULL);
 
   assert_equals_int (activeStream->mimeType, GST_STREAM_VIDEO);
-  mimeType = gst_mpd_client_get_stream_mimeType (activeStream);
-  assert_equals_string (mimeType, "video/quicktime");
+  caps = gst_mpd_client_get_stream_caps (activeStream);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  assert_equals_string (gst_structure_get_name (s), "video/quicktime");
+  gst_caps_unref (caps);
 
   bitstreamSwitchingFlag =
       gst_mpd_client_get_bitstream_switching_flag (activeStream);
@@ -3177,7 +3199,9 @@ GST_START_TEST (dash_mpdparser_get_audio_languages)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3226,7 +3250,9 @@ setup_mpd_client (const gchar * xml)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3451,7 +3477,9 @@ GST_START_TEST (dash_mpdparser_get_streamPresentationOffset)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3523,7 +3551,9 @@ GST_START_TEST (dash_mpdparser_segments)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3664,7 +3694,9 @@ GST_START_TEST (dash_mpdparser_headers)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3738,7 +3770,9 @@ GST_START_TEST (dash_mpdparser_fragments)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3885,7 +3919,9 @@ GST_START_TEST (dash_mpdparser_inherited_segmentURL)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -3990,7 +4026,9 @@ GST_START_TEST (dash_mpdparser_segment_list)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -4044,6 +4082,7 @@ GST_START_TEST (dash_mpdparser_segment_template)
   GstClockTime expectedDuration;
   GstClockTime expectedTimestamp;
   GstClockTime periodStartTime;
+  GstClockTime offset;
   const gchar *xml =
       "<?xml version=\"1.0\"?>"
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
@@ -4054,6 +4093,7 @@ GST_START_TEST (dash_mpdparser_segment_template)
       "    <AdaptationSet mimeType=\"video/mp4\">"
       "      <Representation id=\"repId\" bandwidth=\"250000\">"
       "        <SegmentTemplate duration=\"12000\""
+      "                         presentationTimeOffset=\"15\""
       "                         media=\"TestMedia_rep=$RepresentationID$number=$Number$bandwidth=$Bandwidth$time=$Time$\""
       "                         index=\"TestIndex\">"
       "        </SegmentTemplate>"
@@ -4066,7 +4106,9 @@ GST_START_TEST (dash_mpdparser_segment_template)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -4110,6 +4152,9 @@ GST_START_TEST (dash_mpdparser_segment_template)
 
   periodStartTime = gst_mpd_parser_get_period_start_time (mpdclient);
   assert_equals_uint64 (periodStartTime, 10 * GST_SECOND);
+
+  offset = gst_mpd_parser_get_stream_presentation_offset (mpdclient, 0);
+  assert_equals_uint64 (offset, 15 * GST_SECOND);
 
   gst_media_fragment_info_clear (&fragment);
 
@@ -4167,7 +4212,9 @@ GST_START_TEST (dash_mpdparser_segment_timeline)
   assert_equals_int (ret, TRUE);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* get the list of adaptation sets of the first period */
@@ -4343,7 +4390,9 @@ GST_START_TEST (dash_mpdparser_wrong_period_duration_inferred_from_next_period)
   fail_unless (mpdclient->periods == NULL);
 
   /* process the xml data */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, TRUE);
 
   /* Period0 should be present */
@@ -4388,7 +4437,9 @@ GST_START_TEST
   /* process the xml data
    * should fail due to wrong duration in Period0 (start > mediaPresentationDuration)
    */
-  ret = gst_mpd_client_setup_media_presentation (mpdclient);
+  ret =
+      gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
   assert_equals_int (ret, FALSE);
 
   gst_mpd_client_free (mpdclient);

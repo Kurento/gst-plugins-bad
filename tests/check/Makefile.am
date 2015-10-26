@@ -205,6 +205,7 @@ check_gl=libs/gstglcontext \
     libs/gstglmemory \
     libs/gstglupload \
     libs/gstglcolorconvert \
+    libs/gstglsl \
     elements/glimagesink
 else
 check_gl=
@@ -248,7 +249,6 @@ check_PROGRAMS = \
 	elements/audiointerleave \
 	elements/audiomixer \
 	elements/asfmux \
-	elements/baseaudiovisualizer \
 	elements/camerabin \
 	elements/dataurisrc \
 	elements/gdppay \
@@ -398,15 +398,6 @@ elements_voaacenc_LDADD = \
 	$(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) $(LDADD) \
 	-lgstaudio-@GST_API_VERSION@
 
-elements_baseaudiovisualizer_SOURCES = elements/baseaudiovisualizer.c
-elements_baseaudiovisualizer_CFLAGS = $(GST_PLUGINS_BAD_CFLAGS) \
-	$(GST_PLUGINS_BASE_CFLAGS) \
-	$(GST_BASE_CFLAGS) $(GST_CONTROLLER_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS)
-elements_baseaudiovisualizer_LDADD = \
-	$(GST_PLUGINS_BASE_LIBS) -lgstaudio-@GST_API_VERSION@  \
-	-lgstvideo-@GST_API_VERSION@ 	$(GST_BASE_LIBS) $(GST_CONTROLLER_LIBS) \
-	$(GST_LIBS) $(LDADD)
-
 elements_camerabin_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
 	$(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS) -DGST_USE_UNSTABLE_API
@@ -441,8 +432,9 @@ elements_mpg123audiodec_LDADD = \
 elements_uvch264demux_CFLAGS = -DUVCH264DEMUX_DATADIR="$(srcdir)/elements/uvch264demux_data" \
 				$(AM_CFLAGS)
 
-elements_dash_mpd_CFLAGS = $(AM_CFLAGS) $(LIBXML2_CFLAGS)
-elements_dash_mpd_LDADD = $(LDADD) $(LIBXML2_LIBS)
+elements_dash_mpd_CFLAGS = $(AM_CFLAGS) $(GST_PLUGINS_BAD_CFLAGS) $(LIBXML2_CFLAGS)
+elements_dash_mpd_LDADD = $(LDADD) $(LIBXML2_LIBS) \
+	$(top_builddir)/gst-libs/gst/uridownloader/libgsturidownloader-@GST_API_VERSION@.la
 elements_dash_mpd_SOURCES = elements/dash_mpd.c
 
 pipelines_streamheader_CFLAGS = $(GIO_CFLAGS) $(AM_CFLAGS)
@@ -513,6 +505,15 @@ libs_gstglcolorconvert_LDADD = \
 	$(top_builddir)/gst-libs/gst/gl/libgstgl-@GST_API_VERSION@.la \
 	$(GST_PLUGINS_BASE_LIBS) -lgstvideo-$(GST_API_VERSION) \
 	$(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
+
+libs_gstglsl_LDADD = \
+	$(top_builddir)/gst-libs/gst/gl/libgstgl-@GST_API_VERSION@.la \
+	$(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
+
+libs_gstglsl_CFLAGS = \
+	$(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
+	-DGST_USE_UNSTABLE_API \
+	$(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS)
 
 elements_glimagesink_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \

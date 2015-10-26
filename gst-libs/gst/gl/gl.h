@@ -31,9 +31,11 @@
 #include <gst/gl/gstglapi.h>
 #include <gst/gl/gstgldisplay.h>
 #include <gst/gl/gstglcontext.h>
+#include <gst/gl/gstgldebug.h>
 #include <gst/gl/gstglfeature.h>
 #include <gst/gl/gstglutils.h>
 #include <gst/gl/gstglwindow.h>
+#include <gst/gl/gstglslstage.h>
 #include <gst/gl/gstglshader.h>
 #include <gst/gl/gstglcolorconvert.h>
 #include <gst/gl/gstglupload.h>
@@ -46,7 +48,6 @@
 #include <gst/gl/gstglbasefilter.h>
 #include <gst/gl/gstglviewconvert.h>
 #include <gst/gl/gstglfilter.h>
-#include <gst/gl/gstglshadervariables.h>
 #include <gst/gl/gstglsyncmeta.h>
 #include <gst/gl/gstgloverlaycompositor.h>
 

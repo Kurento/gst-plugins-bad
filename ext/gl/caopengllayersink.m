@@ -476,6 +476,8 @@ gst_ca_opengl_layer_sink_set_context (GstElement * element, GstContext * context
 
   if (ca_sink->display)
     gst_gl_display_filter_gl_api (ca_sink->display, SUPPORTED_GL_APIS);
+
+  GST_ELEMENT_CLASS (parent_class)->set_context (element, context);
 }
 
 static GstStateChangeReturn
@@ -887,13 +889,20 @@ static void
 gst_ca_opengl_layer_sink_thread_init_redisplay (GstCAOpenGLLayerSink * ca_sink)
 {
   const GstGLFuncs *gl = ca_sink->context->gl_vtable;
+  GError *error = NULL;
 
-  ca_sink->redisplay_shader = gst_gl_shader_new (ca_sink->context);
-
-  if (!gst_gl_shader_compile_with_default_vf_and_check
-      (ca_sink->redisplay_shader, &ca_sink->attr_position,
-          &ca_sink->attr_texture))
+  if (!(ca_sink->redisplay_shader = gst_gl_shader_new_default (ca_sink->context, &error))) {
+    GST_ERROR_OBJECT (ca_sink, "Failed to link shader: %s", error->message);
     gst_ca_opengl_layer_sink_cleanup_glthread (ca_sink);
+    return;
+  }
+
+  ca_sink->attr_position =
+      gst_gl_shader_get_attribute_location (ca_sink->redisplay_shader,
+      "a_position");
+  ca_sink->attr_texture =
+      gst_gl_shader_get_attribute_location (ca_sink->redisplay_shader,
+      "a_texcoord");
 
   if (gl->GenVertexArrays) {
     gl->GenVertexArrays (1, &ca_sink->vao);

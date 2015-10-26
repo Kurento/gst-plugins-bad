@@ -11,13 +11,15 @@ built_sys_header_configure = gstglconfig.h
 libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstgldisplay.c \
 	gstglcontext.c \
+	gstgldebug.c \
 	gstglbasebuffer.c \
 	gstglmemory.c \
 	gstglbufferpool.c \
 	gstglfilter.c \
 	gstglbasefilter.c \
 	gstglshader.c \
-	gstglshadervariables.c \
+	gstglsl.c \
+	gstglslstage.c \
 	gstglcolorconvert.c \
 	gstgldownload.c \
 	gstglupload.c \
@@ -30,6 +32,7 @@ libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstglsyncmeta.c \
 	gstglviewconvert.c \
 	gstgloverlaycompositor.c \
+	gstglsl_private.h \
 	utils/opengl_versions.h
 
 libgstgl_@GST_API_VERSION@includedir = $(includedir)/gstreamer-@GST_API_VERSION@/gst/gl
@@ -37,13 +40,15 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglwindow.h \
 	gstgldisplay.h \
 	gstglcontext.h \
+	gstgldebug.h \
 	gstglbasebuffer.h \
 	gstglmemory.h \
 	gstglbufferpool.h \
 	gstglfilter.h \
 	gstglbasefilter.h \
-	gstglshadervariables.h \
 	gstglshader.h \
+	gstglsl.h \
+	gstglslstage.h \
 	gstglcolorconvert.h \
 	gstgldownload.h \
 	gstgluploadmeta.h \
@@ -143,6 +148,7 @@ GstGL-@GST_API_VERSION@.gir: $(INTROSPECTION_SCANNER) libgstgl-@GST_API_VERSION@
 		-I$(top_srcdir)/gst-libs \
 		-I$(top_builddir)/gst-libs \
 		$(GST_PLUGINS_BASE_CFLAGS) \
+		$(GL_CFLAGS) \
 		--add-include-path=`PKG_CONFIG_PATH="$(GST_PKG_CONFIG_PATH)" $(PKG_CONFIG) --variable=girdir gstreamer-@GST_API_VERSION@` \
 		--add-include-path=`PKG_CONFIG_PATH="$(GST_PKG_CONFIG_PATH)" $(PKG_CONFIG) --variable=girdir gstreamer-base-@GST_API_VERSION@` \
 		--library=libgstgl-@GST_API_VERSION@.la \

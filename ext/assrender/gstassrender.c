@@ -184,7 +184,6 @@ gst_ass_render_class_init (GstAssRenderClass * klass)
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
 }
 
-#if defined(LIBASS_VERSION) && LIBASS_VERSION >= 0x00907000
 static void
 _libass_message_cb (gint level, const gchar * fmt, va_list args,
     gpointer render)
@@ -204,7 +203,6 @@ _libass_message_cb (gint level, const gchar * fmt, va_list args,
 
   g_free (message);
 }
-#endif
 
 static void
 gst_ass_render_init (GstAssRender * render)
@@ -256,9 +254,7 @@ gst_ass_render_init (GstAssRender * render)
 
   g_mutex_init (&render->ass_mutex);
   render->ass_library = ass_library_init ();
-#if defined(LIBASS_VERSION) && LIBASS_VERSION >= 0x00907000
   ass_set_message_cb (render->ass_library, _libass_message_cb, render);
-#endif
   ass_set_extract_fonts (render->ass_library, 1);
 
   render->ass_renderer = ass_renderer_init (render->ass_library);
@@ -295,6 +291,15 @@ gst_ass_render_finalize (GObject * object)
   g_mutex_clear (&render->ass_mutex);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+static void
+gst_ass_render_reset_composition (GstAssRender * render)
+{
+  if (render->composition) {
+    gst_video_overlay_composition_unref (render->composition);
+    render->composition = NULL;
+  }
 }
 
 static void
@@ -391,12 +396,9 @@ gst_ass_render_change_state (GstElement * element, GstStateChange transition)
       if (render->ass_track)
         ass_free_track (render->ass_track);
       render->ass_track = NULL;
-      if (render->composition) {
-        gst_video_overlay_composition_unref (render->composition);
-        render->composition = NULL;
-      }
       render->track_init_ok = FALSE;
       render->renderer_init_ok = FALSE;
+      gst_ass_render_reset_composition (render);
       g_mutex_unlock (&render->ass_mutex);
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
@@ -722,34 +724,40 @@ blit_bgra_premultiplied (GstAssRender * render, ASS_Image * ass_image,
     dst_x = ass_image->dst_x + x_off;
     dst_y = ass_image->dst_y + y_off;
 
-    if (dst_y >= height || dst_x >= width)
+    w = MIN (ass_image->w, width - dst_x);
+    h = MIN (ass_image->h, height - dst_y);
+    if (w <= 0 || h <= 0)
       goto next;
 
     alpha = 255 - (ass_image->color & 0xff);
+    if (!alpha)
+      goto next;
+
     r = ((ass_image->color) >> 24) & 0xff;
     g = ((ass_image->color) >> 16) & 0xff;
     b = ((ass_image->color) >> 8) & 0xff;
+
     src = ass_image->bitmap;
     dst = data + dst_y * stride + dst_x * 4;
 
-    w = MIN (ass_image->w, width - dst_x);
-    h = MIN (ass_image->h, height - dst_y);
     src_skip = ass_image->stride - w;
     dst_skip = stride - w * 4;
 
     for (y = 0; y < h; y++) {
       for (x = 0; x < w; x++) {
-        k = src[0] * alpha / 255;
-        if (dst[3] == 0) {
-          dst[3] = k;
-          dst[2] = (k * r) / 255;
-          dst[1] = (k * g) / 255;
-          dst[0] = (k * b) / 255;
-        } else {
-          dst[3] = k + (255 - k) * dst[3] / 255;
-          dst[2] = (k * r + (255 - k) * dst[2]) / 255;
-          dst[1] = (k * g + (255 - k) * dst[1]) / 255;
-          dst[0] = (k * b + (255 - k) * dst[0]) / 255;
+        if (src[0]) {
+          k = src[0] * alpha / 255;
+          if (dst[3] == 0) {
+            dst[3] = k;
+            dst[2] = (k * r) / 255;
+            dst[1] = (k * g) / 255;
+            dst[0] = (k * b) / 255;
+          } else {
+            dst[3] = k + (255 - k) * dst[3] / 255;
+            dst[2] = (k * r + (255 - k) * dst[2]) / 255;
+            dst[1] = (k * g + (255 - k) * dst[1]) / 255;
+            dst[0] = (k * b + (255 - k) * dst[0]) / 255;
+          }
         }
         src++;
         dst += 4;
@@ -778,137 +786,229 @@ gst_ass_render_can_handle_caps (GstCaps * incaps)
   return ret;
 }
 
+static void
+gst_ass_render_update_render_size (GstAssRender * render)
+{
+  gdouble video_aspect = (gdouble) render->info.width /
+      (gdouble) render->info.height;
+  gdouble window_aspect = (gdouble) render->window_width /
+      (gdouble) render->window_height;
+
+  /* render at the window size, with the video aspect ratio */
+  if (video_aspect >= window_aspect) {
+    render->ass_frame_width = render->window_width;
+    render->ass_frame_height = render->window_width / video_aspect;
+  } else {
+    render->ass_frame_width = render->window_height * video_aspect;
+    render->ass_frame_height = render->window_height;
+  }
+}
+
+static gboolean
+gst_ass_render_negotiate (GstAssRender * render, GstCaps * caps)
+{
+  gboolean upstream_has_meta = FALSE;
+  gboolean caps_has_meta = FALSE;
+  gboolean alloc_has_meta = FALSE;
+  gboolean attach = FALSE;
+  gboolean ret = TRUE;
+  guint width, height;
+  GstCapsFeatures *f;
+  GstCaps *overlay_caps;
+  GstQuery *query;
+  guint alloc_index;
+
+  GST_DEBUG_OBJECT (render, "performing negotiation");
+
+  /* Clear cached composition */
+  gst_ass_render_reset_composition (render);
+
+  /* Clear any pending reconfigure flag */
+  gst_pad_check_reconfigure (render->srcpad);
+
+  if (!caps)
+    caps = gst_pad_get_current_caps (render->video_sinkpad);
+  else
+    gst_caps_ref (caps);
+
+  if (!caps || gst_caps_is_empty (caps))
+    goto no_format;
+
+  /* Check if upstream caps have meta */
+  if ((f = gst_caps_get_features (caps, 0))) {
+    upstream_has_meta = gst_caps_features_contains (f,
+        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+  }
+
+  /* Initialize dimensions */
+  width = render->info.width;
+  height = render->info.height;
+
+  if (upstream_has_meta) {
+    overlay_caps = gst_caps_ref (caps);
+  } else {
+    GstCaps *peercaps;
+
+    /* BaseTransform requires caps for the allocation query to work */
+    overlay_caps = gst_caps_copy (caps);
+    f = gst_caps_get_features (overlay_caps, 0);
+    gst_caps_features_add (f,
+        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+
+    /* Then check if downstream accept overlay composition in caps */
+    /* FIXME: We should probably check if downstream *prefers* the
+     * overlay meta, and only enforce usage of it if we can't handle
+     * the format ourselves and thus would have to drop the overlays.
+     * Otherwise we should prefer what downstream wants here.
+     */
+    peercaps = gst_pad_peer_query_caps (render->srcpad, NULL);
+    caps_has_meta = gst_caps_can_intersect (peercaps, overlay_caps);
+    gst_caps_unref (peercaps);
+
+    GST_DEBUG ("caps have overlay meta %d", caps_has_meta);
+  }
+
+  if (upstream_has_meta || caps_has_meta) {
+    /* Send caps immediatly, it's needed by GstBaseTransform to get a reply
+     * from allocation query */
+    ret = gst_pad_set_caps (render->srcpad, overlay_caps);
+
+    /* First check if the allocation meta has compositon */
+    query = gst_query_new_allocation (overlay_caps, FALSE);
+
+    if (!gst_pad_peer_query (render->srcpad, query)) {
+      /* no problem, we use the query defaults */
+      GST_DEBUG_OBJECT (render, "ALLOCATION query failed");
+
+      /* In case we were flushing, mark reconfigure and fail this method,
+       * will make it retry */
+      if (render->video_flushing)
+        ret = FALSE;
+    }
+
+    alloc_has_meta = gst_query_find_allocation_meta (query,
+        GST_VIDEO_OVERLAY_COMPOSITION_META_API_TYPE, &alloc_index);
+
+    GST_DEBUG ("sink alloc has overlay meta %d", alloc_has_meta);
+
+    if (alloc_has_meta) {
+      const GstStructure *params;
+
+      gst_query_parse_nth_allocation_meta (query, alloc_index, &params);
+      if (params) {
+        if (gst_structure_get (params, "width", G_TYPE_UINT, &width,
+                "height", G_TYPE_UINT, &height, NULL)) {
+          GST_DEBUG ("received window size: %dx%d", width, height);
+          g_assert (width != 0 && height != 0);
+        }
+      }
+    }
+
+    gst_query_unref (query);
+  }
+
+  /* Update render size if needed */
+  render->window_width = width;
+  render->window_height = height;
+  gst_ass_render_update_render_size (render);
+
+  /* For backward compatbility, we will prefer bliting if downstream
+   * allocation does not support the meta. In other case we will prefer
+   * attaching, and will fail the negotiation in the unlikely case we are
+   * force to blit, but format isn't supported. */
+
+  if (upstream_has_meta) {
+    attach = TRUE;
+  } else if (caps_has_meta) {
+    if (alloc_has_meta) {
+      attach = TRUE;
+    } else {
+      /* Don't attach unless we cannot handle the format */
+      attach = !gst_ass_render_can_handle_caps (caps);
+    }
+  } else {
+    ret = gst_ass_render_can_handle_caps (caps);
+  }
+
+  /* If we attach, then pick the overlay caps */
+  if (attach) {
+    GST_DEBUG_OBJECT (render, "Using caps %" GST_PTR_FORMAT, overlay_caps);
+    /* Caps where already sent */
+  } else if (ret) {
+    GST_DEBUG_OBJECT (render, "Using caps %" GST_PTR_FORMAT, caps);
+    ret = gst_pad_set_caps (render->srcpad, caps);
+  }
+
+  render->attach_compo_to_buffer = attach;
+
+  if (!ret) {
+    GST_DEBUG_OBJECT (render, "negotiation failed, schedule reconfigure");
+    gst_pad_mark_reconfigure (render->srcpad);
+  } else {
+    g_mutex_lock (&render->ass_mutex);
+    ass_set_frame_size (render->ass_renderer,
+        render->ass_frame_width, render->ass_frame_height);
+    ass_set_storage_size (render->ass_renderer,
+        render->info.width, render->info.height);
+    ass_set_pixel_aspect (render->ass_renderer,
+        (gdouble) render->info.par_n / (gdouble) render->info.par_d);
+    ass_set_font_scale (render->ass_renderer, 1.0);
+    ass_set_hinting (render->ass_renderer, ASS_HINTING_LIGHT);
+
+    ass_set_fonts (render->ass_renderer, "Arial", "sans-serif", 1, NULL, 1);
+    ass_set_fonts (render->ass_renderer, NULL, "Sans", 1, NULL, 1);
+    ass_set_margins (render->ass_renderer, 0, 0, 0, 0);
+    ass_set_use_margins (render->ass_renderer, 0);
+    g_mutex_unlock (&render->ass_mutex);
+
+    render->renderer_init_ok = TRUE;
+
+    GST_DEBUG_OBJECT (render, "ass renderer setup complete");
+  }
+
+  gst_caps_unref (overlay_caps);
+  gst_caps_unref (caps);
+
+  return ret;
+
+no_format:
+  {
+    if (caps)
+      gst_caps_unref (caps);
+    return FALSE;
+  }
+}
+
 static gboolean
 gst_ass_render_setcaps_video (GstPad * pad, GstAssRender * render,
     GstCaps * caps)
 {
-  GstQuery *query;
-  gboolean ret = FALSE;
-  gint par_n = 1, par_d = 1;
-  gdouble dar;
   GstVideoInfo info;
-  gboolean attach = FALSE;
-  gboolean caps_has_meta = TRUE;
-  GstCapsFeatures *f;
-  GstCaps *original_caps = caps;
+  gboolean ret;
 
   if (!gst_video_info_from_caps (&info, caps))
     goto invalid_caps;
 
   render->info = info;
-  gst_caps_ref (caps);
 
-  /* Try to use the overlay meta if possible */
-  f = gst_caps_get_features (caps, 0);
+  ret = gst_ass_render_negotiate (render, caps);
 
-  /* if the caps doesn't have the overlay meta, we query if downstream
-   * accepts it before trying the version without the meta
-   * If upstream already is using the meta then we can only use it */
-  if (!f
-      || !gst_caps_features_contains (f,
-          GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION)) {
-    GstCaps *overlay_caps;
+  GST_ASS_RENDER_LOCK (render);
 
-    /* In this case we added the meta, but we can work without it
-     * so preserve the original caps so we can use it as a fallback */
-    overlay_caps = gst_caps_copy (caps);
-
-    f = gst_caps_get_features (overlay_caps, 0);
-    gst_caps_features_add (f,
-        GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
-
-    ret = gst_pad_peer_query_accept_caps (render->srcpad, overlay_caps);
-    GST_DEBUG_OBJECT (render, "Downstream accepts the overlay meta: %d", ret);
-    if (ret) {
-      gst_caps_unref (caps);
-      caps = overlay_caps;
-
-    } else {
-      /* fallback to the original */
-      gst_caps_unref (overlay_caps);
-      caps_has_meta = FALSE;
-    }
-
+  if (!render->attach_compo_to_buffer &&
+      !gst_ass_render_can_handle_caps (caps)) {
+    GST_DEBUG_OBJECT (render, "unsupported caps %" GST_PTR_FORMAT, caps);
+    ret = FALSE;
   }
-  GST_DEBUG_OBJECT (render, "Using caps %" GST_PTR_FORMAT, caps);
-  ret = gst_pad_set_caps (render->srcpad, caps);
-  gst_caps_unref (caps);
-
-  if (!ret)
-    goto out;
-
-  render->width = info.width;
-  render->height = info.height;
-
-  query = gst_query_new_allocation (caps, FALSE);
-  if (caps_has_meta && gst_pad_peer_query (render->srcpad, query)) {
-    if (gst_query_find_allocation_meta (query,
-            GST_VIDEO_OVERLAY_COMPOSITION_META_API_TYPE, NULL))
-      attach = TRUE;
-  }
-  gst_query_unref (query);
-
-  render->attach_compo_to_buffer = attach;
-
-  if (!attach) {
-    if (caps_has_meta) {
-      /* Some elements (fakesink) claim to accept the meta on caps but won't
-         put it in the allocation query result, this leads below
-         check to fail. Prevent this by removing the meta from caps */
-      caps = original_caps;
-      ret = gst_pad_set_caps (render->srcpad, caps);
-      if (!ret)
-        goto out;
-    }
-    if (!gst_ass_render_can_handle_caps (caps))
-      goto unsupported_caps;
-  }
-
-  g_mutex_lock (&render->ass_mutex);
-  ass_set_frame_size (render->ass_renderer, render->width, render->height);
-
-  dar = (((gdouble) par_n) * ((gdouble) render->width))
-      / (((gdouble) par_d) * ((gdouble) render->height));
-#if !defined(LIBASS_VERSION) || LIBASS_VERSION < 0x00907000
-  ass_set_aspect_ratio (render->ass_renderer, dar);
-#else
-  ass_set_aspect_ratio (render->ass_renderer,
-      dar, ((gdouble) render->width) / ((gdouble) render->height));
-#endif
-  ass_set_font_scale (render->ass_renderer, 1.0);
-  ass_set_hinting (render->ass_renderer, ASS_HINTING_LIGHT);
-
-#if !defined(LIBASS_VERSION) || LIBASS_VERSION < 0x00907000
-  ass_set_fonts (render->ass_renderer, "Arial", "sans-serif");
-  ass_set_fonts (render->ass_renderer, NULL, "Sans");
-#else
-  ass_set_fonts (render->ass_renderer, "Arial", "sans-serif", 1, NULL, 1);
-  ass_set_fonts (render->ass_renderer, NULL, "Sans", 1, NULL, 1);
-#endif
-  ass_set_margins (render->ass_renderer, 0, 0, 0, 0);
-  ass_set_use_margins (render->ass_renderer, 0);
-  g_mutex_unlock (&render->ass_mutex);
-
-  render->renderer_init_ok = TRUE;
-
-  GST_DEBUG_OBJECT (render, "ass renderer setup complete");
-
-out:
+  GST_ASS_RENDER_UNLOCK (render);
 
   return ret;
 
   /* ERRORS */
 invalid_caps:
   {
-    GST_ERROR_OBJECT (render, "Can't parse caps: %" GST_PTR_FORMAT, caps);
-    ret = FALSE;
-    goto out;
-  }
-unsupported_caps:
-  {
-    GST_ERROR_OBJECT (render, "Unsupported caps: %" GST_PTR_FORMAT, caps);
-    ret = FALSE;
-    goto out;
+    GST_ERROR_OBJECT (render, "could not parse caps");
+    return FALSE;
   }
 }
 
@@ -1001,6 +1101,7 @@ gst_ass_render_composite_overlay (GstAssRender * render, ASS_Image * images)
   gint max_x, max_y;
   gint width, height;
   gint stride;
+  gdouble hscale, vscale;
   gpointer data;
 
   min_x = G_MAXINT;
@@ -1020,8 +1121,8 @@ gst_ass_render_composite_overlay (GstAssRender * render, ASS_Image * images)
       max_y = image->dst_y + image->h;
   }
 
-  width = MIN (max_x - min_x, render->width);
-  height = MIN (max_y - min_y, render->height);
+  width = MIN (max_x - min_x, render->ass_frame_width);
+  height = MIN (max_y - min_y, render->ass_frame_height);
 
   GST_DEBUG_OBJECT (render, "render overlay rectangle %dx%d%+d%+d",
       width, height, min_x, min_y);
@@ -1045,8 +1146,12 @@ gst_ass_render_composite_overlay (GstAssRender * render, ASS_Image * images)
       -min_x, -min_y);
   gst_video_meta_unmap (vmeta, 0, &map);
 
-  rectangle = gst_video_overlay_rectangle_new_raw (buffer, min_x, min_y,
-      width, height, GST_VIDEO_OVERLAY_FORMAT_FLAG_PREMULTIPLIED_ALPHA);
+  hscale = (gdouble) render->info.width / (gdouble) render->ass_frame_width;
+  vscale = (gdouble) render->info.height / (gdouble) render->ass_frame_height;
+
+  rectangle = gst_video_overlay_rectangle_new_raw (buffer,
+      hscale * min_x, vscale * min_y, hscale * width, vscale * height,
+      GST_VIDEO_OVERLAY_FORMAT_FLAG_PREMULTIPLIED_ALPHA);
 
   gst_buffer_unref (buffer);
 
@@ -1094,6 +1199,9 @@ gst_ass_render_chain_video (GstPad * pad, GstObject * parent,
   gboolean in_seg = FALSE;
   guint64 start, stop, clip_start = 0, clip_stop = 0;
   ASS_Image *ass_image;
+
+  if (gst_pad_check_reconfigure (render->srcpad))
+    gst_ass_render_negotiate (render, NULL);
 
   if (!GST_BUFFER_TIMESTAMP_IS_VALID (buffer))
     goto missing_timestamp;
@@ -1227,8 +1335,7 @@ wait_for_text_buf:
 
       if ((!ass_image || changed) && render->composition) {
         GST_DEBUG_OBJECT (render, "release overlay (changed %d)", changed);
-        gst_video_overlay_composition_unref (render->composition);
-        render->composition = NULL;
+        gst_ass_render_reset_composition (render);
       }
 
       if (ass_image != NULL) {
@@ -1424,7 +1531,7 @@ beach:
 }
 
 static void
-gst_ass_render_handle_tags (GstAssRender * render, GstTagList * taglist)
+gst_ass_render_handle_tag_sample (GstAssRender * render, GstSample * sample)
 {
   static const gchar *mimetypes[] = {
     "application/x-font-ttf",
@@ -1435,6 +1542,60 @@ gst_ass_render_handle_tags (GstAssRender * render, GstTagList * taglist)
     ".otf",
     ".ttf"
   };
+
+  GstBuffer *buf;
+  const GstStructure *structure;
+  gboolean valid_mimetype, valid_extension;
+  guint i;
+  const gchar *filename;
+
+  buf = gst_sample_get_buffer (sample);
+  structure = gst_sample_get_info (sample);
+
+  if (!buf || !structure)
+    return;
+
+  valid_mimetype = FALSE;
+  valid_extension = FALSE;
+
+  for (i = 0; i < G_N_ELEMENTS (mimetypes); i++) {
+    if (gst_structure_has_name (structure, mimetypes[i])) {
+      valid_mimetype = TRUE;
+      break;
+    }
+  }
+
+  filename = gst_structure_get_string (structure, "filename");
+  if (!filename)
+    return;
+
+  if (!valid_mimetype) {
+    guint len = strlen (filename);
+    const gchar *extension = filename + len - 4;
+    for (i = 0; i < G_N_ELEMENTS (extensions); i++) {
+      if (g_ascii_strcasecmp (extension, extensions[i]) == 0) {
+        valid_extension = TRUE;
+        break;
+      }
+    }
+  }
+
+  if (valid_mimetype || valid_extension) {
+    GstMapInfo map;
+
+    g_mutex_lock (&render->ass_mutex);
+    gst_buffer_map (buf, &map, GST_MAP_READ);
+    ass_add_font (render->ass_library, (gchar *) filename,
+        (gchar *) map.data, map.size);
+    gst_buffer_unmap (buf, &map);
+    GST_DEBUG_OBJECT (render, "registered new font %s", filename);
+    g_mutex_unlock (&render->ass_mutex);
+  }
+}
+
+static void
+gst_ass_render_handle_tags (GstAssRender * render, GstTagList * taglist)
+{
   guint tag_size;
 
   if (!taglist)
@@ -1442,58 +1603,16 @@ gst_ass_render_handle_tags (GstAssRender * render, GstTagList * taglist)
 
   tag_size = gst_tag_list_get_tag_size (taglist, GST_TAG_ATTACHMENT);
   if (tag_size > 0 && render->embeddedfonts) {
-    GstSample *sample;
-    GstBuffer *buf;
-    const GstStructure *structure;
-    gboolean valid_mimetype, valid_extension;
-    guint j;
-    const gchar *filename;
     guint index;
-    GstMapInfo map;
+    GstSample *sample;
 
     GST_DEBUG_OBJECT (render, "TAG event has attachments");
 
     for (index = 0; index < tag_size; index++) {
-      if (!gst_tag_list_get_sample_index (taglist, GST_TAG_ATTACHMENT, index,
-              &sample))
-        continue;
-      buf = gst_sample_get_buffer (sample);
-      structure = gst_sample_get_info (sample);
-      if (!buf || !structure)
-        continue;
-
-      valid_mimetype = FALSE;
-      valid_extension = FALSE;
-
-      for (j = 0; j < G_N_ELEMENTS (mimetypes); j++) {
-        if (gst_structure_has_name (structure, mimetypes[j])) {
-          valid_mimetype = TRUE;
-          break;
-        }
-      }
-      filename = gst_structure_get_string (structure, "filename");
-      if (!filename)
-        continue;
-
-      if (!valid_mimetype) {
-        guint len = strlen (filename);
-        const gchar *extension = filename + len - 4;
-        for (j = 0; j < G_N_ELEMENTS (extensions); j++) {
-          if (g_ascii_strcasecmp (extension, extensions[j]) == 0) {
-            valid_extension = TRUE;
-            break;
-          }
-        }
-      }
-
-      if (valid_mimetype || valid_extension) {
-        g_mutex_lock (&render->ass_mutex);
-        gst_buffer_map (buf, &map, GST_MAP_READ);
-        ass_add_font (render->ass_library, (gchar *) filename,
-            (gchar *) map.data, map.size);
-        gst_buffer_unmap (buf, &map);
-        GST_DEBUG_OBJECT (render, "registered new font %s", filename);
-        g_mutex_unlock (&render->ass_mutex);
+      if (gst_tag_list_get_sample_index (taglist, GST_TAG_ATTACHMENT, index,
+              &sample)) {
+        gst_ass_render_handle_tag_sample (render, sample);
+        gst_sample_unref (sample);
       }
     }
   }
@@ -1681,6 +1800,9 @@ gst_ass_render_event_text (GstPad * pad, GstObject * parent, GstEvent * event)
        * a text segment update */
       GST_ASS_RENDER_BROADCAST (render);
       GST_ASS_RENDER_UNLOCK (render);
+
+      gst_event_unref (event);
+      ret = TRUE;
       break;
     }
     case GST_EVENT_FLUSH_STOP:

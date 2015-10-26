@@ -2,24 +2,24 @@ plugin_LTLIBRARIES = libgstopencv.la
 
 # sources used to compile this plug-in
 libgstopencv_la_SOURCES = gstopencv.cpp \
-			gstopencvvideofilter.c \
-			gstopencvutils.c \
-			gstcvdilate.c \
-			gstcvdilateerode.c \
-			gstcvequalizehist.c \
-			gstcverode.c \
-			gstcvlaplace.c \
-			gstcvsmooth.c \
-			gstcvsobel.c \
+			gstopencvvideofilter.cpp \
+			gstopencvutils.cpp \
+			gstcvdilate.cpp \
+			gstcvdilateerode.cpp \
+			gstcvequalizehist.cpp \
+			gstcverode.cpp \
+			gstcvlaplace.cpp \
+			gstcvsmooth.cpp \
+			gstcvsobel.cpp \
 			gstedgedetect.cpp \
 			gstfaceblur.cpp \
-			gsthanddetect.c \
-			gstpyramidsegment.c \
-			gsttemplatematch.c \
-			gsttextoverlay.c \
-			gstmotioncells.c \
-			gstskindetect.c \
-			gstretinex.c \
+			gsthanddetect.cpp \
+			gstpyramidsegment.cpp \
+			gsttemplatematch.cpp \
+			gsttextoverlay.cpp \
+			gstmotioncells.cpp \
+			gstskindetect.cpp \
+			gstretinex.cpp \
 			gstfacedetect.cpp \
 			gstsegmentation.cpp \
 			gstgrabcut.cpp \
@@ -27,7 +27,8 @@ libgstopencv_la_SOURCES = gstopencv.cpp \
 			motioncells_wrapper.cpp \
 			MotionCells.cpp
 
-libgstopencv_la_CXXFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(GST_CXXFLAGS) $(OPENCV_CFLAGS)
+libgstopencv_la_CXXFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(GST_CXXFLAGS) $(OPENCV_CFLAGS) \
+	-DGST_HAAR_CASCADES_DIR=\"$(pkgdatadir)/@GST_API_VERSION@/opencv_haarcascades\"
 
 # flags used to compile this facedetect
 # add other _CFLAGS and _LIBS as needed
@@ -36,7 +37,6 @@ libgstopencv_la_CXXFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(GST_C
 # OpenCV's define isn't good enough to avoid 'unused' gcc warnings (at v2.1.0)
 libgstopencv_la_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) \
 	$(GST_CFLAGS) $(OPENCV_CFLAGS) \
-	-DGST_HAAR_CASCADES_DIR=\"$(pkgdatadir)/@GST_API_VERSION@/opencv_haarcascades\" \
 	-DCV_INLINE="static inline" \
 	-DCV_NO_BACKWARD_COMPATIBILITY
 

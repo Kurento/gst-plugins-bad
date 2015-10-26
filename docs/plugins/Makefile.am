@@ -112,7 +112,6 @@ EXTRA_HFILES = \
 	$(top_srcdir)/gst/aiff/aiffparse.h \
 	$(top_srcdir)/gst/aiff/aiffmux.h \
 	$(top_srcdir)/gst/autoconvert/gstautoconvert.h \
-	$(top_srcdir)/gst/audiovisualizers/gstaudiovisualizer.h \
 	$(top_srcdir)/gst/audiovisualizers/gstspacescope.h \
 	$(top_srcdir)/gst/audiovisualizers/gstspectrascope.h \
 	$(top_srcdir)/gst/audiovisualizers/gstsynaescope.h \
@@ -151,7 +150,6 @@ EXTRA_HFILES = \
 	$(top_srcdir)/gst/geometrictransform/gstwaterripple.h \
 	$(top_srcdir)/gst/ivfparse/gstivfparse.h \
 	$(top_srcdir)/gst/jpegformat/gstjpegparse.h \
-	$(top_srcdir)/gst/liveadder/liveadder.h \
 	$(top_srcdir)/gst/mxf/mxfdemux.h \
 	$(top_srcdir)/gst/mxf/mxfmux.h \
 	$(top_srcdir)/gst/nuvdemux/gstnuvdemux.h \

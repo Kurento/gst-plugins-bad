@@ -22,10 +22,12 @@
 #define __GST_QSG_TEXTURE_H__
 
 #include <gst/gst.h>
-#include <QSGTexture>
-#include <QOpenGLFunctions>
 #include <gst/video/video.h>
 #include <gst/gl/gl.h>
+
+#include "gstqtgl.h"
+#include <QtQuick/QSGTexture>
+#include <QtGui/QOpenGLFunctions>
 
 class GstQSGTexture : public QSGTexture, protected QOpenGLFunctions
 {

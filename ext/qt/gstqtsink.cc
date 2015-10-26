@@ -28,7 +28,7 @@
 #endif
 
 #include "gstqtsink.h"
-#include <QGuiApplication>
+#include <QtGui/QGuiApplication>
 
 #define GST_CAT_DEFAULT gst_debug_qt_gl_sink
 GST_DEBUG_CATEGORY (GST_CAT_DEFAULT);
@@ -271,6 +271,8 @@ gst_qt_sink_query (GstBaseSink * bsink, GstQuery * query)
 
       if (ret)
         return ret;
+
+      /* fallthrough */
     }
     default:
       res = GST_BASE_SINK_CLASS (parent_class)->query (bsink, query);

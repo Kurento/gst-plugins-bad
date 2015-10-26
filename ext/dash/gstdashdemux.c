@@ -167,6 +167,12 @@ GST_STATIC_PAD_TEMPLATE ("audio_%02u",
     GST_PAD_SOMETIMES,
     GST_STATIC_CAPS_ANY);
 
+static GstStaticPadTemplate gst_dash_demux_subtitlesrc_template =
+GST_STATIC_PAD_TEMPLATE ("subtitle_%02u",
+    GST_PAD_SRC,
+    GST_PAD_SOMETIMES,
+    GST_STATIC_CAPS_ANY);
+
 static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
@@ -377,6 +383,8 @@ gst_dash_demux_class_init (GstDashDemuxClass * klass)
       gst_static_pad_template_get (&gst_dash_demux_audiosrc_template));
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_dash_demux_videosrc_template));
+  gst_element_class_add_pad_template (gstelement_class,
+      gst_static_pad_template_get (&gst_dash_demux_subtitlesrc_template));
 
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&sinktemplate));
@@ -535,11 +543,11 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
     active_stream = gst_mpdparser_get_active_stream_by_index (demux->client, i);
     if (active_stream == NULL)
       continue;
-    /* TODO: support 'application' mimeType */
-    if (active_stream->mimeType == GST_STREAM_APPLICATION)
-      continue;
 
     srcpad = gst_dash_demux_create_pad (demux, active_stream);
+    if (srcpad == NULL)
+      continue;
+
     caps = gst_dash_demux_get_input_caps (demux, active_stream);
     GST_LOG_OBJECT (demux, "Creating stream %d %" GST_PTR_FORMAT, i, caps);
 
@@ -724,6 +732,7 @@ gst_dash_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
   if (dashdemux->client)
     gst_mpd_client_free (dashdemux->client);
   dashdemux->client = gst_mpd_client_new ();
+  gst_mpd_client_set_uri_downloader (dashdemux->client, demux->downloader);
 
   dashdemux->client->mpd_uri = g_strdup (demux->manifest_uri);
   dashdemux->client->mpd_base_uri = g_strdup (demux->manifest_base_uri);
@@ -735,7 +744,8 @@ gst_dash_demux_process_manifest (GstAdaptiveDemux * demux, GstBuffer * buf)
   if (gst_buffer_map (buf, &mapinfo, GST_MAP_READ)) {
     manifest = (gchar *) mapinfo.data;
     if (gst_mpd_parse (dashdemux->client, manifest, mapinfo.size)) {
-      if (gst_mpd_client_setup_media_presentation (dashdemux->client)) {
+      if (gst_mpd_client_setup_media_presentation (dashdemux->client, 0, 0,
+              NULL)) {
         ret = TRUE;
       } else {
         GST_ELEMENT_ERROR (demux, STREAM, DECODE,
@@ -769,6 +779,15 @@ gst_dash_demux_create_pad (GstDashDemux * demux, GstActiveStream * stream)
       name = g_strdup_printf ("video_%02u", demux->n_video_streams++);
       tmpl = gst_static_pad_template_get (&gst_dash_demux_videosrc_template);
       break;
+    case GST_STREAM_APPLICATION:
+      if (gst_mpd_client_active_stream_contains_subtitles (stream)) {
+        name = g_strdup_printf ("subtitle_%02u", demux->n_subtitle_streams++);
+        tmpl =
+            gst_static_pad_template_get (&gst_dash_demux_subtitlesrc_template);
+      } else {
+        return NULL;
+      }
+      break;
     default:
       g_assert_not_reached ();
       return NULL;
@@ -801,6 +820,7 @@ gst_dash_demux_reset (GstAdaptiveDemux * ademux)
   gst_dash_demux_clock_drift_free (demux->clock_drift);
   demux->clock_drift = NULL;
   demux->client = gst_mpd_client_new ();
+  gst_mpd_client_set_uri_downloader (demux->client, ademux->downloader);
 
   demux->n_audio_streams = 0;
   demux->n_video_streams = 0;
@@ -811,7 +831,6 @@ gst_dash_demux_get_video_input_caps (GstDashDemux * demux,
     GstActiveStream * stream)
 {
   guint width = 0, height = 0;
-  const gchar *mimeType = NULL;
   GstCaps *caps = NULL;
 
   if (stream == NULL)
@@ -822,11 +841,10 @@ gst_dash_demux_get_video_input_caps (GstDashDemux * demux,
     width = gst_mpd_client_get_video_stream_width (stream);
     height = gst_mpd_client_get_video_stream_height (stream);
   }
-  mimeType = gst_mpd_client_get_stream_mimeType (stream);
-  if (mimeType == NULL)
+  caps = gst_mpd_client_get_stream_caps (stream);
+  if (caps == NULL)
     return NULL;
 
-  caps = gst_caps_from_string (mimeType);
   if (width > 0 && height > 0) {
     gst_caps_set_simple (caps, "width", G_TYPE_INT, width, "height",
         G_TYPE_INT, height, NULL);
@@ -840,7 +858,6 @@ gst_dash_demux_get_audio_input_caps (GstDashDemux * demux,
     GstActiveStream * stream)
 {
   guint rate = 0, channels = 0;
-  const gchar *mimeType;
   GstCaps *caps = NULL;
 
   if (stream == NULL)
@@ -851,11 +868,10 @@ gst_dash_demux_get_audio_input_caps (GstDashDemux * demux,
     channels = gst_mpd_client_get_audio_stream_num_channels (stream);
     rate = gst_mpd_client_get_audio_stream_rate (stream);
   }
-  mimeType = gst_mpd_client_get_stream_mimeType (stream);
-  if (mimeType == NULL)
+  caps = gst_mpd_client_get_stream_caps (stream);
+  if (caps == NULL)
     return NULL;
 
-  caps = gst_caps_from_string (mimeType);
   if (rate > 0) {
     gst_caps_set_simple (caps, "rate", G_TYPE_INT, rate, NULL);
   }
@@ -870,17 +886,14 @@ static GstCaps *
 gst_dash_demux_get_application_input_caps (GstDashDemux * demux,
     GstActiveStream * stream)
 {
-  const gchar *mimeType;
   GstCaps *caps = NULL;
 
   if (stream == NULL)
     return NULL;
 
-  mimeType = gst_mpd_client_get_stream_mimeType (stream);
-  if (mimeType == NULL)
+  caps = gst_mpd_client_get_stream_caps (stream);
+  if (caps == NULL)
     return NULL;
-
-  caps = gst_caps_from_string (mimeType);
 
   return caps;
 }
@@ -911,27 +924,23 @@ gst_dash_demux_stream_update_headers_info (GstAdaptiveDemuxStream * stream)
       &path, dashstream->index,
       &stream->fragment.header_range_start, &stream->fragment.header_range_end);
 
-  if (path != NULL && strncmp (path, "http://", 7) != 0) {
+  if (path != NULL) {
     stream->fragment.header_uri =
         gst_uri_join_strings (gst_mpdparser_get_baseURL (dashdemux->client,
             dashstream->index), path);
     g_free (path);
-  } else {
-    stream->fragment.header_uri = path;
+    path = NULL;
   }
-  path = NULL;
 
   gst_mpd_client_get_next_header_index (dashdemux->client,
       &path, dashstream->index,
       &stream->fragment.index_range_start, &stream->fragment.index_range_end);
 
-  if (path != NULL && strncmp (path, "http://", 7) != 0) {
+  if (path != NULL) {
     stream->fragment.index_uri =
         gst_uri_join_strings (gst_mpdparser_get_baseURL (dashdemux->client,
             dashstream->index), path);
     g_free (path);
-  } else {
-    stream->fragment.index_uri = path;
   }
 }
 
@@ -1210,6 +1219,10 @@ gst_dash_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
     target_pos = (GstClockTime) demux->segment.stop;
 
   /* select the requested Period in the Media Presentation */
+  if (!gst_mpd_client_setup_media_presentation (dashdemux->client, target_pos,
+          -1, NULL))
+    return FALSE;
+
   current_period = 0;
   for (list = g_list_first (dashdemux->client->periods); list;
       list = g_list_next (list)) {
@@ -1277,6 +1290,7 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
 
   /* parse the manifest file */
   new_client = gst_mpd_client_new ();
+  gst_mpd_client_set_uri_downloader (new_client, demux->downloader);
   new_client->mpd_uri = g_strdup (demux->manifest_uri);
   new_client->mpd_base_uri = g_strdup (demux->manifest_base_uri);
   gst_buffer_map (buffer, &mapinfo, GST_MAP_READ);
@@ -1296,7 +1310,8 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
     period_idx = gst_mpd_client_get_period_index (dashdemux->client);
 
     /* setup video, audio and subtitle streams, starting from current Period */
-    if (!gst_mpd_client_setup_media_presentation (new_client)) {
+    if (!gst_mpd_client_setup_media_presentation (new_client, -1,
+            (period_id ? -1 : period_idx), period_id)) {
       /* TODO */
     }
 

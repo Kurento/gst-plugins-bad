@@ -3,7 +3,7 @@ AC_PREREQ([2.69])
 dnl initialize autoconf
 dnl when going to/from release please set the nano (fourth number) right !
 dnl releases only do Wall, git and prerelease does Werror too
-AC_INIT([GStreamer Bad Plug-ins],[1.5.91],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
+AC_INIT([GStreamer Bad Plug-ins],[1.7.0.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
 
 AG_GST_INIT
 
@@ -51,11 +51,11 @@ dnl - interfaces added/removed/changed -> increment CURRENT, REVISION = 0
 dnl - interfaces added -> increment AGE
 dnl - interfaces removed -> AGE = 0
 dnl sets GST_LT_LDFLAGS
-AS_LIBTOOL(GST, 591, 0, 591)
+AS_LIBTOOL(GST, 700, 0, 700)
 
 dnl *** required versions of GStreamer stuff ***
-GST_REQ=1.5.91
-GSTPB_REQ=1.5.91
+GST_REQ=1.7.0.1
+GSTPB_REQ=1.7.0.1
 
 dnl *** autotools stuff ****
 
@@ -74,6 +74,7 @@ AG_GST_GETTEXT([gst-plugins-bad-$GST_API_VERSION])
 dnl *** check for arguments to configure ***
 
 AG_GST_ARG_DISABLE_FATAL_WARNINGS
+AG_GST_ARG_ENABLE_EXTRA_CHECKS
 
 AG_GST_ARG_DEBUG
 AG_GST_ARG_PROFILING
@@ -190,7 +191,7 @@ AC_CHECK_FUNC(socket,,[AC_CHECK_LIB(socket,socket)])
 AC_CHECK_FUNC(gethostbyname,,[AC_CHECK_LIB(nsl,gethostbyname)])
 
 dnl GLib is required
-GLIB_REQ=2.32.0
+GLIB_REQ=2.40.0
 AG_GST_GLIB_CHECK([$GLIB_REQ])
 
 dnl checks for gstreamer
@@ -199,6 +200,7 @@ AG_GST_CHECK_GST($GST_API_VERSION, [$GST_REQ], yes)
 AG_GST_CHECK_GST_BASE($GST_API_VERSION, [$GST_REQ], yes)
 AG_GST_CHECK_GST_CHECK($GST_API_VERSION, [$GST_REQ], no)
 AG_GST_CHECK_GST_CONTROLLER($GST_API_VERSION, [$GST_REQ], yes)
+AG_GST_CHECK_GST_NET($GST_API_VERSION, [$GST_REQ], yes)
 AM_CONDITIONAL(HAVE_GST_CHECK, test "x$HAVE_GST_CHECK" = "xyes")
 
 AG_GST_CHECK_GST_PLUGINS_BASE($GST_API_VERSION, [$GSTPB_REQ], yes)
@@ -465,7 +467,6 @@ AG_GST_CHECK_PLUGIN(ivtc)
 AG_GST_CHECK_PLUGIN(jp2kdecimator)
 AG_GST_CHECK_PLUGIN(jpegformat)
 AG_GST_CHECK_PLUGIN(librfb)
-AG_GST_CHECK_PLUGIN(liveadder)
 AG_GST_CHECK_PLUGIN(midi)
 AG_GST_CHECK_PLUGIN(mpegdemux)
 AG_GST_CHECK_PLUGIN(mpegtsdemux)
@@ -1726,6 +1727,108 @@ AC_SUBST(LIBUDEV_LIBS)
 AC_SUBST(LIBUSB_CFLAGS)
 AC_SUBST(LIBUSB_LIBS)
 
+dnl *** NVENC ***
+translit(dnm, m, l) AM_CONDITIONAL(USE_NVENC, true)
+AG_GST_CHECK_FEATURE(NVENC, [NVIDIA Encode API], nvenc, [
+  AG_GST_PKG_CHECK_MODULES(GST_VIDEO, gstreamer-video-1.0)
+  AG_GST_PKG_CHECK_MODULES(GST_PBUTILS, gstreamer-pbutils-1.0)
+  AC_ARG_WITH([cuda-prefix],
+          AS_HELP_STRING([--with-cuda-prefix],
+          [Use the provided prefix for detecting the cuda installation]),
+          [AS_IF([test "x$with_cuda_prefix" != "x"],
+                 [CUDA_PREFIX="$with_cuda_prefix"])],
+          [CUDA_PREFIX=""])
+
+  HAVE_CUDA="yes"
+  if test "x$CUDA_PREFIX" != "x"; then
+    dnl only override if not already set
+    if test "x$CUDA_CFLAGS" = "x" -a "x$CUDA_LIBS" = "x"; then
+      dnl this is an educated guess, user can always override these
+      CUDA_CFLAGS="-I$CUDA_PREFIX/include"
+      CUDA_LIBS="-L$CUDA_PREFIX/lib -L$CUDA_PREFIX/lib64 -L$CUDA_PREFIX/lib/stubs -L$CUDA_PREFIX/lib64/stubs -lcuda -lcudart"
+    fi
+  else
+    PKG_CHECK_MODULES([CUDA], [cuda-7.5 cudart-7.5],, [
+      PKG_CHECK_MODULES([CUDA], [cuda-7.0 cudart-7.0],, [
+        PKG_CHECK_MODULES([CUDA], [cuda-6.5 cudart-6.5],, [
+          AC_MSG_WARN([Could not find cuda headers/libraries])])])])
+  fi
+
+  HAVE_CUDA_H=no
+  HAVE_CUDART_H=no
+  save_CPPFLAGS="$CPPFLAGS"
+  CPPFLAGS="$CUDA_CFLAGS $save_CPPFLAGS "
+  AC_CHECK_HEADER([cuda.h], [HAVE_CUDA_H=yes],
+      AC_MSG_WARN([Could not find cuda.h]))
+  AC_CHECK_HEADER([cuda_runtime_api.h], [HAVE_CUDART_H=yes],
+      AC_MSG_WARN([Could not find cuda_runtime_api.h]))
+  CPPFLAGS=$save_CPPFLAGS
+
+  dnl libcuda and libcudart libraries
+  save_LIBS="$LIBS"
+  LIBS="$CUDA_LIBS $save_LIBS"
+  HAVE_CUDART_LIB="no"
+  AC_CHECK_LIB(cudart,cudaGetErrorString,[HAVE_CUDART_LIB="yes"], [
+      AC_MSG_WARN([Could not find cudart library])])
+  HAVE_CUDA_LIB="no"
+  AC_CHECK_LIB(cuda,cuInit,[HAVE_CUDA_LIB="yes"], [
+      AC_MSG_WARN([Could not find cuda library])])
+  LIBS="$save_LIBS"
+
+  dnl nvEncodeAPI.h header
+  HAVE_NVENCODEAPI_H=no
+  AC_ARG_VAR(NVENCODE_CFLAGS, [C compiler flags for NvEncodeAPI.h])
+  save_CPPFLAGS="$CPPFLAGS"
+  CPPFLAGS="$NVENCODE_CFLAGS $save_CPPFLAGS"
+  AC_CHECK_HEADER([nvEncodeAPI.h], [
+      AC_PREPROC_IFELSE([AC_LANG_SOURCE([[#include <nvEncodeAPI.h>
+          #if NVENCAPI_MAJOR_VERSION < 5
+          #error "Need nvEncodeAPI.h >= 5.0"
+          #endif
+          ]])], [
+          HAVE_NVENCODEAPI_H=yes
+          ], [
+          AC_MSG_WARN([nvEncodeAPI.h must be >= 5.0])
+          ])
+      ],
+      AC_MSG_WARN([Could not find nvEncodeAPI.h]))
+  AC_SUBST(NVENCODE_CFLAGS)
+  CPPFLAGS="$save_CPPFLAGS"
+
+  dnl libnvnidia-encode library
+  HAVE_NVENCODE_LIB=no
+  AC_ARG_VAR(NVENCODE_LIBS, [linker flags for nvidia-encode])
+  saved_LIBS="$LIBS"
+  LIBS="$NVENCODE_LIBS $saved_LIBS"
+  AC_CHECK_LIB(nvidia-encode, NvEncodeAPICreateInstance, [HAVE_NVENCODE_LIB="yes"],
+      AC_MSG_WARN([Could not find library nvidia-encode]))
+  NVENCODE_LIBS="$NVENCODE_LIBS -lnvidia-encode"
+  AC_SUBST(NVENCODE_LIBS)
+  LIBS="$saved_LIBS"
+
+  USE_NVENC_GST_GL=no
+  if test "x$HAVE_CUDA_H" = "xyes" \
+      -a "x$HAVE_CUDART_H" = "xyes" \
+      -a "x$HAVE_CUDA_LIB" = "xyes" \
+      -a "x$HAVE_CUDART_LIB" = "xyes" \
+      -a "x$HAVE_NVENCODEAPI_H" = "xyes" \
+      -a "x$HAVE_NVENCODE_LIB" = "xyes"; then
+    HAVE_NVENC="yes"
+    if test x"$USE_OPENGL" = x"yes"; then
+      dnl cuda-gl interop header
+      save_CPPFLAGS="$CPPFLAGS"
+      CPPFLAGS="$save_CPPFLAGS $CUDA_CFLAGS"
+      AC_CHECK_HEADER([cuda_gl_interop.h], [
+        USE_NVENC_GST_GL="yes"
+        AC_DEFINE(HAVE_NVENC_GST_GL, [1] , [NVENC GStreamer OpenGL support available])
+        ])
+      CPPFLAGS="$save_CPPFLAGS"
+    fi
+  else
+    HAVE_NVENC="no"
+  fi
+])
+AM_CONDITIONAL(USE_NVENC_GST_GL, test "x$USE_NVENC_GST_GL" = "xyes")
 
 dnl *** ext plug-ins ***
 dnl keep this list sorted alphabetically !
@@ -1735,7 +1838,7 @@ if test "x$BUILD_EXTERNAL" = "xyes"; then
 dnl *** assrender ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_ASSRENDER, true)
 AG_GST_CHECK_FEATURE(ASSRENDER, [ASS/SSA renderer], assrender, [
-  PKG_CHECK_MODULES(ASSRENDER, libass >= 0.9.4, [
+  PKG_CHECK_MODULES(ASSRENDER, libass >= 0.10.2, [
     HAVE_ASSRENDER="yes" ], [
     HAVE_ASSRENDER="no"
   ])
@@ -2162,7 +2265,7 @@ AG_GST_CHECK_FEATURE(SRTP, [srtp library], srtp, [
 dnl *** dtls ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_DTLS, true)
 AG_GST_CHECK_FEATURE(DTLS, [DTLS plugin], dtls, [
-  PKG_CHECK_MODULES(DTLS, [ openssl >= 0.9.5  libcrypto ], [
+  PKG_CHECK_MODULES(DTLS, [ openssl >= 1.0.1  libcrypto ], [
     HAVE_DTLS="yes"
     AC_SUBST(DTLS_CFLAGS)
     AC_SUBST(DTLS_LIBS)
@@ -2651,7 +2754,7 @@ AM_CONDITIONAL(USE_GTK3_GL, test "x$HAVE_GTK3_GL" = "xyes")
 dnl *** Qt ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_QT, true)
 AG_GST_CHECK_FEATURE(QT, [Qt elements], qt, [
-  PKG_CHECK_MODULES(QT, Qt5Core Qt5Gui Qt5Quick >= 5.4.0, [
+  PKG_CHECK_MODULES(QT, Qt5Core Qt5Gui Qt5Qml Qt5Quick >= 5.4.0, [
       QT_PATH=`$PKG_CONFIG --variable=exec_prefix Qt5Core`
       QT_HOST_PATH=`$PKG_CONFIG --variable=host_bins Qt5Core`
       AC_PATH_PROGS(MOC, [moc-qt5 moc], moc, ["${QT_HOST_PATH}" "${QT_PATH}/bin"])
@@ -2679,6 +2782,44 @@ AG_GST_CHECK_FEATURE(QT, [Qt elements], qt, [
             QT_LIBS="$QT_LIBS $QT_WAYLAND_LIBS"
             HAVE_QT_WINDOWING="yes"
           ], [AC_MSG_NOTICE([Could not find Qt Wayland integration])])
+        fi
+        if test "x$GST_GL_HAVE_WINDOW_ANDROID" = "x1" -a "x$GST_GL_HAVE_PLATFORM_EGL" = "x1"; then
+          PKG_CHECK_MODULES(QT_ANDROID, Qt5AndroidExtras, [
+            # c++ on android requires a standard library and there are multiple
+            # choices.  cerbero provides a pkg-config file the describes a choice
+            # so try to use that.  Outside cerbero one has to pass these flags
+            # manually for the library one is using
+            PKG_CHECK_MODULES(GNUSTL, gnustl, [
+              QT_CFLAGS="$QT_CFLAGS $GNUSTL_CFLAGS"
+              QT_LIBS="$QT_CFLAGS $GNUSTL_LIBS"
+              ], [
+              AC_MSG_NOTICE([Could not find Standard C++ library])])
+
+            AC_DEFINE([HAVE_QT_ANDROID], [],
+                [Define if Qt Android integration is installed])
+            QT_CFLAGS="$QT_CFLAGS $QT_ANDROID_CFLAGS"
+            QT_LIBS="$QT_LIBS $QT_ANDROID_LIBS"
+            HAVE_QT_WINDOWING="yes"
+          ], [AC_MSG_NOTICE([Could not find Qt Android integration])])
+        fi
+        if test "x$GST_GL_HAVE_WINDOW_COCOA" = "x1" -a "x$GST_GL_HAVE_PLATFORM_CGL" = "x1"; then
+          PKG_CHECK_MODULES(QT_MAC, Qt5MacExtras, [
+            AC_DEFINE([HAVE_QT_MAC], [],
+                [Define if Qt Mac integration is installed])
+            QT_LIBDIR=`$PKG_CONFIG --variable=libdir Qt5Core`
+            QT_CFLAGS="$QT_CFLAGS $QT_MAC_CFLAGS -F$QT_LIBDIR -framework QtCore -framework QtGui -framework QtQuick -framework QtQml -framework QtMacExtras"
+            QT_LIBS="$QT_LIBS $QT_MAC_LIBS"
+            HAVE_QT_WINDOWING="yes"
+          ], [AC_MSG_NOTICE([Could not find Qt Mac integration])])
+        fi
+        if test "x$GST_GL_HAVE_WINDOW_EAGL" = "x1" -a "x$GST_GL_HAVE_PLATFORM_EAGL" = "x1"; then
+          if test "x$HAVE_IOS" = "xyes"; then
+            # iOS doesn't have its own extras package so if we have the core
+            # modules we are good to go
+            AC_DEFINE([HAVE_QT_IOS], [],
+                [Define if Qt iOS integration is installed])
+            HAVE_QT_WINDOWING="yes"
+          fi
         fi
         if test "x$HAVE_QT_WINDOWING" = "xno"; then
           AC_MSG_WARN([Could not find any Qt Windowing integration])
@@ -3271,7 +3412,6 @@ gst/ivtc/Makefile
 gst/jp2kdecimator/Makefile
 gst/jpegformat/Makefile
 gst/librfb/Makefile
-gst/liveadder/Makefile
 gst/midi/Makefile
 gst/mpegdemux/Makefile
 gst/mpegtsdemux/Makefile
@@ -3344,6 +3484,7 @@ sys/dshowvideosink/Makefile
 sys/dvb/Makefile
 sys/fbdev/Makefile
 sys/linsys/Makefile
+sys/nvenc/Makefile
 sys/opensles/Makefile
 sys/shm/Makefile
 sys/uvch264/Makefile
