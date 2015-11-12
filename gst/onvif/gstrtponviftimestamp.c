@@ -30,6 +30,8 @@
 
 #include "gstrtponviftimestamp.h"
 
+#define GST_NTP_OFFSET_EVENT_NAME "GstNtpOffset"
+
 #define DEFAULT_NTP_OFFSET GST_CLOCK_TIME_NONE
 #define DEFAULT_CSEQ 0
 #define DEFAULT_SET_E_BIT FALSE
@@ -41,6 +43,11 @@ static GstFlowReturn gst_rtp_onvif_timestamp_chain (GstPad * pad,
     GstObject * parent, GstBuffer * buf);
 static GstFlowReturn gst_rtp_onvif_timestamp_chain_list (GstPad * pad,
     GstObject * parent, GstBufferList * list);
+
+static GstFlowReturn handle_and_push_buffer (GstRtpOnvifTimestamp * self,
+    GstBuffer * buf);
+static GstFlowReturn handle_and_push_buffer_list (GstRtpOnvifTimestamp * self,
+    GstBufferList * list);
 
 static GstStaticPadTemplate sink_template_factory =
 GST_STATIC_PAD_TEMPLATE ("sink",
@@ -112,6 +119,64 @@ gst_rtp_onvif_timestamp_set_property (GObject * object,
   }
 }
 
+/* send cached buffer or list, and events, if present */
+static GstFlowReturn
+send_cached_buffer_and_events (GstRtpOnvifTimestamp * self)
+{
+  GstFlowReturn ret = GST_FLOW_OK;
+
+  g_assert (!(self->buffer && self->list));
+
+  if (self->buffer) {
+    GST_DEBUG_OBJECT (self, "pushing %" GST_PTR_FORMAT, self->buffer);
+    ret = handle_and_push_buffer (self, self->buffer);
+    self->buffer = NULL;
+  }
+  if (self->list) {
+    GST_DEBUG_OBJECT (self, "pushing %" GST_PTR_FORMAT, self->list);
+    ret = handle_and_push_buffer_list (self, self->list);
+    self->list = NULL;
+  }
+
+  if (ret != GST_FLOW_OK)
+    goto out;
+
+  while (!g_queue_is_empty (self->event_queue)) {
+    GstEvent *event;
+
+    event = GST_EVENT_CAST (g_queue_pop_head (self->event_queue));
+    GST_LOG_OBJECT (self->sinkpad, "sending %" GST_PTR_FORMAT, event);
+    (void) gst_pad_send_event (self->sinkpad, event);
+  }
+
+out:
+  return ret;
+}
+
+static void
+purge_cached_buffer_and_events (GstRtpOnvifTimestamp * self)
+{
+  g_assert (!(self->buffer && self->list));
+
+  if (self->buffer) {
+    GST_DEBUG_OBJECT (self, "purging %" GST_PTR_FORMAT, self->buffer);
+    gst_buffer_unref (self->buffer);
+    self->buffer = NULL;
+  }
+  if (self->list) {
+    GST_DEBUG_OBJECT (self, "purging %" GST_PTR_FORMAT, self->list);
+    gst_buffer_list_unref (self->list);
+    self->list = NULL;
+  }
+
+  while (!g_queue_is_empty (self->event_queue)) {
+    GstEvent *event;
+
+    event = GST_EVENT_CAST (g_queue_pop_head (self->event_queue));
+    gst_event_unref (event);
+  }
+}
+
 static GstStateChangeReturn
 gst_rtp_onvif_timestamp_change_state (GstElement * element,
     GstStateChange transition)
@@ -121,6 +186,7 @@ gst_rtp_onvif_timestamp_change_state (GstElement * element,
 
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:
+      purge_cached_buffer_and_events (self);
       gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
       break;
     default:
@@ -135,19 +201,11 @@ gst_rtp_onvif_timestamp_change_state (GstElement * element,
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_PAUSED:
-      if (GST_CLOCK_TIME_IS_VALID (self->prop_ntp_offset))
-        self->ntp_offset = self->prop_ntp_offset;
-      else
-        self->ntp_offset = GST_CLOCK_TIME_NONE;
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
-      if (!GST_CLOCK_TIME_IS_VALID (self->prop_ntp_offset) &&
-          GST_ELEMENT_CLOCK (element) == NULL) {
-        GST_ELEMENT_ERROR (element, CORE, CLOCK, ("Missing NTP offset"),
-            ("Set the \"ntp-offset\" property to,"
-                " can't guess it without a clock on the pipeline."));
-        return GST_STATE_CHANGE_FAILURE;
-      }
+      self->ntp_offset = self->prop_ntp_offset;
+      GST_DEBUG_OBJECT (self, "ntp-offset: %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (self->ntp_offset));
+      self->set_d_bit = FALSE;
+      self->set_e_bit = FALSE;
       break;
     default:
       break;
@@ -161,10 +219,7 @@ gst_rtp_onvif_timestamp_finalize (GObject * object)
 {
   GstRtpOnvifTimestamp *self = GST_RTP_ONVIF_TIMESTAMP (object);
 
-  if (self->buffer)
-    gst_buffer_unref (self->buffer);
-  if (self->list)
-    gst_buffer_list_unref (self->list);
+  g_queue_free (self->event_queue);
 
   G_OBJECT_CLASS (gst_rtp_onvif_timestamp_parent_class)->finalize (object);
 }
@@ -219,42 +274,128 @@ gst_rtp_onvif_timestamp_class_init (GstRtpOnvifTimestampClass * klass)
       0, "ONVIF NTP timestamps RTP extension");
 }
 
-static GstFlowReturn handle_and_push_buffer (GstRtpOnvifTimestamp * self,
-    GstBuffer * buf, gboolean end_contiguous);
-static GstFlowReturn handle_and_push_buffer_list (GstRtpOnvifTimestamp * self,
-    GstBufferList * list, gboolean end_contiguous);
+static gboolean
+parse_event_ntp_offset (GstRtpOnvifTimestamp * self, GstEvent * event,
+    GstClockTime * offset, gboolean * discont)
+{
+  const GstStructure *structure = gst_event_get_structure (event);
+  GstClockTime event_offset;
+  gboolean event_discont;
+
+  if (!gst_structure_get_clock_time (structure, "ntp-offset", &event_offset)) {
+    GST_ERROR_OBJECT (self, "no ntp-offset in %" GST_PTR_FORMAT, event);
+    return FALSE;
+  }
+  if (!gst_structure_get_boolean (structure, "discont", &event_discont)) {
+    GST_ERROR_OBJECT (self, "no discontinue in %" GST_PTR_FORMAT, event);
+    return FALSE;
+  }
+
+  if (offset)
+    *offset = event_offset;
+
+  if (discont)
+    *discont = event_discont;
+
+  return TRUE;
+}
 
 static gboolean
 gst_rtp_onvif_timestamp_sink_event (GstPad * pad, GstObject * parent,
     GstEvent * event)
 {
   GstRtpOnvifTimestamp *self = GST_RTP_ONVIF_TIMESTAMP (parent);
+  gboolean drop = FALSE;
+  gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (pad, "handling event %s", GST_EVENT_TYPE_NAME (event));
 
+  /* handle serialized events, which, should not be enqueued */
   switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_SEGMENT:
-      gst_event_copy_segment (event, &self->segment);
-      break;
-    case GST_EVENT_FLUSH_STOP:
-      gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
+    case GST_EVENT_CUSTOM_DOWNSTREAM:
+      /* if the "set-e-bit" property is set, an offset event might mark the
+       * stream as discontinued. We need to check if the currently cached buffer
+       * needs the e-bit before it's pushed */
+      if (self->prop_set_e_bit &&
+          gst_event_has_name (event, GST_NTP_OFFSET_EVENT_NAME)) {
+        gboolean discont;
+        if (parse_event_ntp_offset (self, event, NULL, &discont)) {
+          GST_DEBUG_OBJECT (self, "stream %s discontinued",
+              (discont ? "is" : "is not"));
+          self->set_e_bit = discont;
+        } else {
+          drop = TRUE;
+          ret = FALSE;
+          goto out;
+        }
+      }
       break;
     case GST_EVENT_EOS:
+    {
+      GstFlowReturn res;
       /* Push pending buffers, if any */
-      if (self->buffer) {
-        handle_and_push_buffer (self, self->buffer, TRUE);
-        self->buffer = NULL;
+      self->set_e_bit = TRUE;
+      res = send_cached_buffer_and_events (self);
+      if (res != GST_FLOW_OK) {
+        drop = TRUE;
+        ret = FALSE;
+        goto out;
       }
-      if (self->list) {
-        handle_and_push_buffer_list (self, self->list, TRUE);
-        self->list = NULL;
-      }
+      break;
+    }
+    case GST_EVENT_FLUSH_STOP:
+      purge_cached_buffer_and_events (self);
+      self->set_d_bit = FALSE;
+      self->set_e_bit = FALSE;
+      gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
       break;
     default:
       break;
   }
 
-  return gst_pad_event_default (pad, parent, event);
+  /* enqueue serialized events if there is a cached buffer */
+  if (GST_EVENT_IS_SERIALIZED (event) && (self->buffer || self->list)) {
+    GST_DEBUG ("enqueueing serialized event");
+    g_queue_push_tail (self->event_queue, event);
+    event = NULL;
+    goto out;
+  }
+
+  /* handle rest of the events */
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_CUSTOM_DOWNSTREAM:
+      /* update the ntp-offset after any cached buffer/buffer list has been
+       * pushed. the d-bit of the next buffer/buffer list should be set if
+       * the stream is discontinued */
+      if (gst_event_has_name (event, GST_NTP_OFFSET_EVENT_NAME)) {
+        GstClockTime offset;
+        gboolean discont;
+        if (parse_event_ntp_offset (self, event, &offset, &discont)) {
+          GST_DEBUG_OBJECT (self, "new ntp-offset: %" GST_TIME_FORMAT
+              ", stream %s discontinued", GST_TIME_ARGS (offset),
+              (discont ? "is" : "is not"));
+          self->ntp_offset = offset;
+          self->set_d_bit = discont;
+        } else {
+          ret = FALSE;
+        }
+        drop = TRUE;
+      }
+      break;
+    case GST_EVENT_SEGMENT:
+      gst_event_copy_segment (event, &self->segment);
+      break;
+    default:
+      break;
+  }
+
+out:
+  if (drop)
+    gst_event_unref (event);
+  else if (event)
+    ret = gst_pad_event_default (pad, parent, event);
+
+  return ret;
 }
 
 static void
@@ -278,18 +419,18 @@ gst_rtp_onvif_timestamp_init (GstRtpOnvifTimestamp * self)
   self->prop_ntp_offset = DEFAULT_NTP_OFFSET;
   self->prop_set_e_bit = DEFAULT_SET_E_BIT;
 
+  gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
+
+  self->event_queue = g_queue_new ();
   self->buffer = NULL;
   self->list = NULL;
-
-  gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
 }
 
 #define EXTENSION_ID 0xABAC
 #define EXTENSION_SIZE 3
 
 static gboolean
-handle_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf,
-    gboolean end_contiguous)
+handle_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf)
 {
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
   guint8 *data;
@@ -315,12 +456,17 @@ handle_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf,
 
       self->ntp_offset = real_time - running_time;
 
+      GST_DEBUG_OBJECT (self, "new ntp-offset: %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (self->ntp_offset));
+
       gst_object_unref (clock);
     } else {
+      GST_ELEMENT_ERROR (self, STREAM, FAILED, ("No ntp-offset present"),
+          ("Can not guess ntp-offset with no clock."));
       /* Received a buffer in PAUSED, so we can't guess the match
        * between the running time and the NTP clock yet.
        */
-      return TRUE;
+      return FALSE;
     }
   }
 
@@ -353,10 +499,10 @@ handle_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf,
 
   /* NTP timestamp */
   if (GST_BUFFER_DTS_IS_VALID (buf)) {
-    time = gst_segment_to_running_time (&self->segment, GST_FORMAT_TIME,
+    time = gst_segment_to_stream_time (&self->segment, GST_FORMAT_TIME,
         GST_BUFFER_DTS (buf));
   } else if (GST_BUFFER_PTS_IS_VALID (buf)) {
-    time = gst_segment_to_running_time (&self->segment, GST_FORMAT_TIME,
+    time = gst_segment_to_stream_time (&self->segment, GST_FORMAT_TIME,
         GST_BUFFER_PTS (buf));
   } else {
     GST_ERROR_OBJECT (self,
@@ -365,7 +511,7 @@ handle_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf,
   }
 
   if (time == GST_CLOCK_TIME_NONE) {
-    GST_ERROR_OBJECT (self, "Failed to get running time");
+    GST_ERROR_OBJECT (self, "Failed to get stream time");
     goto done;
   }
 
@@ -391,15 +537,17 @@ handle_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf,
   }
 
   /* Set E if the next buffer has DISCONT */
-  if (end_contiguous) {
+  if (self->set_e_bit) {
     GST_DEBUG_OBJECT (self, "set E flag");
     field |= (1 << 6);
+    self->set_e_bit = FALSE;
   }
 
   /* Set D if the buffer has the DISCONT flag */
-  if (GST_BUFFER_IS_DISCONT (buf)) {
+  if (self->set_d_bit) {
     GST_DEBUG_OBJECT (self, "set D flag");
     field |= (1 << 5);
+    self->set_d_bit = FALSE;
   }
 
   GST_WRITE_UINT8 (data + 8, field);
@@ -414,12 +562,11 @@ done:
   return TRUE;
 }
 
-/* @buf: (transfer all) */
+/* @buf: (transfer full) */
 static GstFlowReturn
-handle_and_push_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf,
-    gboolean end_contiguous)
+handle_and_push_buffer (GstRtpOnvifTimestamp * self, GstBuffer * buf)
 {
-  if (!handle_buffer (self, buf, end_contiguous)) {
+  if (!handle_buffer (self, buf)) {
     gst_buffer_unref (buf);
     return GST_FLOW_ERROR;
   }
@@ -436,32 +583,26 @@ gst_rtp_onvif_timestamp_chain (GstPad * pad, GstObject * parent,
 
   if (!self->prop_set_e_bit) {
     /* Modify and push this buffer right away */
-    return handle_and_push_buffer (self, buf, FALSE);
+    return handle_and_push_buffer (self, buf);
   }
 
-  /* We have to wait for the *next* buffer before pushing this one */
+  /* send any previously cached item(s), this leaves an empty queue */
+  result = send_cached_buffer_and_events (self);
 
-  if (self->buffer) {
-    /* push the *previous* buffer received */
-    result = handle_and_push_buffer (self, self->buffer,
-        GST_BUFFER_IS_DISCONT (buf));
-  }
-
-  /* Transfer ownership */
+  /* enqueue the new item, as the only item in the queue */
   self->buffer = buf;
   return result;
 }
 
-/* @buf: (transfer all) */
+/* @buf: (transfer full) */
 static GstFlowReturn
-handle_and_push_buffer_list (GstRtpOnvifTimestamp * self,
-    GstBufferList * list, gboolean end_contiguous)
+handle_and_push_buffer_list (GstRtpOnvifTimestamp * self, GstBufferList * list)
 {
   GstBuffer *buf;
 
   /* Set the extension on the *first* buffer */
   buf = gst_buffer_list_get (list, 0);
-  if (!handle_buffer (self, buf, end_contiguous)) {
+  if (!handle_buffer (self, buf)) {
     gst_buffer_list_unref (list);
     return GST_FLOW_ERROR;
   }
@@ -478,23 +619,15 @@ gst_rtp_onvif_timestamp_chain_list (GstPad * pad, GstObject * parent,
 {
   GstRtpOnvifTimestamp *self = GST_RTP_ONVIF_TIMESTAMP (parent);
   GstFlowReturn result = GST_FLOW_OK;
-  GstBuffer *buf;
 
   if (!self->prop_set_e_bit) {
-    return handle_and_push_buffer_list (self, list, FALSE);
+    return handle_and_push_buffer_list (self, list);
   }
 
-  /* We have to wait for the *next* list before pushing this one */
+  /* send any previously cached item(s), this leaves an empty queue */
+  result = send_cached_buffer_and_events (self);
 
-  if (self->list) {
-    /* push the *previous* list received */
-    buf = gst_buffer_list_get (list, 0);
-
-    result = handle_and_push_buffer_list (self, self->list,
-        GST_BUFFER_IS_DISCONT (buf));
-  }
-
-  /* Transfer ownership */
+  /* enqueue the new item, as the only item in the queue */
   self->list = list;
   return result;
 }

@@ -128,26 +128,26 @@ GST_START_TEST (dash_mpdparser_mpd)
   assert_equals_int (gst_date_time_get_minute (availabilityEndTime), 10);
   assert_equals_int (gst_date_time_get_second (availabilityEndTime), 50);
 
-  assert_equals_int64 (mpdclient->mpd_node->mediaPresentationDuration,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->mediaPresentationDuration,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
-  assert_equals_int64 (mpdclient->mpd_node->minimumUpdatePeriod,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->minimumUpdatePeriod,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
-  assert_equals_int64 (mpdclient->mpd_node->minBufferTime,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->minBufferTime,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
-  assert_equals_int64 (mpdclient->mpd_node->timeShiftBufferDepth,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->timeShiftBufferDepth,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
-  assert_equals_int64 (mpdclient->mpd_node->suggestedPresentationDelay,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->suggestedPresentationDelay,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
-  assert_equals_int64 (mpdclient->mpd_node->maxSegmentDuration,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->maxSegmentDuration,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
-  assert_equals_int64 (mpdclient->mpd_node->maxSubsegmentDuration,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (mpdclient->mpd_node->maxSubsegmentDuration,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
 
   gst_mpd_client_free (mpdclient);
 }
@@ -301,10 +301,10 @@ GST_START_TEST (dash_mpdparser_metrics_range)
   metricsNode = (GstMetricsNode *) mpdclient->mpd_node->Metrics->data;
   assert_equals_pointer (metricsNode->metrics, NULL);
   metricsRangeNode = (GstMetricsRangeNode *) metricsNode->MetricsRanges->data;
-  assert_equals_int64 (metricsRangeNode->starttime,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 500));
-  assert_equals_int64 (metricsRangeNode->duration,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 123));
+  assert_equals_uint64 (metricsRangeNode->starttime,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 500));
+  assert_equals_uint64 (metricsRangeNode->duration,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 123));
 
   gst_mpd_client_free (mpdclient);
 }
@@ -362,10 +362,10 @@ GST_START_TEST (dash_mpdparser_period)
 
   periodNode = (GstPeriodNode *) mpdclient->mpd_node->Periods->data;
   assert_equals_string (periodNode->id, "TestId");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 123));
-  assert_equals_int64 (periodNode->duration,
-      (gint64) duration_to_ms (0, 1, 2, 12, 10, 20, 765));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 123));
+  assert_equals_uint64 (periodNode->duration,
+      duration_to_ms (0, 1, 2, 12, 10, 20, 765));
   assert_equals_int (periodNode->bitstreamSwitching, 1);
 
   gst_mpd_client_free (mpdclient);
@@ -531,7 +531,7 @@ GST_START_TEST (dash_mpdparser_period_segmentList)
       "<?xml version=\"1.0\"?>"
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
-      "  <Period><SegmentList></SegmentList></Period></MPD>";
+      "  <Period><SegmentList duration=\"1\"></SegmentList></Period></MPD>";
 
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
@@ -600,6 +600,7 @@ GST_START_TEST
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
       "    <SegmentList timescale=\"10\""
+      "                 duration=\"1\""
       "                 presentationTimeOffset=\"11\""
       "                 indexRange=\"20-21\""
       "                 indexRangeExact=\"false\">"
@@ -721,7 +722,7 @@ GST_START_TEST
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
-      "    <SegmentList>"
+      "    <SegmentList duration=\"0\">"
       "      <BitstreamSwitching sourceURL=\"TestSourceURL\""
       "                          range=\"100-200\">"
       "      </BitstreamSwitching></SegmentList></Period></MPD>";
@@ -759,7 +760,7 @@ GST_START_TEST (dash_mpdparser_period_segmentList_segmentURL)
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
-      "    <SegmentList>"
+      "    <SegmentList duration=\"1\">"
       "      <SegmentURL media=\"TestMedia\""
       "                  mediaRange=\"100-200\""
       "                  index=\"TestIndex\""
@@ -801,6 +802,7 @@ GST_START_TEST (dash_mpdparser_period_segmentTemplate)
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
       "    <SegmentTemplate media=\"TestMedia\""
+      "                     duration=\"0\""
       "                     index=\"TestIndex\""
       "                     initialization=\"TestInitialization\""
       "                     bitstreamSwitching=\"TestBitstreamSwitching\">"
@@ -877,6 +879,7 @@ GST_START_TEST
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
       "    <SegmentTemplate timescale=\"123456\""
+      "                     duration=\"1\""
       "                     presentationTimeOffset=\"123456789\""
       "                     indexRange=\"100-200\""
       "                     indexRangeExact=\"true\">"
@@ -998,7 +1001,7 @@ GST_START_TEST
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
-      "    <SegmentTemplate>"
+      "    <SegmentTemplate duration=\"1\">"
       "      <BitstreamSwitching sourceURL=\"TestSourceURL\""
       "                          range=\"100-200\">"
       "      </BitstreamSwitching></SegmentTemplate></Period></MPD>";
@@ -1897,7 +1900,7 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet_segmentList)
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
       "    <AdaptationSet>"
-      "      <SegmentList></SegmentList></AdaptationSet></Period></MPD>";
+      "      <SegmentList duration=\"1\"></SegmentList></AdaptationSet></Period></MPD>";
 
   gboolean ret;
   GstMpdClient *mpdclient = gst_mpd_client_new ();
@@ -1931,6 +1934,7 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet_segmentTemplate)
       "  <Period>"
       "    <AdaptationSet>"
       "      <SegmentTemplate media=\"TestMedia\""
+      "                       duration=\"1\""
       "                       index=\"TestIndex\""
       "                       initialization=\"TestInitialization\""
       "                       bitstreamSwitching=\"TestBitstreamSwitching\">"
@@ -1971,11 +1975,12 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet_segmentTemplate_inherit)
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
-      "    <SegmentTemplate media=\"ParentMedia\" "
+      "    <SegmentTemplate media=\"ParentMedia\" duration=\"1\" "
       "                     initialization=\"ParentInitialization\">"
       "    </SegmentTemplate>"
       "    <AdaptationSet>"
       "      <SegmentTemplate media=\"TestMedia\""
+      "                       duration=\"1\""
       "                       index=\"TestIndex\""
       "                       bitstreamSwitching=\"TestBitstreamSwitching\">"
       "      </SegmentTemplate></AdaptationSet></Period></MPD>";
@@ -2016,7 +2021,7 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet_representation)
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
       "  <Period>"
       "    <AdaptationSet>"
-      "      <Representation id=\"Test Id\""
+      "      <Representation id=\"Test_Id\""
       "                      bandwidth=\"100\""
       "                      qualityRanking=\"200\""
       "                      dependencyId=\"one two three\""
@@ -2033,7 +2038,7 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet_representation)
   adaptationSet = (GstAdaptationSetNode *) periodNode->AdaptationSets->data;
   representation = (GstRepresentationNode *)
       adaptationSet->Representations->data;
-  assert_equals_string (representation->id, "Test Id");
+  assert_equals_string (representation->id, "Test_Id");
   assert_equals_uint64 (representation->bandwidth, 100);
   assert_equals_uint64 (representation->qualityRanking, 200);
   assert_equals_string (representation->dependencyId[0], "one");
@@ -2277,7 +2282,7 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet_representation_segmentList)
       "  <Period>"
       "    <AdaptationSet>"
       "      <Representation>"
-      "        <SegmentList>"
+      "        <SegmentList duration=\"1\">"
       "        </SegmentList>"
       "      </Representation></AdaptationSet></Period></MPD>";
 
@@ -2316,7 +2321,7 @@ GST_START_TEST
       "  <Period>"
       "    <AdaptationSet>"
       "      <Representation>"
-      "        <SegmentTemplate>"
+      "        <SegmentTemplate duration=\"1\">"
       "        </SegmentTemplate>"
       "      </Representation></AdaptationSet></Period></MPD>";
 
@@ -2459,20 +2464,60 @@ GST_END_TEST;
  */
 GST_START_TEST (dash_mpdparser_template_parsing)
 {
-  const gchar *url_template;
   const gchar *id = "TestId";
   guint number = 7;
   guint bandwidth = 2500;
   guint64 time = 100;
   gchar *result;
 
-  url_template = "TestMedia$Bandwidth$$$test";
-  result =
-      gst_mpdparser_build_URL_from_template (url_template, id, number,
-      bandwidth, time);
-  assert_equals_string (result, "TestMedia2500$test");
-  g_free (result);
+  struct TestUrl
+  {
+    const gchar *urlTemplate;
+    const gchar *expectedResponse;
+  };
 
+  /* various test scenarios to attempt */
+  struct TestUrl testUrl[] = {
+    {"", NULL},                 /* empty string for template */
+    {"$$", "$"},                /* escaped $ */
+    {"Number", "Number"},       /* string similar with an identifier, but without $ */
+    {"Number$Number$", "Number7"},      /* Number identifier */
+    {"Number$Number$$$", "Number7$"},   /* Number identifier followed by $$ */
+    {"Number$Number$Number$Number$", "Number7Number7"}, /* series of "Number" string and Number identifier */
+    {"Representation$RepresentationID$", "RepresentationTestId"},       /* RepresentationID identifier */
+    {"TestMedia$Bandwidth$$$test", "TestMedia2500$test"},       /* Bandwidth identifier */
+    {"TestMedia$Time$", "TestMedia100"},        /* Time identifier */
+    {"TestMedia$Time", NULL},   /* Identifier not finished with $ */
+    {"Time$Time%d$", NULL},     /* usage of %d (no width) */
+    {"Time$Time%0d$", "Time100"},       /* usage of format smaller than number of digits */
+    {"Time$Time%01d$", "Time100"},      /* usage of format smaller than number of digits */
+    {"Time$Time%05d$", "Time00100"},    /* usage of format bigger than number of digits */
+    {"Time$Time%05dtest$", "Time00100test"},    /* usage extra text in format */
+    {"Time$Time%3d$", NULL},    /* incorrect format: width does not start with 0 */
+    {"Time$Time%0-4d$", NULL},  /* incorrect format: width is not a number */
+    {"Time$Time%0$", NULL},     /* incorrect format: no d, x or u */
+    {"Time$Time1%01d$", NULL},  /* incorrect format: does not start with % after identifier */
+    {"$Bandwidth%/init.mp4v", NULL},    /* incorrect identifier: not finished with $ */
+    {"$Number%/$Time$.mp4v", NULL},     /* incorrect number of $ separators */
+    {"$RepresentationID1$", NULL},      /* incorrect identifier */
+    {"$Bandwidth1$", NULL},     /* incorrect identifier */
+    {"$Number1$", NULL},        /* incorrect identifier */
+    {"$RepresentationID%01d$", NULL},   /* incorrect format: RepresentationID does not support formatting */
+    {"Time$Time%05u$", NULL},   /* %u format */
+    {"Time$Time%05x$", NULL},   /* %x format */
+    {"Time$Time%05utest$", NULL},       /* %u format followed by text */
+    {"Time$Time%05xtest$", NULL},       /* %x format followed by text */
+    {"Time$Time%05xtest%$", NULL},      /* second % character in format */
+  };
+
+  guint count = sizeof (testUrl) / sizeof (testUrl[0]);
+  for (int i = 0; i < count; i++) {
+    result =
+        gst_mpdparser_build_URL_from_template (testUrl[i].urlTemplate, id,
+        number, bandwidth, time);
+    assert_equals_string (result, testUrl[i].expectedResponse);
+    g_free (result);
+  }
 }
 
 GST_END_TEST;
@@ -2541,6 +2586,114 @@ GST_START_TEST (dash_mpdparser_GstDateTime)
 GST_END_TEST;
 
 /*
+ * Test bitstreamSwitching inheritance from Period to AdaptationSet
+ *
+ * Description of bistreamSwitching attribute in Period:
+ * "When set to ‘true’, this is equivalent as if the
+ * AdaptationSet@bitstreamSwitching for each Adaptation Set contained in this
+ * Period is set to 'true'. In this case, the AdaptationSet@bitstreamSwitching
+ * attribute shall not be set to 'false' for any Adaptation Set in this Period"
+ *
+ */
+GST_START_TEST (dash_mpdparser_bitstreamSwitching_inheritance)
+{
+  GList *adaptationSets;
+  GstAdaptationSetNode *adapt_set;
+  guint activeStreams;
+  GstActiveStream *activeStream;
+  GstCaps *caps;
+  GstStructure *s;
+  gboolean bitstreamSwitchingFlag;
+
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <Period id=\"Period0\""
+      "          duration=\"P0Y0M1DT1H1M1S\""
+      "          bitstreamSwitching=\"true\">"
+      "    <AdaptationSet id=\"1\""
+      "                   mimeType=\"video/mp4\">"
+      "      <Representation>"
+      "      </Representation>"
+      "    </AdaptationSet>"
+      "    <AdaptationSet id=\"2\""
+      "                   mimeType=\"audio\""
+      "                   bitstreamSwitching=\"false\">"
+      "      <Representation>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  /* process the xml data */
+  ret = gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
+  assert_equals_int (ret, TRUE);
+
+  /* get the list of adaptation sets of the first period */
+  adaptationSets = gst_mpd_client_get_adaptation_sets (mpdclient);
+  fail_if (adaptationSets == NULL);
+
+  /* setup streaming from the first adaptation set */
+  adapt_set = (GstAdaptationSetNode *) g_list_nth_data (adaptationSets, 0);
+  fail_if (adapt_set == NULL);
+  ret = gst_mpd_client_setup_streaming (mpdclient, adapt_set);
+  assert_equals_int (ret, TRUE);
+
+  /* setup streaming from the second adaptation set */
+  adapt_set = (GstAdaptationSetNode *) g_list_nth_data (adaptationSets, 1);
+  fail_if (adapt_set == NULL);
+  ret = gst_mpd_client_setup_streaming (mpdclient, adapt_set);
+  assert_equals_int (ret, TRUE);
+
+  /* 2 active streams */
+  activeStreams = gst_mpdparser_get_nb_active_stream (mpdclient);
+  assert_equals_int (activeStreams, 2);
+
+  /* get details of the first active stream */
+  activeStream = gst_mpdparser_get_active_stream_by_index (mpdclient, 0);
+  fail_if (activeStream == NULL);
+
+  assert_equals_int (activeStream->mimeType, GST_STREAM_VIDEO);
+  caps = gst_mpd_client_get_stream_caps (activeStream);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  assert_equals_string (gst_structure_get_name (s), "video/quicktime");
+  gst_caps_unref (caps);
+
+  /* inherited from Period's bitstreamSwitching */
+  bitstreamSwitchingFlag =
+      gst_mpd_client_get_bitstream_switching_flag (activeStream);
+  assert_equals_int (bitstreamSwitchingFlag, TRUE);
+
+  /* get details of the second active stream */
+  activeStream = gst_mpdparser_get_active_stream_by_index (mpdclient, 1);
+  fail_if (activeStream == NULL);
+
+  assert_equals_int (activeStream->mimeType, GST_STREAM_AUDIO);
+  caps = gst_mpd_client_get_stream_caps (activeStream);
+  fail_unless (caps != NULL);
+  s = gst_caps_get_structure (caps, 0);
+  assert_equals_string (gst_structure_get_name (s), "audio");
+  gst_caps_unref (caps);
+
+  /* set to FALSE in our example, but overwritten to TRUE by Period's
+   * bitstreamSwitching
+   */
+  bitstreamSwitchingFlag =
+      gst_mpd_client_get_bitstream_switching_flag (activeStream);
+  assert_equals_int (bitstreamSwitchingFlag, TRUE);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
  * Test various duration formats
  */
 GST_START_TEST (dash_mpdparser_various_duration_formats)
@@ -2575,50 +2728,50 @@ GST_START_TEST (dash_mpdparser_various_duration_formats)
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 0);
   assert_equals_string (periodNode->id, "Period0");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 0, 0, 0, 0, 1, 0));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 0, 0, 0, 0, 1, 0));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 1);
   assert_equals_string (periodNode->id, "Period1");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 0, 0, 0, 0, 1, 500));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 0, 0, 0, 0, 1, 500));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 2);
   assert_equals_string (periodNode->id, "Period2");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 0, 0, 0, 0, 1, 700));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 0, 0, 0, 0, 1, 700));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 3);
   assert_equals_string (periodNode->id, "Period3");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 0, 0, 0, 1, 0, 0));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 0, 0, 0, 1, 0, 0));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 4);
   assert_equals_string (periodNode->id, "Period4");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 0, 0, 1, 0, 0, 0));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 0, 0, 1, 0, 0, 0));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 5);
   assert_equals_string (periodNode->id, "Period5");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 0, 1, 0, 0, 0, 0));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 0, 1, 0, 0, 0, 0));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 6);
   assert_equals_string (periodNode->id, "Period6");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (0, 1, 0, 0, 0, 0, 0));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (0, 1, 0, 0, 0, 0, 0));
 
   periodNode =
       (GstPeriodNode *) g_list_nth_data (mpdclient->mpd_node->Periods, 7);
   assert_equals_string (periodNode->id, "Period7");
-  assert_equals_int64 (periodNode->start,
-      (gint64) duration_to_ms (1, 0, 0, 0, 0, 0, 0));
+  assert_equals_uint64 (periodNode->start,
+      duration_to_ms (1, 0, 0, 0, 0, 0, 0));
 
   gst_mpd_client_free (mpdclient);
 }
@@ -3420,6 +3573,179 @@ GST_START_TEST (dash_mpdparser_get_baseURL4)
 
 GST_END_TEST;
 
+/* test multiple BaseUrl entries per section */
+GST_START_TEST (dash_mpdparser_get_baseURL5)
+{
+  GstPeriodNode *periodNode;
+  GstAdaptationSetNode *adaptationSet;
+  GstRepresentationNode *representation;
+  const gchar *baseURL;
+  GstBaseURL *gstBaseURL;
+
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <BaseURL>/mpd_base_url1/</BaseURL>"
+      "  <BaseURL>/mpd_base_url2/</BaseURL>"
+      "  <Period id=\"Period0\" duration=\"P0Y0M1DT1H1M1S\">"
+      "    <BaseURL> period_base_url1/</BaseURL>"
+      "    <BaseURL> period_base_url2/</BaseURL>"
+      "    <BaseURL> period_base_url3/</BaseURL>"
+      "    <AdaptationSet id=\"1\" mimeType=\"audio\" lang=\"en\">"
+      "      <BaseURL>adaptation_base_url1/</BaseURL>"
+      "      <BaseURL>adaptation_base_url2/</BaseURL>"
+      "      <BaseURL>adaptation_base_url3/</BaseURL>"
+      "      <BaseURL>adaptation_base_url4/</BaseURL>"
+      "      <Representation>"
+      "        <BaseURL>representation_base_url1/</BaseURL>"
+      "        <BaseURL>representation_base_url2/</BaseURL>"
+      "        <BaseURL>representation_base_url3/</BaseURL>"
+      "        <BaseURL>representation_base_url4/</BaseURL>"
+      "        <BaseURL>representation_base_url5/</BaseURL>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstMpdClient *mpdclient = setup_mpd_client (xml);
+
+  assert_equals_int (g_list_length (mpdclient->mpd_node->BaseURLs), 2);
+  gstBaseURL = g_list_nth_data (mpdclient->mpd_node->BaseURLs, 0);
+  assert_equals_string (gstBaseURL->baseURL, "/mpd_base_url1/");
+  gstBaseURL = g_list_nth_data (mpdclient->mpd_node->BaseURLs, 1);
+  assert_equals_string (gstBaseURL->baseURL, "/mpd_base_url2/");
+
+  periodNode = (GstPeriodNode *) mpdclient->mpd_node->Periods->data;
+  assert_equals_int (g_list_length (periodNode->BaseURLs), 3);
+  gstBaseURL = g_list_nth_data (periodNode->BaseURLs, 0);
+  assert_equals_string (gstBaseURL->baseURL, " period_base_url1/");
+  gstBaseURL = g_list_nth_data (periodNode->BaseURLs, 1);
+  assert_equals_string (gstBaseURL->baseURL, " period_base_url2/");
+  gstBaseURL = g_list_nth_data (periodNode->BaseURLs, 2);
+  assert_equals_string (gstBaseURL->baseURL, " period_base_url3/");
+
+  adaptationSet = (GstAdaptationSetNode *) periodNode->AdaptationSets->data;
+  assert_equals_int (g_list_length (adaptationSet->BaseURLs), 4);
+  gstBaseURL = g_list_nth_data (adaptationSet->BaseURLs, 0);
+  assert_equals_string (gstBaseURL->baseURL, "adaptation_base_url1/");
+  gstBaseURL = g_list_nth_data (adaptationSet->BaseURLs, 1);
+  assert_equals_string (gstBaseURL->baseURL, "adaptation_base_url2/");
+  gstBaseURL = g_list_nth_data (adaptationSet->BaseURLs, 2);
+  assert_equals_string (gstBaseURL->baseURL, "adaptation_base_url3/");
+  gstBaseURL = g_list_nth_data (adaptationSet->BaseURLs, 3);
+  assert_equals_string (gstBaseURL->baseURL, "adaptation_base_url4/");
+
+  representation = (GstRepresentationNode *)
+      adaptationSet->Representations->data;
+  assert_equals_int (g_list_length (representation->BaseURLs), 5);
+  gstBaseURL = g_list_nth_data (representation->BaseURLs, 0);
+  assert_equals_string (gstBaseURL->baseURL, "representation_base_url1/");
+  gstBaseURL = g_list_nth_data (representation->BaseURLs, 1);
+  assert_equals_string (gstBaseURL->baseURL, "representation_base_url2/");
+  gstBaseURL = g_list_nth_data (representation->BaseURLs, 2);
+  assert_equals_string (gstBaseURL->baseURL, "representation_base_url3/");
+  gstBaseURL = g_list_nth_data (representation->BaseURLs, 3);
+  assert_equals_string (gstBaseURL->baseURL, "representation_base_url4/");
+  gstBaseURL = g_list_nth_data (representation->BaseURLs, 4);
+  assert_equals_string (gstBaseURL->baseURL, "representation_base_url5/");
+
+  /* test baseURL. Its value should be computed like this:
+   *  - start with xml url (null)
+   *  - set it to the value from MPD's BaseURL element: "/mpd_base_url1/"
+   *  - update the value with BaseURL element from Period. Because this
+   * is a relative url, it will update the current value. baseURL becomes
+   * "/mpd_base_url1/period_base_url1/"
+   *  - update the value with BaseURL element from AdaptationSet. Because this
+   * is a relative url, it will update the current value. baseURL becomes
+   * "/mpd_base_url1/period_base_url1/adaptation_base_url1/"
+   *  - update the value with BaseURL element from Representation. Because this
+   * is an relative url, it will update the current value."
+   */
+  baseURL = gst_mpdparser_get_baseURL (mpdclient, 0);
+  fail_if (baseURL == NULL);
+  assert_equals_string (baseURL,
+      "/mpd_base_url1/period_base_url1/adaptation_base_url1/representation_base_url1/");
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/* test no BaseURL */
+GST_START_TEST (dash_mpdparser_get_baseURL6)
+{
+  const gchar *baseURL;
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <Period id=\"Period0\" duration=\"P0Y0M1DT1H1M1S\">"
+      "    <AdaptationSet id=\"1\" mimeType=\"audio\" lang=\"en\">"
+      "      <Representation>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstMpdClient *mpdclient = setup_mpd_client (xml);
+
+  baseURL = gst_mpdparser_get_baseURL (mpdclient, 0);
+  fail_if (baseURL == NULL);
+  assert_equals_string (baseURL, "");
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/* BaseURL: test that the path is made absolute (a / is prepended if needed */
+GST_START_TEST (dash_mpdparser_get_baseURL7)
+{
+  const gchar *baseURL;
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <BaseURL>x/example.com/</BaseURL>"
+      "  <Period id=\"Period0\" duration=\"P0Y0M1DT1H1M1S\">"
+      "    <AdaptationSet id=\"1\" mimeType=\"audio\" lang=\"en\">"
+      "      <Representation>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstMpdClient *mpdclient;
+
+  mpdclient = setup_mpd_client (xml);
+
+  baseURL = gst_mpdparser_get_baseURL (mpdclient, 0);
+  fail_if (baseURL == NULL);
+  assert_equals_string (baseURL, "/x/example.com/");
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/* BaseURL: test that a / is not prepended if the string contains ':'
+ * This tests uris with schema present */
+GST_START_TEST (dash_mpdparser_get_baseURL8)
+{
+  const gchar *baseURL;
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "  <BaseURL>x:y/example.com/</BaseURL>"
+      "  <Period id=\"Period0\" duration=\"P0Y0M1DT1H1M1S\">"
+      "    <AdaptationSet id=\"1\" mimeType=\"audio\" lang=\"en\">"
+      "      <Representation>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  GstMpdClient *mpdclient = setup_mpd_client (xml);
+
+  baseURL = gst_mpdparser_get_baseURL (mpdclient, 0);
+  fail_if (baseURL == NULL);
+  assert_equals_string (baseURL, "x:y/example.com/");
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
 /*
  * Test getting mediaPresentationDuration
  *
@@ -3527,7 +3853,7 @@ GST_START_TEST (dash_mpdparser_segments)
       "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
       "     availabilityStartTime=\"2015-03-24T0:0:0\""
       "     mediaPresentationDuration=\"P0Y0M0DT3H3M30S\">"
-      "  <Period id=\"Period0\">"
+      "  <Period id=\"Period0\" start=\"P0Y0M0DT0H0M10S\">"
       "    <AdaptationSet mimeType=\"video/mp4\">"
       "      <Representation>"
       "        <SegmentList duration=\"45\">"
@@ -3619,6 +3945,7 @@ GST_START_TEST (dash_mpdparser_segments)
   /* each segment has a duration of 0 hours, 0 min 45 seconds
    * segment index is 1.
    * End time is at the end of segment 1, so 2 * segment_duration = 2 * 45s
+   * We also add period start time (10s)
    */
   segmentEndTime =
       gst_mpd_client_get_next_segment_availability_end_time (mpdclient,
@@ -3628,7 +3955,7 @@ GST_START_TEST (dash_mpdparser_segments)
   assert_equals_int (gst_date_time_get_day (segmentEndTime), 24);
   assert_equals_int (gst_date_time_get_hour (segmentEndTime), 0);
   assert_equals_int (gst_date_time_get_minute (segmentEndTime), 1);
-  assert_equals_int (gst_date_time_get_second (segmentEndTime), 30);
+  assert_equals_int (gst_date_time_get_second (segmentEndTime), 40);
   gst_date_time_unref (segmentEndTime);
 
   /* seek to time */
@@ -3944,34 +4271,9 @@ GST_START_TEST (dash_mpdparser_inherited_segmentURL)
   expectedDuration = duration_to_ms (0, 0, 0, 0, 0, 110, 0);
   expectedTimestamp = duration_to_ms (0, 0, 0, 0, 0, 0, 0);
 
-  /* the representation contains 2 segments
-   *  - one inherited from AdaptationSet (duration 100)
-   *  - the second defined in the Representation (duration 110)
-   *
-   * Both will have the duration specified in the Representation (110)
-   */
+  /* the representation contains 1 segment (the one from Representation) */
 
   /* check first segment */
-  ret = gst_mpd_client_get_next_fragment (mpdclient, 0, &fragment);
-  assert_equals_int (ret, TRUE);
-  assert_equals_string (fragment.uri, "/TestMediaAdaptation");
-  assert_equals_int64 (fragment.range_start, 10);
-  assert_equals_int64 (fragment.range_end, 20);
-  assert_equals_string (fragment.index_uri, "/TestIndexAdaptation");
-  assert_equals_int64 (fragment.index_range_start, 30);
-  assert_equals_int64 (fragment.index_range_end, 40);
-  assert_equals_uint64 (fragment.duration, expectedDuration * GST_MSECOND);
-  assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
-  gst_media_fragment_info_clear (&fragment);
-
-  /* advance to next segment */
-  flow = gst_mpd_client_advance_segment (mpdclient, activeStream, TRUE);
-  assert_equals_int (flow, GST_FLOW_OK);
-
-  /* second segment starts after first ends */
-  expectedTimestamp = expectedTimestamp + expectedDuration;
-
-  /* check second segment */
   ret = gst_mpd_client_get_next_fragment (mpdclient, 0, &fragment);
   assert_equals_int (ret, TRUE);
   assert_equals_string (fragment.uri, "/TestMediaRep");
@@ -3983,6 +4285,10 @@ GST_START_TEST (dash_mpdparser_inherited_segmentURL)
   assert_equals_uint64 (fragment.duration, expectedDuration * GST_MSECOND);
   assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
   gst_media_fragment_info_clear (&fragment);
+
+  /* try to advance to next segment. Should fail */
+  flow = gst_mpd_client_advance_segment (mpdclient, activeStream, TRUE);
+  assert_equals_int (flow, GST_FLOW_EOS);
 
   gst_mpd_client_free (mpdclient);
 }
@@ -4283,6 +4589,138 @@ GST_START_TEST (dash_mpdparser_segment_timeline)
 GST_END_TEST;
 
 /*
+ * Test SegmentList with multiple inherited segmentURLs
+ *
+ */
+GST_START_TEST (dash_mpdparser_multiple_inherited_segmentURL)
+{
+  GList *adaptationSets;
+  GstAdaptationSetNode *adapt_set;
+  GstActiveStream *activeStream;
+  GstMediaFragmentInfo fragment;
+  GstClockTime expectedDuration;
+  GstClockTime expectedTimestamp;
+  GstFlowReturn flow;
+
+  /*
+   * Period duration is 30 seconds
+   * Period start is 10 seconds. Thus, period duration is 20 seconds.
+   *
+   * There are 2 segments in the AdaptationSet segment list and 2 in the
+   * Representation's segment list.
+   * Segment duration is 5s for the Adaptation segments and 8s for
+   * Representation segments.
+   * Separately, each segment list (duration 2*5=10 or 2*8=16) fits comfortably
+   * in the Period's 20s duration.
+   *
+   * We expect the Representation segments to overwrite the AdaptationSet segments.
+   */
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      " profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
+      " availabilityStartTime=\"2015-03-24T0:0:0\""
+      " mediaPresentationDuration=\"P0Y0M0DT0H0M30S\">"
+      "<Period start=\"P0Y0M0DT0H0M10S\">"
+      "  <AdaptationSet mimeType=\"video/mp4\">"
+      "    <SegmentList duration=\"5\">"
+      "      <SegmentURL"
+      "         media=\"TestMedia0\" mediaRange=\"10-20\""
+      "         index=\"TestIndex0\" indexRange=\"100-200\""
+      "      ></SegmentURL>"
+      "      <SegmentURL"
+      "         media=\"TestMedia1\" mediaRange=\"20-30\""
+      "         index=\"TestIndex1\" indexRange=\"200-300\""
+      "      ></SegmentURL>"
+      "    </SegmentList>"
+      "    <Representation>"
+      "      <SegmentList duration=\"8\">"
+      "        <SegmentURL"
+      "           media=\"TestMedia2\" mediaRange=\"30-40\""
+      "           index=\"TestIndex2\" indexRange=\"300-400\""
+      "        ></SegmentURL>"
+      "        <SegmentURL"
+      "           media=\"TestMedia3\" mediaRange=\"40-50\""
+      "           index=\"TestIndex3\" indexRange=\"400-500\""
+      "        ></SegmentURL>"
+      "      </SegmentList>"
+      "    </Representation></AdaptationSet></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  /* process the xml data */
+  ret = gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
+  assert_equals_int (ret, TRUE);
+
+  /* get the list of adaptation sets of the first period */
+  adaptationSets = gst_mpd_client_get_adaptation_sets (mpdclient);
+  fail_if (adaptationSets == NULL);
+
+  /* setup streaming from the first adaptation set */
+  adapt_set = (GstAdaptationSetNode *) g_list_nth_data (adaptationSets, 0);
+  fail_if (adapt_set == NULL);
+  ret = gst_mpd_client_setup_streaming (mpdclient, adapt_set);
+  assert_equals_int (ret, TRUE);
+
+  activeStream = gst_mpdparser_get_active_stream_by_index (mpdclient, 0);
+  fail_if (activeStream == NULL);
+
+  expectedDuration = duration_to_ms (0, 0, 0, 0, 0, 8, 0);
+  expectedTimestamp = duration_to_ms (0, 0, 0, 0, 0, 0, 0);
+
+  /* the representation contains 2 segments defined in the Representation
+   *
+   * Both will have the duration specified in the Representation (8)
+   */
+
+  /* check first segment */
+  ret = gst_mpd_client_get_next_fragment (mpdclient, 0, &fragment);
+  assert_equals_int (ret, TRUE);
+  assert_equals_string (fragment.uri, "/TestMedia2");
+  assert_equals_int64 (fragment.range_start, 30);
+  assert_equals_int64 (fragment.range_end, 40);
+  assert_equals_string (fragment.index_uri, "/TestIndex2");
+  assert_equals_int64 (fragment.index_range_start, 300);
+  assert_equals_int64 (fragment.index_range_end, 400);
+  assert_equals_uint64 (fragment.duration, expectedDuration * GST_MSECOND);
+  assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
+  gst_media_fragment_info_clear (&fragment);
+
+  /* advance to next segment */
+  flow = gst_mpd_client_advance_segment (mpdclient, activeStream, TRUE);
+  assert_equals_int (flow, GST_FLOW_OK);
+
+  /* second segment starts after previous ends */
+  expectedTimestamp = expectedTimestamp + expectedDuration;
+
+  /* check second segment */
+  ret = gst_mpd_client_get_next_fragment (mpdclient, 0, &fragment);
+  assert_equals_int (ret, TRUE);
+  assert_equals_string (fragment.uri, "/TestMedia3");
+  assert_equals_int64 (fragment.range_start, 40);
+  assert_equals_int64 (fragment.range_end, 50);
+  assert_equals_string (fragment.index_uri, "/TestIndex3");
+  assert_equals_int64 (fragment.index_range_start, 400);
+  assert_equals_int64 (fragment.index_range_end, 500);
+  assert_equals_uint64 (fragment.duration, expectedDuration * GST_MSECOND);
+  assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
+  gst_media_fragment_info_clear (&fragment);
+
+  /* try to advance to the next segment. There isn't any, so it should fail */
+  flow = gst_mpd_client_advance_segment (mpdclient, activeStream, TRUE);
+  assert_equals_int (flow, GST_FLOW_EOS);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
  * Test parsing empty xml string
  *
  */
@@ -4447,6 +4885,365 @@ GST_START_TEST
 
 GST_END_TEST;
 
+GST_START_TEST (dash_mpdparser_whitespace_strings)
+{
+  fail_unless (gst_mpdparser_validate_no_whitespace ("") == TRUE);
+  fail_unless (gst_mpdparser_validate_no_whitespace ("/") == TRUE);
+  fail_unless (gst_mpdparser_validate_no_whitespace (" ") == FALSE);
+  fail_unless (gst_mpdparser_validate_no_whitespace ("aaaaaaaa ") == FALSE);
+  fail_unless (gst_mpdparser_validate_no_whitespace ("a\ta") == FALSE);
+  fail_unless (gst_mpdparser_validate_no_whitespace ("a\ra") == FALSE);
+  fail_unless (gst_mpdparser_validate_no_whitespace ("a\na") == FALSE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (dash_mpdparser_rfc1738_strings)
+{
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("/") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url (" ") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("aaaaaaaa ") == FALSE);
+
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("") == TRUE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("a") == TRUE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url
+      (";:@&=aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789$-_.+!*'(),%AA")
+      == TRUE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url
+      (";:@&=aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789$-_.+!*'(),% ")
+      == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("%AA") == TRUE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("%A") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("%") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("%XA") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("%AX") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("%XX") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("\001") == FALSE);
+}
+
+GST_END_TEST;
+
+/*
+ * Test negative period duration
+ */
+GST_START_TEST (dash_mpdparser_negative_period_duration)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
+      "     availabilityStartTime=\"2015-03-24T0:0:0\""
+      "     mediaPresentationDuration=\"P0Y0M0DT3H3M30S\">"
+      "  <Period id=\"Period0\""
+      "          start=\"P0Y0M0DT1H0M0S\""
+      "          duration=\"-PT10S\">"
+      "  </Period><Period id=\"Period1\"></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  /* process the xml data
+   * should fail due to negative duration of Period0
+   */
+  ret = gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
+  assert_equals_int (ret, FALSE);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test parsing negative values from attributes that should be unsigned
+ *
+ */
+GST_START_TEST (dash_mpdparser_read_unsigned_from_negative_values)
+{
+  GstPeriodNode *periodNode;
+  GstSegmentBaseType *segmentBase;
+  GstAdaptationSetNode *adaptationSet;
+  GstRepresentationNode *representation;
+  GstSubRepresentationNode *subRepresentation;
+
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
+      "     availabilityStartTime=\"2015--1-13T12:25:37\">"
+      "  <Period start=\"-P-2015Y\" duration=\"-P-5M\">"
+      "    <SegmentBase presentationTimeOffset=\"-10\""
+      "                 timescale=\"-5\""
+      "                 indexRange=\"1--10\">"
+      "    </SegmentBase>"
+      "    <AdaptationSet par=\"-1:7\""
+      "                   minFrameRate=\" -1\""
+      "                   segmentAlignment=\"-4\">"
+      "      <Representation>"
+      "        <SubRepresentation dependencyLevel=\"1 -2 3\">"
+      "        </SubRepresentation>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  periodNode = (GstPeriodNode *) mpdclient->mpd_node->Periods->data;
+  segmentBase = periodNode->SegmentBase;
+  adaptationSet = (GstAdaptationSetNode *) periodNode->AdaptationSets->data;
+  representation = (GstRepresentationNode *)
+      adaptationSet->Representations->data;
+  subRepresentation = (GstSubRepresentationNode *)
+      representation->SubRepresentations->data;
+
+  /* availabilityStartTime parsing should fail */
+  fail_if (mpdclient->mpd_node->availabilityStartTime != NULL);
+
+  /* Period start parsing should fail */
+  assert_equals_int64 (periodNode->start, -1);
+
+  /* Period duration parsing should fail */
+  assert_equals_int64 (periodNode->duration, -1);
+
+  /* expect negative value to be rejected and presentationTimeOffset to be 0 */
+  assert_equals_uint64 (segmentBase->presentationTimeOffset, 0);
+  assert_equals_uint64 (segmentBase->timescale, 1);
+  fail_if (segmentBase->indexRange != NULL);
+
+  /* par ratio parsing should fail */
+  fail_if (adaptationSet->par != NULL);
+
+  /* minFrameRate parsing should fail */
+  fail_if (adaptationSet->minFrameRate != NULL);
+
+  /* segmentAlignment parsing should fail */
+  fail_if (adaptationSet->segmentAlignment != NULL);
+
+  /* dependency level parsing should fail */
+  fail_if (subRepresentation->dependencyLevel != NULL);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test negative mediaPresentationDuration duration
+ */
+GST_START_TEST (dash_mpdparser_negative_mediaPresentationDuration)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
+      "     availabilityStartTime=\"2015-03-24T0:0:0\""
+      "     mediaPresentationDuration=\"-P0Y0M0DT3H3M30S\">"
+      "  <Period id=\"Period0\" start=\"P0Y0M0DT1H0M0S\"></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  /* process the xml data
+   * should fail due to negative duration of mediaPresentationDuration
+   */
+  ret = gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
+  assert_equals_int (ret, FALSE);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test parsing an MPD with no profiles
+ */
+GST_START_TEST (dash_mpdparser_no_profiles)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\"></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, strlen (xml));
+
+  assert_equals_int (ret, TRUE);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test S node list greater than SegmentURL list
+ *
+ */
+GST_START_TEST (dash_mpdparser_unmatched_segmentTimeline_segmentURL)
+{
+  GList *adaptationSets;
+  GstAdaptationSetNode *adapt_set;
+
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
+      "     availabilityStartTime=\"2015-03-24T0:0:0\""
+      "     mediaPresentationDuration=\"P0Y0M0DT3H3M30S\">"
+      "  <Period start=\"P0Y0M0DT0H0M10S\">"
+      "    <AdaptationSet mimeType=\"video/mp4\">"
+      "      <Representation>"
+      "        <SegmentList>"
+      "          <SegmentTimeline>"
+      "            <S t=\"3\"  d=\"2\" r=\"1\"></S>"
+      "            <S t=\"10\" d=\"3\" r=\"0\"></S>"
+      "          </SegmentTimeline>"
+      "          <SegmentURL media=\"TestMedia0\""
+      "                      index=\"TestIndex0\">"
+      "          </SegmentURL>"
+      "        </SegmentList>"
+      "      </Representation></AdaptationSet></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+
+  /* process the xml data */
+  ret = gst_mpd_client_setup_media_presentation (mpdclient, GST_CLOCK_TIME_NONE,
+      -1, NULL);
+  assert_equals_int (ret, TRUE);
+
+  /* get the list of adaptation sets of the first period */
+  adaptationSets = gst_mpd_client_get_adaptation_sets (mpdclient);
+  fail_if (adaptationSets == NULL);
+
+  adapt_set = (GstAdaptationSetNode *) g_list_nth_data (adaptationSets, 0);
+  fail_if (adapt_set == NULL);
+
+  /* setup streaming from the first adaptation set.
+   * Should fail because the second S node does not have a  matching
+   * SegmentURL node
+   */
+  ret = gst_mpd_client_setup_streaming (mpdclient, adapt_set);
+  assert_equals_int (ret, FALSE);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test parsing of the default presentation delay property
+ */
+GST_START_TEST (dash_mpdparser_default_presentation_delay)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      "     profiles=\"urn:mpeg:dash:profile:isoff-main:2011\""
+      "     maxSegmentDuration=\"PT2S\">"
+      "  <Period id=\"Period0\" start=\"P0S\"></Period></MPD>";
+
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+  gint64 value;
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+  assert_equals_int (ret, TRUE);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "5s");
+  assert_equals_int64 (value, 5000);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "5S");
+  assert_equals_int64 (value, 5000);
+  value =
+      gst_mpd_client_parse_default_presentation_delay (mpdclient, "5 seconds");
+  assert_equals_int64 (value, 5000);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "2500ms");
+  assert_equals_int64 (value, 2500);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "3f");
+  assert_equals_int64 (value, 6000);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "3F");
+  assert_equals_int64 (value, 6000);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "");
+  assert_equals_int64 (value, 0);
+  value = gst_mpd_client_parse_default_presentation_delay (mpdclient, "10");
+  assert_equals_int64 (value, 0);
+  value =
+      gst_mpd_client_parse_default_presentation_delay (mpdclient,
+      "not a number");
+  assert_equals_int64 (value, 0);
+
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (dash_mpdparser_duration)
+{
+  guint64 v;
+
+  fail_unless (gst_mpdparser_parse_duration ("", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration (" ", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("0", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("D-1", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("T", &v) == FALSE);
+
+  fail_unless (gst_mpdparser_parse_duration ("P", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("PT", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("PX", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PPT", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PTT", &v) == FALSE);
+
+  fail_unless (gst_mpdparser_parse_duration ("P1D", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("P1D1D", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P1D1M", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P1M1D", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("P1M1D1M", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P1M1D1D", &v) == FALSE);
+
+  fail_unless (gst_mpdparser_parse_duration ("P0M0D", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("P-1M", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P15M", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P-1D", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P35D", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P-1Y", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT-1H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT25H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT-1M", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT65M", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT-1S", &v) == FALSE);
+  /* seconds are allowed to be larger than 60 */
+  fail_unless (gst_mpdparser_parse_duration ("PT65S", &v) == TRUE);
+
+  fail_unless (gst_mpdparser_parse_duration ("PT1.1H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT1-1H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT1-H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT-H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PTH", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT0", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("PT1.1S", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("PT1.1.1S", &v) == FALSE);
+
+  fail_unless (gst_mpdparser_parse_duration ("P585Y", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P584Y", &v) == TRUE);
+
+  fail_unless (gst_mpdparser_parse_duration (" P10DT8H", &v) == TRUE);
+  fail_unless (gst_mpdparser_parse_duration ("P10D T8H", &v) == FALSE);
+  fail_unless (gst_mpdparser_parse_duration ("P10DT8H ", &v) == TRUE);
+}
+
+GST_END_TEST;
+
 /*
  * create a test suite containing all dash testcases
  */
@@ -4457,6 +5254,8 @@ dash_suite (void)
   TCase *tc_simpleMPD = tcase_create ("simpleMPD");
   TCase *tc_complexMPD = tcase_create ("complexMPD");
   TCase *tc_negativeTests = tcase_create ("negativeTests");
+  TCase *tc_stringTests = tcase_create ("stringTests");
+  TCase *tc_duration = tcase_create ("duration");
 
   GST_DEBUG_CATEGORY_INIT (gst_dash_demux_debug, "gst_dash_demux_debug", 0,
       "mpeg dash tests");
@@ -4566,7 +5365,9 @@ dash_suite (void)
   tcase_add_test (tc_simpleMPD, dash_mpdparser_template_parsing);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_isoff_ondemand_profile);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_GstDateTime);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_bitstreamSwitching_inheritance);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_various_duration_formats);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_default_presentation_delay);
 
   /* tests checking the MPD management
    * (eg. setting active streams, obtaining attributes values)
@@ -4584,6 +5385,10 @@ dash_suite (void)
   tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL2);
   tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL3);
   tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL4);
+  tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL5);
+  tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL6);
+  tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL7);
+  tcase_add_test (tc_complexMPD, dash_mpdparser_get_baseURL8);
   tcase_add_test (tc_complexMPD, dash_mpdparser_get_mediaPresentationDuration);
   tcase_add_test (tc_complexMPD, dash_mpdparser_get_streamPresentationOffset);
   tcase_add_test (tc_complexMPD, dash_mpdparser_segments);
@@ -4594,20 +5399,36 @@ dash_suite (void)
   tcase_add_test (tc_complexMPD, dash_mpdparser_segment_list);
   tcase_add_test (tc_complexMPD, dash_mpdparser_segment_template);
   tcase_add_test (tc_complexMPD, dash_mpdparser_segment_timeline);
+  tcase_add_test (tc_complexMPD, dash_mpdparser_multiple_inherited_segmentURL);
 
   /* tests checking the parsing of missing/incomplete attributes of xml */
   tcase_add_test (tc_negativeTests, dash_mpdparser_missing_xml);
   tcase_add_test (tc_negativeTests, dash_mpdparser_missing_mpd);
   tcase_add_test (tc_negativeTests, dash_mpdparser_no_end_tag);
+  tcase_add_test (tc_negativeTests, dash_mpdparser_no_profiles);
   tcase_add_test (tc_negativeTests, dash_mpdparser_no_default_namespace);
   tcase_add_test (tc_negativeTests,
       dash_mpdparser_wrong_period_duration_inferred_from_next_period);
   tcase_add_test (tc_negativeTests,
       dash_mpdparser_wrong_period_duration_inferred_from_next_mediaPresentationDuration);
+  tcase_add_test (tc_negativeTests, dash_mpdparser_negative_period_duration);
+  tcase_add_test (tc_negativeTests,
+      dash_mpdparser_read_unsigned_from_negative_values);
+  tcase_add_test (tc_negativeTests,
+      dash_mpdparser_negative_mediaPresentationDuration);
+  tcase_add_test (tc_negativeTests,
+      dash_mpdparser_unmatched_segmentTimeline_segmentURL);
+
+  tcase_add_test (tc_stringTests, dash_mpdparser_whitespace_strings);
+  tcase_add_test (tc_stringTests, dash_mpdparser_rfc1738_strings);
+
+  tcase_add_test (tc_duration, dash_mpdparser_duration);
 
   suite_add_tcase (s, tc_simpleMPD);
   suite_add_tcase (s, tc_complexMPD);
   suite_add_tcase (s, tc_negativeTests);
+  suite_add_tcase (s, tc_stringTests);
+  suite_add_tcase (s, tc_duration);
 
   return s;
 }

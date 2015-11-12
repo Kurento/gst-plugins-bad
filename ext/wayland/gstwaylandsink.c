@@ -290,12 +290,6 @@ gst_wayland_sink_find_display (GstWaylandSink * sink)
               ("Failed to create GstWlDisplay: '%s'", error->message));
           g_error_free (error);
           ret = FALSE;
-        } else {
-          /* inform the world about the new display */
-          context =
-              gst_wayland_display_handle_context_new (sink->display->display);
-          msg = gst_message_new_have_context (GST_OBJECT_CAST (sink), context);
-          gst_element_post_message (GST_ELEMENT_CAST (sink), msg);
         }
       }
     }
@@ -370,10 +364,13 @@ gst_wayland_sink_set_context (GstElement * element, GstContext * context)
   if (gst_context_has_context_type (context,
           GST_WAYLAND_DISPLAY_HANDLE_CONTEXT_TYPE)) {
     g_mutex_lock (&sink->display_lock);
-    if (G_LIKELY (!sink->display))
+    if (G_LIKELY (!sink->display)) {
       gst_wayland_sink_set_display_from_context (sink, context);
-    else
+    } else {
       GST_WARNING_OBJECT (element, "changing display handle is not supported");
+      g_mutex_unlock (&sink->display_lock);
+      return;
+    }
     g_mutex_unlock (&sink->display_lock);
   }
 
@@ -729,6 +726,11 @@ gst_wayland_sink_set_window_handle (GstVideoOverlay * overlay, guintptr handle)
   struct wl_surface *surface = (struct wl_surface *) handle;
 
   g_return_if_fail (sink != NULL);
+
+  if (sink->window != NULL) {
+    GST_WARNING_OBJECT (sink, "changing window handle is not supported");
+    return;
+  }
 
   g_mutex_lock (&sink->render_lock);
 

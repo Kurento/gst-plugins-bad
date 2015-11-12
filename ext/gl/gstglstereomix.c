@@ -58,9 +58,13 @@ enum
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
-            "RGBA") "; "
+    GST_STATIC_CAPS ("video/x-raw(" GST_CAPS_FEATURE_MEMORY_GL_MEMORY "), "
+        "format = (string) RGBA, "
+        "width = " GST_VIDEO_SIZE_RANGE ", "
+        "height = " GST_VIDEO_SIZE_RANGE ", "
+        "framerate = " GST_VIDEO_FPS_RANGE ","
+        "texture-target = (string) 2D"
+        "; "
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES
         (GST_CAPS_FEATURE_META_GST_VIDEO_GL_TEXTURE_UPLOAD_META,
             "RGBA")
@@ -70,9 +74,13 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink_%u",
     GST_PAD_SINK,
     GST_PAD_REQUEST,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
-            "RGBA") "; "
+    GST_STATIC_CAPS ("video/x-raw(" GST_CAPS_FEATURE_MEMORY_GL_MEMORY "), "
+        "format = (string) RGBA, "
+        "width = " GST_VIDEO_SIZE_RANGE ", "
+        "height = " GST_VIDEO_SIZE_RANGE ", "
+        "framerate = " GST_VIDEO_FPS_RANGE ","
+        "texture-target = (string) 2D"
+        "; "
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES
         (GST_CAPS_FEATURE_META_GST_VIDEO_GL_TEXTURE_UPLOAD_META,
             "RGBA")
@@ -475,6 +483,7 @@ static gboolean
 _negotiated_caps (GstVideoAggregator * vagg, GstCaps * caps)
 {
   GstGLStereoMix *mix = GST_GL_STEREO_MIX (vagg);
+  GstCaps *in_caps;
 
   GST_LOG_OBJECT (mix, "Configured output caps %" GST_PTR_FORMAT, caps);
 
@@ -490,11 +499,16 @@ _negotiated_caps (GstVideoAggregator * vagg, GstCaps * caps)
   /* We can configure the view_converter now */
   gst_gl_view_convert_set_context (mix->viewconvert,
       GST_GL_BASE_MIXER (mix)->context);
-  gst_gl_view_convert_set_format (mix->viewconvert, &mix->mix_info,
-      &mix->out_info);
+
+  in_caps = gst_video_info_to_caps (&mix->mix_info);
+  gst_caps_set_features (in_caps, 0,
+      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY));
+  gst_caps_set_simple (in_caps, "texture-target", G_TYPE_STRING,
+      GST_GL_TEXTURE_TARGET_2D_STR, NULL);
+
+  gst_gl_view_convert_set_caps (mix->viewconvert, in_caps, caps);
 
   return TRUE;
-
 }
 
 static gboolean

@@ -1,7 +1,6 @@
-/* GStreamer
- * Copyright (C) <1999> Erik Walthinsen <omega@cse.ogi.edu>
- * Copyright (C) <2008> Sebastian Dröge <sebastian.droege@collabora.co.uk>
- * Copyright (C) <2011-2012> Vincent Penquerc'h <vincent.penquerch@collabora.co.uk>
+/*
+ * GStreamer
+ * Copyright (C) 2015 Matthew Waters <matthew@centricular.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -19,19 +18,15 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef __GST_OPUS_HEADER_H__
-#define __GST_OPUS_HEADER_H__
+#ifndef _GST_GL_ENUMS_H_
+#define _GST_GL_ENUMS_H_
 
-#include <gst/gst.h>
+typedef enum
+{
+  GST_GL_TEXTURE_TARGET_NONE,
+  GST_GL_TEXTURE_TARGET_2D,
+  GST_GL_TEXTURE_TARGET_RECTANGLE,
+  GST_GL_TEXTURE_TARGET_EXTERNAL_OES,
+} GstGLTextureTarget;
 
-G_BEGIN_DECLS
-
-extern gboolean gst_opus_header_is_header (GstBuffer * buf,
-    const char *magic, guint magic_size);
-extern gboolean gst_opus_header_is_id_header (GstBuffer * buf);
-extern gboolean gst_opus_header_is_comment_header (GstBuffer * buf);
-
-
-G_END_DECLS
-
-#endif /* __GST_OPUS_HEADER_H__ */
+#endif /* _GST_GL_ENUMS_H_ */

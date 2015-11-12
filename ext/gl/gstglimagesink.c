@@ -321,17 +321,26 @@ static void gst_glimage_sink_handle_events (GstVideoOverlay * overlay,
 static gboolean update_output_format (GstGLImageSink * glimage_sink);
 
 #define GST_GL_SINK_CAPS \
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, "RGBA")
-
-#define GST_GL_SINK_OVERLAY_CAPS \
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY "," \
-            GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, "RGBA")
+    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GL_MEMORY "), "              \
+    "format = (string) RGBA, "                                          \
+    "width = " GST_VIDEO_SIZE_RANGE ", "                                \
+    "height = " GST_VIDEO_SIZE_RANGE ", "                               \
+    "framerate = " GST_VIDEO_FPS_RANGE ", "                             \
+    "texture-target = (string) 2D "                                     \
+    " ; "                                                               \
+    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GL_MEMORY ","                \
+    GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION "), "           \
+    "format = (string) RGBA, "                                          \
+    "width = " GST_VIDEO_SIZE_RANGE ", "                                \
+    "height = " GST_VIDEO_SIZE_RANGE ", "                               \
+    "framerate = " GST_VIDEO_FPS_RANGE ", "                             \
+    "texture-target = (string) 2D "
 
 static GstStaticPadTemplate gst_glimage_sink_template =
-    GST_STATIC_PAD_TEMPLATE ("sink",
+GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_GL_SINK_CAPS ";" GST_GL_SINK_OVERLAY_CAPS));
+    GST_STATIC_CAPS (GST_GL_SINK_CAPS));
 
 enum
 {
@@ -942,9 +951,6 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         return GST_STATE_CHANGE_FAILURE;
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
-      glimage_sink->overlay_compositor =
-          gst_gl_overlay_compositor_new (glimage_sink->context);
-
       g_atomic_int_set (&glimage_sink->to_quit, 0);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
@@ -999,9 +1005,18 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         gst_caps_unref (glimage_sink->out_caps);
         glimage_sink->out_caps = NULL;
       }
+      if (glimage_sink->in_caps) {
+        gst_caps_unref (glimage_sink->in_caps);
+        glimage_sink->in_caps = NULL;
+      }
       break;
     }
     case GST_STATE_CHANGE_READY_TO_NULL:
+      if (glimage_sink->overlay_compositor) {
+        gst_object_unref (glimage_sink->overlay_compositor);
+        glimage_sink->overlay_compositor = NULL;
+      }
+
       if (glimage_sink->context) {
         GstGLWindow *window = gst_gl_context_get_window (glimage_sink->context);
 
@@ -1018,9 +1033,6 @@ gst_glimage_sink_change_state (GstElement * element, GstStateChange transition)
         if (glimage_sink->mouse_sig_id)
           g_signal_handler_disconnect (window, glimage_sink->mouse_sig_id);
         glimage_sink->mouse_sig_id = 0;
-
-        gst_object_unref (glimage_sink->overlay_compositor);
-        glimage_sink->overlay_compositor = NULL;
 
         gst_object_unref (window);
         gst_object_unref (glimage_sink->context);
@@ -1164,6 +1176,7 @@ update_output_format (GstGLImageSink * glimage_sink)
   gboolean input_is_mono = FALSE;
   GstVideoMultiviewMode mv_mode;
   GstGLWindow *window = NULL;
+  GstCaps *out_caps;
   gboolean ret;
 
   *out_info = glimage_sink->in_info;
@@ -1205,14 +1218,27 @@ update_output_format (GstGLImageSink * glimage_sink)
     glimage_sink->out_info.height = MAX (1, glimage_sink->display_rect.h);
     GST_LOG_OBJECT (glimage_sink, "Set 3D output scale to %d,%d",
         glimage_sink->display_rect.w, glimage_sink->display_rect.h);
+  }
+
+  out_caps = gst_video_info_to_caps (out_info);
+  gst_caps_set_features (out_caps, 0,
+      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_GL_MEMORY));
+
+  if (glimage_sink->convert_views) {
+    gst_caps_set_simple (out_caps, "texture-target", G_TYPE_STRING,
+        GST_GL_TEXTURE_TARGET_2D_STR, NULL);
 
     GST_GLIMAGE_SINK_UNLOCK (glimage_sink);
-    gst_gl_view_convert_set_format (glimage_sink->convert_views,
-        &glimage_sink->in_info, &glimage_sink->out_info);
+    gst_gl_view_convert_set_caps (glimage_sink->convert_views,
+        glimage_sink->in_caps, out_caps);
     g_object_set (glimage_sink->convert_views, "downmix-mode",
         glimage_sink->mview_downmix_mode, NULL);
     GST_GLIMAGE_SINK_LOCK (glimage_sink);
   }
+
+  if (glimage_sink->out_caps)
+    gst_caps_unref (glimage_sink->out_caps);
+  glimage_sink->out_caps = out_caps;
 
   glimage_sink->output_mode_changed = FALSE;
 
@@ -1222,10 +1248,6 @@ update_output_format (GstGLImageSink * glimage_sink)
     gst_gl_window_queue_resize (window);
     gst_object_unref (window);
   }
-
-  if (glimage_sink->out_caps)
-    gst_caps_unref (glimage_sink->out_caps);
-  glimage_sink->out_caps = gst_video_info_to_caps (out_info);
 
   return ret;
 }
@@ -1249,6 +1271,9 @@ gst_glimage_sink_set_caps (GstBaseSink * bsink, GstCaps * caps)
     return FALSE;
 
   GST_GLIMAGE_SINK_LOCK (glimage_sink);
+  if (glimage_sink->in_caps)
+    gst_caps_unref (glimage_sink->in_caps);
+  glimage_sink->in_caps = gst_caps_ref (caps);
   glimage_sink->in_info = vinfo;
   ok = update_output_format (glimage_sink);
 
@@ -1315,6 +1340,7 @@ prepare_next_buffer (GstGLImageSink * glimage_sink)
         goto fail;
     }
     gst_object_unref (convert_views);
+    convert_views = NULL;
 
     if (next_buffer == NULL) {
       /* Not ready to paint a buffer yet */
@@ -1324,6 +1350,14 @@ prepare_next_buffer (GstGLImageSink * glimage_sink)
   } else {
     next_buffer = in_buffer;
     info = &glimage_sink->in_info;
+  }
+
+  if (!glimage_sink->overlay_compositor) {
+    if (!(glimage_sink->overlay_compositor =
+            gst_gl_overlay_compositor_new (glimage_sink->context))) {
+      gst_buffer_unref (next_buffer);
+      goto fail;
+    }
   }
 
   gst_gl_overlay_compositor_upload_overlays (glimage_sink->overlay_compositor,
@@ -1369,6 +1403,8 @@ prepare_next_buffer (GstGLImageSink * glimage_sink)
   return TRUE;
 
 fail:
+  if (convert_views)
+    gst_object_unref (convert_views);
   GST_GLIMAGE_SINK_LOCK (glimage_sink);
   return FALSE;
 }
@@ -1377,6 +1413,7 @@ static GstFlowReturn
 gst_glimage_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
 {
   GstGLImageSink *glimage_sink;
+  GstGLSyncMeta *sync_meta;
   GstBuffer **target;
   GstBuffer *old_input;
 
@@ -1404,6 +1441,10 @@ gst_glimage_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
 
   if (glimage_sink->output_mode_changed)
     update_output_format (glimage_sink);
+
+  sync_meta = gst_buffer_get_gl_sync_meta (buf);
+  if (sync_meta)
+    gst_gl_sync_meta_wait (sync_meta, glimage_sink->context);
 
   if (!prepare_next_buffer (glimage_sink)) {
     GST_GLIMAGE_SINK_UNLOCK (glimage_sink);
@@ -1753,7 +1794,8 @@ gst_glimage_sink_cleanup_glthread (GstGLImageSink * gl_sink)
     gl_sink->vbo_indices = 0;
   }
 
-  gst_gl_overlay_compositor_free_overlays (gl_sink->overlay_compositor);
+  if (gl_sink->overlay_compositor)
+    gst_gl_overlay_compositor_free_overlays (gl_sink->overlay_compositor);
 }
 
 /* Called with object lock held */

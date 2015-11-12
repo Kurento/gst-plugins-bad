@@ -48,6 +48,8 @@
 
 #include <gst/gsttagsetter.h>
 #include <gst/audio/audio.h>
+#include <gst/pbutils/pbutils.h>
+#include <gst/tag/tag.h>
 #include <gst/glib-compat-private.h>
 #include "gstopusheader.h"
 #include "gstopuscommon.h"
@@ -166,8 +168,13 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_STATIC_CAPS ("audio/x-raw, "
         "format = (string) " FORMAT_STR ", "
         "layout = (string) interleaved, "
-        "rate = (int) { 8000, 12000, 16000, 24000, 48000 }, "
-        "channels = (int) [ 1, 2 ] ")
+        "rate = (int) 48000, "
+        "channels = (int) [ 1, 8 ]; "
+        "audio/x-raw, "
+        "format = (string) " FORMAT_STR ", "
+        "layout = (string) interleaved, "
+        "rate = (int) { 8000, 12000, 16000, 24000 }, "
+        "channels = (int) [ 1, 8 ] ")
     );
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
@@ -372,8 +379,6 @@ gst_opus_enc_finalize (GObject * object)
 static void
 gst_opus_enc_init (GstOpusEnc * enc)
 {
-  GstAudioEncoder *benc = GST_AUDIO_ENCODER (enc);
-
   GST_DEBUG_OBJECT (enc, "init");
 
   GST_PAD_SET_ACCEPT_TEMPLATE (GST_AUDIO_ENCODER_SINK_PAD (enc));
@@ -394,10 +399,6 @@ gst_opus_enc_init (GstOpusEnc * enc)
   enc->packet_loss_percentage = DEFAULT_PACKET_LOSS_PERCENT;
   enc->max_payload_size = DEFAULT_MAX_PAYLOAD_SIZE;
   enc->audio_type = DEFAULT_AUDIO_TYPE;
-
-  /* arrange granulepos marking (and required perfect ts) */
-  gst_audio_encoder_set_mark_granule (benc, TRUE);
-  gst_audio_encoder_set_perfect_timestamp (benc, TRUE);
 }
 
 static gboolean
@@ -407,6 +408,7 @@ gst_opus_enc_start (GstAudioEncoder * benc)
 
   GST_DEBUG_OBJECT (enc, "start");
   enc->encoded_samples = 0;
+  enc->consumed_samples = 0;
 
   return TRUE;
 }
@@ -545,27 +547,20 @@ gst_opus_enc_setup_channel_mappings (GstOpusEnc * enc,
   /* For two channels, use the basic RTP mapping if the channels are
      mapped as left/right. */
   if (enc->n_channels == 2) {
-    if (MAPS (0, FRONT_LEFT) && MAPS (1, FRONT_RIGHT)) {
-      GST_INFO_OBJECT (enc, "Stereo, canonical mapping");
-      enc->channel_mapping_family = 0;
-      enc->n_stereo_streams = 1;
-      /* The channel mapping is implicit for family 0, that's why we do not
-         attempt to create one for right/left - this will be mapped to the
-         Vorbis mapping below. */
-      return;
-    } else {
-      GST_DEBUG_OBJECT (enc, "Stereo, but not canonical mapping, continuing");
-    }
+    GST_INFO_OBJECT (enc, "Stereo, trivial RTP mapping");
+    enc->channel_mapping_family = 0;
+    enc->n_stereo_streams = 1;
+    /* implicit mapping for family 0 */
+    return;
   }
 
-  /* For channels between 1 and 8, we use the Vorbis mapping if we can
-     find a permutation that matches it. Mono will have been taken care
-     of earlier, but this code also handles it. Same for left/right stereo.
-     There are two mappings. One maps the input channels to an ordering
-     which has the natural pairs first so they can benefit from the Opus
-     stereo channel coupling, and the other maps this ordering to the
-     Vorbis ordering. */
-  if (enc->n_channels >= 1 && enc->n_channels <= 8) {
+  /* For channels between 3 and 8, we use the Vorbis mapping if we can
+     find a permutation that matches it. Mono and stereo will have been taken
+     care of earlier, but this code also handles it. There are two mappings.
+     One maps the input channels to an ordering which has the natural pairs
+     first so they can benefit from the Opus stereo channel coupling, and the
+     other maps this ordering to the Vorbis ordering. */
+  if (enc->n_channels >= 3 && enc->n_channels <= 8) {
     int c0, c1, c0v, c1v;
     int mapped;
     gboolean positions_done[256];
@@ -580,6 +575,8 @@ gst_opus_enc_setup_channel_mappings (GstOpusEnc * enc,
           GST_AUDIO_CHANNEL_POSITION_FRONT_RIGHT_OF_CENTER},
       {GST_AUDIO_CHANNEL_POSITION_SIDE_LEFT,
           GST_AUDIO_CHANNEL_POSITION_SIDE_RIGHT},
+      {GST_AUDIO_CHANNEL_POSITION_FRONT_CENTER,
+          GST_AUDIO_CHANNEL_POSITION_REAR_CENTER},
     };
     size_t pair;
 
@@ -633,13 +630,8 @@ gst_opus_enc_setup_channel_mappings (GstOpusEnc * enc,
         GST_DEBUG_OBJECT (enc, "Channel position %s is not mapped yet, adding",
             gst_opus_channel_names[position]);
         cv = gst_opus_enc_find_channel_position_in_vorbis_order (enc, position);
-        if (cv < 0) {
-          GST_WARNING_OBJECT (enc,
-              "Cannot map channel positions to Vorbis order, using unknown mapping");
-          enc->channel_mapping_family = 255;
-          enc->n_stereo_streams = 0;
-          return;
-        }
+        if (cv < 0)
+          g_assert_not_reached ();
         enc->encoding_channel_mapping[mapped] = n;
         enc->decoding_channel_mapping[cv] = mapped;
         mapped++;
@@ -717,6 +709,10 @@ gst_opus_enc_setup (GstOpusEnc * enc)
   int error = OPUS_OK;
   GstCaps *caps;
   gboolean ret;
+  gint32 lookahead;
+  const GstTagList *tags;
+  GstTagList *empty_tags = NULL;
+  GstBuffer *header, *comments;
 
 #ifndef GST_DISABLE_GST_DEBUG
   GST_DEBUG_OBJECT (enc,
@@ -754,12 +750,30 @@ gst_opus_enc_setup (GstOpusEnc * enc)
   opus_multistream_encoder_ctl (enc->state,
       OPUS_SET_PACKET_LOSS_PERC (enc->packet_loss_percentage), 0);
 
-  GST_LOG_OBJECT (enc, "we have frame size %d", enc->frame_size);
+  opus_multistream_encoder_ctl (enc->state, OPUS_GET_LOOKAHEAD (&lookahead), 0);
 
-  gst_opus_header_create_caps (&caps, NULL, enc->n_channels,
-      enc->n_stereo_streams, enc->sample_rate, enc->channel_mapping_family,
-      enc->decoding_channel_mapping,
-      gst_tag_setter_get_tag_list (GST_TAG_SETTER (enc)));
+  GST_LOG_OBJECT (enc, "we have frame size %d, lookahead %d", enc->frame_size,
+      lookahead);
+
+  /* lookahead is samples, the Opus header wants it in 48kHz samples */
+  lookahead = lookahead * 48000 / enc->sample_rate;
+  enc->lookahead = enc->pending_lookahead = lookahead;
+
+  header = gst_codec_utils_opus_create_header (enc->sample_rate,
+      enc->n_channels, enc->channel_mapping_family,
+      enc->n_channels - enc->n_stereo_streams, enc->n_stereo_streams,
+      enc->decoding_channel_mapping, lookahead, 0);
+  tags = gst_tag_setter_get_tag_list (GST_TAG_SETTER (enc));
+  if (!tags)
+    tags = empty_tags = gst_tag_list_new_empty ();
+  comments =
+      gst_tag_list_to_vorbiscomment_buffer (tags, (const guint8 *) "OpusTags",
+      8, "Encoded with GStreamer opusenc");
+  caps = gst_codec_utils_opus_create_caps_from_header (header, comments);
+  if (empty_tags)
+    gst_tag_list_unref (empty_tags);
+  gst_buffer_unref (header);
+  gst_buffer_unref (comments);
 
   /* negotiate with these caps */
   GST_DEBUG_OBJECT (enc, "here are the caps: %" GST_PTR_FORMAT, caps);
@@ -795,6 +809,7 @@ gst_opus_enc_sink_event (GstAudioEncoder * benc, GstEvent * event)
     }
     case GST_EVENT_SEGMENT:
       enc->encoded_samples = 0;
+      enc->consumed_samples = 0;
       break;
 
     default:
@@ -805,70 +820,95 @@ gst_opus_enc_sink_event (GstAudioEncoder * benc, GstEvent * event)
 }
 
 static GstCaps *
+gst_opus_enc_get_sink_template_caps (void)
+{
+  static volatile gsize init = 0;
+  static GstCaps *caps = NULL;
+
+  if (g_once_init_enter (&init)) {
+    GValue rate_array = G_VALUE_INIT;
+    GValue v = G_VALUE_INIT;
+    GstStructure *s1, *s2, *s;
+    gint i, c;
+
+    caps = gst_caps_new_empty ();
+
+    /* Generate our two template structures */
+    g_value_init (&rate_array, GST_TYPE_LIST);
+    g_value_init (&v, G_TYPE_INT);
+    g_value_set_int (&v, 8000);
+    gst_value_list_append_value (&rate_array, &v);
+    g_value_set_int (&v, 12000);
+    gst_value_list_append_value (&rate_array, &v);
+    g_value_set_int (&v, 16000);
+    gst_value_list_append_value (&rate_array, &v);
+    g_value_set_int (&v, 24000);
+    gst_value_list_append_value (&rate_array, &v);
+
+    s1 = gst_structure_new ("audio/x-raw",
+        "format", G_TYPE_STRING, GST_AUDIO_NE (S16),
+        "layout", G_TYPE_STRING, "interleaved",
+        "rate", G_TYPE_INT, 48000, NULL);
+    s2 = gst_structure_new ("audio/x-raw",
+        "format", G_TYPE_STRING, GST_AUDIO_NE (S16),
+        "layout", G_TYPE_STRING, "interleaved", NULL);
+    gst_structure_set_value (s2, "rate", &rate_array);
+    g_value_unset (&rate_array);
+    g_value_unset (&v);
+
+    /* Mono */
+    s = gst_structure_copy (s1);
+    gst_structure_set (s, "channels", G_TYPE_INT, 1, NULL);
+    gst_caps_append_structure (caps, s);
+
+    s = gst_structure_copy (s2);
+    gst_structure_set (s, "channels", G_TYPE_INT, 1, NULL);
+    gst_caps_append_structure (caps, s);
+
+    /* Stereo and further */
+    for (i = 2; i <= 8; i++) {
+      guint64 channel_mask = 0;
+      const GstAudioChannelPosition *pos = gst_opus_channel_positions[i - 1];
+
+      for (c = 0; c < i; c++) {
+        channel_mask |= G_GUINT64_CONSTANT (1) << pos[c];
+      }
+
+      s = gst_structure_copy (s1);
+      gst_structure_set (s, "channels", G_TYPE_INT, i, "channel-mask",
+          GST_TYPE_BITMASK, channel_mask, NULL);
+      gst_caps_append_structure (caps, s);
+
+      s = gst_structure_copy (s2);
+      gst_structure_set (s, "channels", G_TYPE_INT, i, "channel-mask",
+          GST_TYPE_BITMASK, channel_mask, NULL);
+      gst_caps_append_structure (caps, s);
+    }
+
+    gst_structure_free (s1);
+    gst_structure_free (s2);
+
+    g_once_init_leave (&init, 1);
+  }
+
+  return caps;
+}
+
+static GstCaps *
 gst_opus_enc_sink_getcaps (GstAudioEncoder * benc, GstCaps * filter)
 {
   GstOpusEnc *enc;
   GstCaps *caps;
-  GstCaps *tcaps;
-  GstCaps *peercaps = NULL;
-  GstCaps *intersect = NULL;
-  guint i;
-  gboolean allow_multistream;
 
   enc = GST_OPUS_ENC (benc);
 
   GST_DEBUG_OBJECT (enc, "sink getcaps");
 
-  peercaps = gst_pad_peer_query_caps (GST_AUDIO_ENCODER_SRC_PAD (benc), NULL);
-  if (!peercaps) {
-    GST_DEBUG_OBJECT (benc, "No peercaps, returning template sink caps");
-    return gst_pad_get_pad_template_caps (GST_AUDIO_ENCODER_SINK_PAD (benc));
-  }
-
-  tcaps = gst_pad_get_pad_template_caps (GST_AUDIO_ENCODER_SRC_PAD (benc));
-  intersect = gst_caps_intersect (peercaps, tcaps);
-  gst_caps_unref (tcaps);
-  gst_caps_unref (peercaps);
-
-  if (gst_caps_is_empty (intersect))
-    return intersect;
-
-  allow_multistream = FALSE;
-  for (i = 0; i < gst_caps_get_size (intersect); i++) {
-    GstStructure *s = gst_caps_get_structure (intersect, i);
-    gboolean multistream;
-    if (gst_structure_get_boolean (s, "multistream", &multistream)) {
-      if (multistream) {
-        allow_multistream = TRUE;
-      }
-    } else {
-      allow_multistream = TRUE;
-    }
-  }
-
-  gst_caps_unref (intersect);
-
-  caps = gst_pad_get_pad_template_caps (GST_AUDIO_ENCODER_SINK_PAD (benc));
-  caps = gst_caps_make_writable (caps);
-  if (!allow_multistream) {
-    GValue range = { 0 };
-    g_value_init (&range, GST_TYPE_INT_RANGE);
-    gst_value_set_int_range (&range, 1, 2);
-    for (i = 0; i < gst_caps_get_size (caps); i++) {
-      GstStructure *s = gst_caps_get_structure (caps, i);
-      gst_structure_set_value (s, "channels", &range);
-    }
-    g_value_unset (&range);
-  }
-
-  if (filter) {
-    GstCaps *tmp = gst_caps_intersect_full (caps, filter,
-        GST_CAPS_INTERSECT_FIRST);
-    gst_caps_unref (caps);
-    caps = tmp;
-  }
+  caps = gst_opus_enc_get_sink_template_caps ();
+  caps = gst_audio_encoder_proxy_getcaps (benc, caps, filter);
 
   GST_DEBUG_OBJECT (enc, "Returning caps: %" GST_PTR_FORMAT, caps);
+
   return caps;
 }
 
@@ -885,15 +925,16 @@ gst_opus_enc_encode (GstOpusEnc * enc, GstBuffer * buf)
   GstBuffer *outbuf;
   GstSegment *segment;
   GstClockTime duration;
+  guint64 trim_start = 0, trim_end = 0;
 
   guint max_payload_size;
-  gint frame_samples;
+  gint frame_samples, input_samples, output_samples;
 
   g_mutex_lock (&enc->property_lock);
 
   bytes = enc->frame_samples * enc->n_channels * 2;
   max_payload_size = enc->max_payload_size;
-  frame_samples = enc->frame_samples;
+  frame_samples = input_samples = enc->frame_samples;
 
   g_mutex_unlock (&enc->property_lock);
 
@@ -903,20 +944,23 @@ gst_opus_enc_encode (GstOpusEnc * enc, GstBuffer * buf)
     bsize = map.size;
 
     if (G_UNLIKELY (bsize % bytes)) {
+      gint64 diff;
+
       GST_DEBUG_OBJECT (enc, "draining; adding silence samples");
+      g_assert (bsize < bytes);
 
       /* If encoding part of a frame, and we have no set stop time on
        * the output segment, we update the segment stop time to reflect
        * the last sample. This will let oggmux set the last page's
        * granpos to tell a decoder the dummy samples should be clipped.
        */
+      input_samples = bsize / (enc->n_channels * 2);
       segment = &GST_AUDIO_ENCODER_OUTPUT_SEGMENT (enc);
       if (!GST_CLOCK_TIME_IS_VALID (segment->stop)) {
-        int input_samples = bsize / (enc->n_channels * 2);
         GST_DEBUG_OBJECT (enc,
             "No stop time and partial frame, updating segment");
         duration =
-            gst_util_uint64_scale (enc->encoded_samples + input_samples,
+            gst_util_uint64_scale_ceil (enc->consumed_samples + input_samples,
             GST_SECOND, enc->sample_rate);
         segment->stop = segment->start + duration;
         GST_DEBUG_OBJECT (enc, "new output segment %" GST_SEGMENT_FORMAT,
@@ -925,17 +969,71 @@ gst_opus_enc_encode (GstOpusEnc * enc, GstBuffer * buf)
             gst_event_new_segment (segment));
       }
 
+      diff =
+          (enc->encoded_samples + frame_samples) - (enc->consumed_samples +
+          input_samples);
+      if (diff >= 0) {
+        GST_DEBUG_OBJECT (enc,
+            "%" G_GINT64_FORMAT " extra samples of padding in this frame",
+            diff);
+        output_samples = frame_samples - diff;
+        trim_end = diff * 48000 / enc->sample_rate;
+      } else {
+        GST_DEBUG_OBJECT (enc,
+            "Need to add %" G_GINT64_FORMAT " extra samples in the next frame",
+            -diff);
+        output_samples = frame_samples;
+      }
+
       size = ((bsize / bytes) + 1) * bytes;
       mdata = g_malloc0 (size);
+      /* FIXME: Instead of silence, use LPC with the last real samples.
+       * Otherwise we will create a discontinuity here, which will distort the
+       * last few encoded samples
+       */
       memcpy (mdata, bdata, bsize);
       data = mdata;
     } else {
       data = bdata;
       size = bsize;
+
+      /* Adjust for lookahead here */
+      if (enc->pending_lookahead) {
+        guint scaled_lookahead =
+            enc->pending_lookahead * enc->sample_rate / 48000;
+
+        if (input_samples > scaled_lookahead) {
+          output_samples = input_samples - scaled_lookahead;
+          trim_start = enc->pending_lookahead;
+          enc->pending_lookahead = 0;
+        } else {
+          trim_start = input_samples * 48000 / enc->sample_rate;
+          enc->pending_lookahead -= trim_start;
+          output_samples = 0;
+        }
+      } else {
+        output_samples = input_samples;
+      }
     }
   } else {
-    GST_DEBUG_OBJECT (enc, "nothing to drain");
-    goto done;
+    if (enc->encoded_samples < enc->consumed_samples) {
+      /* FIXME: Instead of silence, use LPC with the last real samples.
+       * Otherwise we will create a discontinuity here, which will distort the
+       * last few encoded samples
+       */
+      data = mdata = g_malloc0 (bytes);
+      size = bytes;
+      output_samples = enc->consumed_samples - enc->encoded_samples;
+      input_samples = 0;
+      GST_DEBUG_OBJECT (enc, "draining %d samples", output_samples);
+      trim_end = (frame_samples - output_samples) * 48000 / enc->sample_rate;
+    } else if (enc->encoded_samples == enc->consumed_samples) {
+      GST_DEBUG_OBJECT (enc, "nothing to drain");
+      goto done;
+    } else {
+      g_assert_not_reached ();
+      goto done;
+    }
   }
 
   g_assert (size == bytes);
@@ -949,10 +1047,15 @@ gst_opus_enc_encode (GstOpusEnc * enc, GstBuffer * buf)
   GST_DEBUG_OBJECT (enc, "encoding %d samples (%d bytes)",
       frame_samples, (int) bytes);
 
-  gst_buffer_map (outbuf, &omap, GST_MAP_WRITE);
+  if (trim_start || trim_end) {
+    GST_DEBUG_OBJECT (enc,
+        "Adding trim-start %" G_GUINT64_FORMAT " trim-end %" G_GUINT64_FORMAT,
+        trim_start, trim_end);
+    gst_buffer_add_audio_clipping_meta (outbuf, GST_FORMAT_DEFAULT, trim_start,
+        trim_end);
+  }
 
-  GST_DEBUG_OBJECT (enc, "encoding %d samples (%d bytes)",
-      frame_samples, (int) bytes);
+  gst_buffer_map (outbuf, &omap, GST_MAP_WRITE);
 
   outsize =
       opus_multistream_encode (enc->state, (const gint16 *) data,
@@ -975,10 +1078,12 @@ gst_opus_enc_encode (GstOpusEnc * enc, GstBuffer * buf)
   GST_DEBUG_OBJECT (enc, "Output packet is %u bytes", outsize);
   gst_buffer_set_size (outbuf, outsize);
 
+
   ret =
       gst_audio_encoder_finish_frame (GST_AUDIO_ENCODER (enc), outbuf,
-      frame_samples);
-  enc->encoded_samples += frame_samples;
+      output_samples);
+  enc->encoded_samples += output_samples;
+  enc->consumed_samples += input_samples;
 
 done:
 

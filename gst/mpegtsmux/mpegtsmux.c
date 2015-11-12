@@ -91,11 +91,13 @@
 #include <gst/tag/tag.h>
 #include <gst/video/video.h>
 #include <gst/mpegts/mpegts.h>
+#include <gst/pbutils/pbutils.h>
 
 #include "mpegtsmux.h"
 
 #include "mpegtsmux_aac.h"
 #include "mpegtsmux_ttxt.h"
+#include "mpegtsmux_opus.h"
 
 GST_DEBUG_CATEGORY (mpegtsmux_debug);
 #define GST_CAT_DEFAULT mpegtsmux_debug
@@ -142,6 +144,9 @@ static GstStaticPadTemplate mpegtsmux_sink_factory =
         "mute = (boolean) { FALSE, TRUE }; "
         "audio/x-ac3, framed = (boolean) TRUE;"
         "audio/x-dts, framed = (boolean) TRUE;"
+        "audio/x-opus, "
+        "channels = (int) [1, 8], "
+        "channel-mapping-family = (int) {0, 1};"
         "subpicture/x-dvb; application/x-teletext; meta/x-klv, parsed=true"));
 
 static GstStaticPadTemplate mpegtsmux_src_factory =
@@ -580,6 +585,7 @@ mpegtsmux_create_stream (MpegTsMux * mux, MpegTsPadData * ts_data)
   const gchar *mt;
   const GValue *value = NULL;
   GstBuffer *codec_data = NULL;
+  guint8 opus_channel_config_code = 0;
 
   pad = ts_data->collect.pad;
   caps = gst_pad_get_current_caps (pad);
@@ -667,6 +673,66 @@ mpegtsmux_create_stream (MpegTsMux * mux, MpegTsPadData * ts_data)
     st = TSMUX_ST_PS_TELETEXT;
     /* needs a particularly sized layout */
     ts_data->prepare_func = mpegtsmux_prepare_teletext;
+  } else if (strcmp (mt, "audio/x-opus") == 0) {
+    guint8 channels, mapping_family, stream_count, coupled_count;
+    guint8 channel_mapping[256];
+
+    if (!gst_codec_utils_opus_parse_caps (caps, NULL, &channels,
+            &mapping_family, &stream_count, &coupled_count, channel_mapping)) {
+      GST_ERROR_OBJECT (pad, "Incomplete Opus caps");
+      goto not_negotiated;
+    }
+
+    if (channels <= 2 && mapping_family == 0) {
+      opus_channel_config_code = channels;
+    } else if (channels == 2 && mapping_family == 255 && stream_count == 1
+        && coupled_count == 1) {
+      /* Dual mono */
+      opus_channel_config_code = 0;
+    } else if (channels >= 2 && channels <= 8 && mapping_family == 1) {
+      static const guint8 coupled_stream_counts[9] = {
+        1, 0, 1, 1, 2, 2, 2, 3, 3
+      };
+      static const guint8 channel_map_a[8][8] = {
+        {0},
+        {0, 1},
+        {0, 2, 1},
+        {0, 1, 2, 3},
+        {0, 4, 1, 2, 3},
+        {0, 4, 1, 2, 3, 5},
+        {0, 4, 1, 2, 3, 5, 6},
+        {0, 6, 1, 2, 3, 4, 5, 7},
+      };
+      static const guint8 channel_map_b[8][8] = {
+        {0},
+        {0, 1},
+        {0, 1, 2},
+        {0, 1, 2, 3},
+        {0, 1, 2, 3, 4},
+        {0, 1, 2, 3, 4, 5},
+        {0, 1, 2, 3, 4, 5, 6},
+        {0, 1, 2, 3, 4, 5, 6, 7},
+      };
+
+      /* Vorbis mapping */
+      if (stream_count == channels - coupled_stream_counts[channels] &&
+          coupled_count == coupled_stream_counts[channels] &&
+          memcmp (channel_mapping, channel_map_a[channels - 1],
+              channels) == 0) {
+        opus_channel_config_code = channels;
+      } else if (stream_count == channels - coupled_stream_counts[channels] &&
+          coupled_count == coupled_stream_counts[channels] &&
+          memcmp (channel_mapping, channel_map_b[channels - 1],
+              channels) == 0) {
+        opus_channel_config_code = channels | 0x80;
+      } else {
+        GST_FIXME_OBJECT (pad, "Opus channel mapping not handled");
+        goto not_negotiated;
+      }
+    }
+
+    st = TSMUX_ST_PS_OPUS;
+    ts_data->prepare_func = mpegtsmux_prepare_opus;
   } else if (strcmp (mt, "meta/x-klv") == 0) {
     st = TSMUX_ST_PS_KLV;
   }
@@ -682,6 +748,8 @@ mpegtsmux_create_stream (MpegTsMux * mux, MpegTsPadData * ts_data)
     gst_structure_get_int (s, "rate", &ts_data->stream->audio_sampling);
     gst_structure_get_int (s, "channels", &ts_data->stream->audio_channels);
     gst_structure_get_int (s, "bitrate", &ts_data->stream->audio_bitrate);
+
+    ts_data->stream->opus_channel_config_code = opus_channel_config_code;
 
     tsmux_stream_set_buffer_release_func (ts_data->stream, release_buffer_cb);
     tsmux_program_add_stream (ts_data->prog, ts_data->stream);
@@ -1097,15 +1165,6 @@ mpegtsmux_clip_inc_running_time (GstCollectPads * pads,
     pad_data->dts = GST_CLOCK_STIME_NONE;
   }
 
-  buf = *outbuf;
-  if (pad_data->prepare_func) {
-    MpegTsMux *mux = (MpegTsMux *) user_data;
-
-    *outbuf = pad_data->prepare_func (buf, pad_data, mux);
-    g_assert (*outbuf);
-    gst_buffer_unref (buf);
-  }
-
 beach:
   return GST_FLOW_OK;
 }
@@ -1126,8 +1185,11 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
 
   if (G_UNLIKELY (mux->first)) {
     ret = mpegtsmux_create_streams (mux);
-    if (G_UNLIKELY (ret != GST_FLOW_OK))
+    if (G_UNLIKELY (ret != GST_FLOW_OK)) {
+      if (buf)
+        gst_buffer_unref (buf);
       return ret;
+    }
 
     mpegtsmux_prepare_srcpad (mux);
 
@@ -1142,6 +1204,9 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
     mpegtsmux_push_packets (mux, TRUE);
     gst_pad_push_event (mux->srcpad, gst_event_new_eos ());
 
+    if (buf)
+      gst_buffer_unref (buf);
+
     return GST_FLOW_OK;
   }
 
@@ -1150,6 +1215,15 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
     goto no_program;
 
   g_assert (buf != NULL);
+
+  if (best->prepare_func) {
+    GstBuffer *tmp;
+
+    tmp = best->prepare_func (buf, best, mux);
+    g_assert (tmp);
+    gst_buffer_unref (buf);
+    buf = tmp;
+  }
 
   if (mux->force_key_unit_event != NULL && best->stream->is_video_stream) {
     GstEvent *event;
@@ -1207,9 +1281,8 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
 
   if (GST_CLOCK_STIME_IS_VALID (best->dts)) {
     dts = GSTTIME_TO_MPEGTIME (best->dts);
-    GST_DEBUG_OBJECT (mux, "Buffer has DTS %s%" GST_TIME_FORMAT " dts %"
-        G_GINT64_FORMAT, best->dts >= 0 ? " " : "-",
-        GST_TIME_ARGS (ABS (best->dts)), dts);
+    GST_DEBUG_OBJECT (mux, "Buffer has DTS %" GST_STIME_FORMAT " dts %"
+        G_GINT64_FORMAT, GST_STIME_ARGS (best->dts), dts);
   }
 
   /* should not have a DTS without PTS */
@@ -1235,6 +1308,8 @@ mpegtsmux_collected_buffer (GstCollectPads * pads, GstCollectData * data,
 
   if (best->stream->is_meta && gst_buffer_get_size (buf) > (G_MAXUINT16 - 3)) {
     GST_WARNING_OBJECT (mux, "KLV meta unit too big, splitting not supported");
+    if (buf)
+      gst_buffer_unref (buf);
     return GST_FLOW_OK;
   }
 
@@ -1274,6 +1349,8 @@ write_fail:
   }
 no_program:
   {
+    if (buf)
+      gst_buffer_unref (buf);
     GST_ELEMENT_ERROR (mux, STREAM, MUX,
         ("Stream on pad %" GST_PTR_FORMAT
             " is not associated with any program", COLLECT_DATA_PAD (best)),

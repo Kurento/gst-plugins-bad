@@ -84,7 +84,7 @@ struct _GstGLColorConvertClass
  *
  * The currently supported formats that can be converted
  */
-#define GST_GL_COLOR_CONVERT_FORMATS "{ RGB, RGBx, RGBA, BGR, BGRx, BGRA, xRGB, " \
+#define GST_GL_COLOR_CONVERT_FORMATS "{ RGBA, RGB, RGBx, BGR, BGRx, BGRA, xRGB, " \
                                "xBGR, ARGB, ABGR, Y444, I420, YV12, Y42B, " \
                                "Y41B, NV12, NV21, YUY2, UYVY, AYUV, " \
                                "GRAY8, GRAY16_LE, GRAY16_BE, RGB16, BGR16 }"
@@ -95,13 +95,20 @@ struct _GstGLColorConvertClass
  * The currently supported #GstCaps that can be converted
  */
 #define GST_GL_COLOR_CONVERT_VIDEO_CAPS \
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, \
-        GST_GL_COLOR_CONVERT_FORMATS)
-
-#define GST_GL_COLOR_CONVERT_VIDEO_OVERLAY_COMPOSITION_CAPS \
-    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY \
-        "," GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION, \
-        GST_GL_COLOR_CONVERT_FORMATS)
+    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GL_MEMORY "), "              \
+    "format = (string) " GST_GL_COLOR_CONVERT_FORMATS ", "              \
+    "width = " GST_VIDEO_SIZE_RANGE ", "                                \
+    "height = " GST_VIDEO_SIZE_RANGE ", "                               \
+    "framerate = " GST_VIDEO_FPS_RANGE ", "                             \
+    "texture-target = (string) { 2D, rectangle, external-oes } "        \
+    " ; "                                                               \
+    "video/x-raw(" GST_CAPS_FEATURE_MEMORY_GL_MEMORY ","                \
+    GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION "), "           \
+    "format = (string) " GST_GL_COLOR_CONVERT_FORMATS ", "              \
+    "width = " GST_VIDEO_SIZE_RANGE ", "                                \
+    "height = " GST_VIDEO_SIZE_RANGE ", "                               \
+    "framerate = " GST_VIDEO_FPS_RANGE ", "                             \
+    "texture-target = (string) { 2D, rectangle, external-oes }"
 
 GstGLColorConvert * gst_gl_color_convert_new (GstGLContext * context);
 
@@ -109,6 +116,10 @@ GstCaps *   gst_gl_color_convert_transform_caps (GstGLContext * convert,
                                                  GstPadDirection direction,
                                                  GstCaps * caps,
                                                  GstCaps * filter);
+GstCaps *   gst_gl_color_convert_fixate_caps    (GstGLContext * convert,
+                                                 GstPadDirection direction,
+                                                 GstCaps * caps,
+                                                 GstCaps * other);
 gboolean    gst_gl_color_convert_set_caps    (GstGLColorConvert * convert,
                                               GstCaps           * in_caps,
                                               GstCaps           * out_caps);

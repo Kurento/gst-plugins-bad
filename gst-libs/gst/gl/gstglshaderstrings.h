@@ -1,7 +1,6 @@
-/* GStreamer
- * Copyright (C) <1999> Erik Walthinsen <omega@cse.ogi.edu>
- * Copyright (C) <2008> Sebastian Dröge <sebastian.droege@collabora.co.uk>
- * Copyright (C) <2011-2012> Vincent Penquerc'h <vincent.penquerch@collabora.co.uk>
+/*
+ * GStreamer
+ * Copyright (C) 2015 Matthew Waters <matthew@centricular.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -19,19 +18,19 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef __GST_OPUS_HEADER_H__
-#define __GST_OPUS_HEADER_H__
+#ifndef __GST_GL_SHADER_STRINGS_H__
+#define __GST_GL_SHADER_STRINGS_H__
 
-#include <gst/gst.h>
+#include <gst/gl/gl.h>
 
 G_BEGIN_DECLS
 
-extern gboolean gst_opus_header_is_header (GstBuffer * buf,
-    const char *magic, guint magic_size);
-extern gboolean gst_opus_header_is_id_header (GstBuffer * buf);
-extern gboolean gst_opus_header_is_comment_header (GstBuffer * buf);
+extern const gchar *gst_gl_shader_string_vertex_default;
+extern const gchar *gst_gl_shader_string_fragment_default;
 
+extern const gchar *gst_gl_shader_string_vertex_mat4_texture_transform;
+extern const gchar *gst_gl_shader_string_fragment_external_oes_default;
 
 G_END_DECLS
 
-#endif /* __GST_OPUS_HEADER_H__ */
+#endif /* __GST_GL_SHADER_STRINGS_H__ */

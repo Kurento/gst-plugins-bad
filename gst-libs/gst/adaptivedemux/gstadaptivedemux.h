@@ -72,10 +72,6 @@ G_BEGIN_DECLS
  */
 #define GST_ADAPTIVE_DEMUX_STATISTICS_MESSAGE_NAME "adaptive-streaming-statistics"
 
-#define GST_MANIFEST_GET_LOCK(d) (&(GST_ADAPTIVE_DEMUX_CAST(d)->manifest_lock))
-#define GST_MANIFEST_LOCK(d) (g_mutex_lock (GST_MANIFEST_GET_LOCK (d)))
-#define GST_MANIFEST_UNLOCK(d) (g_mutex_unlock (GST_MANIFEST_GET_LOCK (d)))
-
 #define GST_ELEMENT_ERROR_FROM_ERROR(el, msg, err) G_STMT_START { \
   gchar *__dbg = g_strdup_printf ("%s: %s", msg, err->message);         \
   GST_WARNING_OBJECT (el, "error: %s", __dbg);                          \
@@ -142,9 +138,12 @@ struct _GstAdaptiveDemuxStream
   /* download tooling */
   GstElement *src;
   GstPad *src_srcpad;
+  GstElement *uri_handler;
+  GstElement *queue;
   GMutex fragment_download_lock;
   GCond fragment_download_cond;
-  gboolean download_finished;
+  gboolean download_finished;   /* protected by fragment_download_lock */
+  gboolean cancelled;           /* protected by fragment_download_lock */
   gboolean starting_fragment;
   gboolean first_fragment_buffer;
   gint64 download_start_time;
@@ -152,15 +151,6 @@ struct _GstAdaptiveDemuxStream
   gint64 download_total_time;
   gint64 download_total_bytes;
   guint64 current_download_rate;
-
-  /* Per fragment download information */
-  guint64 fragment_total_time;
-  guint64 fragment_total_size;
-
-  /* Average for the last fragments */
-  guint64 moving_bitrate;
-  guint moving_index;
-  guint64 *fragment_bitrates;
 
   GstAdaptiveDemuxStreamFragment fragment;
 
@@ -191,11 +181,6 @@ struct _GstAdaptiveDemux
   GList *next_streams;
 
   GstSegment segment;
-
-  gboolean cancelled;
-
-  GMutex manifest_lock;
-  GCond manifest_cond;
 
   gchar *manifest_uri;
   gchar *manifest_base_uri;
@@ -450,10 +435,6 @@ gst_adaptive_demux_stream_advance_fragment (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream, GstClockTime duration);
 void gst_adaptive_demux_stream_queue_event (GstAdaptiveDemuxStream * stream,
     GstEvent * event);
-
-GstFlowReturn
-gst_adaptive_demux_stream_advance_fragment_unlocked (GstAdaptiveDemux * demux,
-    GstAdaptiveDemuxStream * stream, GstClockTime duration);
 
 G_END_DECLS
 

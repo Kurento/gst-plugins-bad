@@ -29,29 +29,6 @@
 
 static const gchar *es2_version_header = "#version 100\n";
 
-/* *INDENT-OFF* */
-static const gchar *simple_vertex_shader_str_gles2 =
-      "attribute vec4 a_position;\n"
-      "attribute vec2 a_texcoord;\n"
-      "varying vec2 v_texcoord;\n"
-      "void main()\n"
-      "{\n"
-      "   gl_Position = a_position;\n"
-      "   v_texcoord = a_texcoord;\n"
-      "}\n";
-
-static const gchar *simple_fragment_shader_str_gles2 =
-      "#ifdef GL_ES\n"
-      "precision mediump float;\n"
-      "#endif\n"
-      "varying vec2 v_texcoord;\n"
-      "uniform sampler2D tex;\n"
-      "void main()\n"
-      "{\n"
-      "  gl_FragColor = texture2D(tex, v_texcoord);\n"
-      "}";
-/* *INDENT-ON* */
-
 GST_DEBUG_CATEGORY_STATIC (gst_glsl_stage_debug);
 #define GST_CAT_DEFAULT gst_glsl_stage_debug
 
@@ -279,7 +256,7 @@ gst_glsl_stage_new_default_vertex (GstGLContext * context)
   return gst_glsl_stage_new_with_string (context, GL_VERTEX_SHADER,
       GST_GLSL_VERSION_NONE,
       GST_GLSL_PROFILE_ES | GST_GLSL_PROFILE_COMPATIBILITY,
-      simple_vertex_shader_str_gles2);
+      gst_gl_shader_string_vertex_default);
 }
 
 /**
@@ -294,7 +271,7 @@ gst_glsl_stage_new_default_fragment (GstGLContext * context)
   return gst_glsl_stage_new_with_string (context, GL_FRAGMENT_SHADER,
       GST_GLSL_VERSION_NONE,
       GST_GLSL_PROFILE_ES | GST_GLSL_PROFILE_COMPATIBILITY,
-      simple_fragment_shader_str_gles2);
+      gst_gl_shader_string_fragment_default);
 }
 
 /**
@@ -318,8 +295,13 @@ gst_glsl_stage_set_strings (GstGLSLStage * stage, GstGLSLVersion version,
   g_return_val_if_fail (str != NULL, FALSE);
 
   if (!gst_gl_context_supports_glsl_profile_version (stage->context, version,
-          profile))
+          profile)) {
+    const gchar *version_str = gst_glsl_version_to_string (version);
+    const gchar *profile_str = gst_glsl_profile_to_string (profile);
+    GST_ERROR_OBJECT (stage, "GL context does not support version %s and "
+        "profile %s", version_str, profile_str);
     return FALSE;
+  }
 
   stage->priv->version = version;
   stage->priv->profile = profile;
@@ -454,6 +436,7 @@ _compile_shader (GstGLContext * context, struct compile *data)
   if (!_ensure_shader (data->stage)) {
     g_set_error (data->error, GST_GLSL_ERROR, GST_GLSL_ERROR_COMPILE,
         "Failed to create shader object");
+    data->result = FALSE;
     return;
   }
 
@@ -471,8 +454,10 @@ _compile_shader (GstGLContext * context, struct compile *data)
   gl->CompileShader (priv->handle);
   /* FIXME: supported threaded GLSL compilers and don't destroy compilation
    * performance by getting the compilation result directly after compilation */
+  status = GL_FALSE;
   gl->GetShaderiv (priv->handle, GL_COMPILE_STATUS, &status);
 
+  len = 0;
   vtable->GetShaderInfoLog (priv->handle, sizeof (info_buffer) - 1, &len,
       info_buffer);
   info_buffer[len] = '\0';

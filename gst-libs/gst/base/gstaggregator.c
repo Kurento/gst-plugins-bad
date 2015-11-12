@@ -290,7 +290,7 @@ struct _GstAggregatorPrivate
   gboolean peer_latency_live;   /* protected by src_lock */
   GstClockTime peer_latency_min;        /* protected by src_lock */
   GstClockTime peer_latency_max;        /* protected by src_lock */
-  gboolean has_peer_latency;
+  gboolean has_peer_latency;    /* protected by src_lock */
 
   GstClockTime sub_latency_min; /* protected by src_lock */
   GstClockTime sub_latency_max; /* protected by src_lock */
@@ -300,7 +300,7 @@ struct _GstAggregatorPrivate
   GMutex src_lock;
   GCond src_cond;
 
-  gboolean first_buffer;
+  gboolean first_buffer;        /* protected by object lock */
   GstAggregatorStartTimeSelection start_time_selection;
   GstClockTime start_time;
 
@@ -701,9 +701,8 @@ gst_aggregator_wait_and_check (GstAggregator * self, gboolean * timeout)
     }
 
     GST_DEBUG_OBJECT (self,
-        "clock returned %d (jitter: %s%" GST_TIME_FORMAT ")",
-        status, (jitter < 0 ? "-" : " "),
-        GST_TIME_ARGS ((jitter < 0 ? -jitter : jitter)));
+        "clock returned %d (jitter: %" GST_STIME_FORMAT ")",
+        status, GST_STIME_ARGS (jitter));
 
     /* we timed out */
     if (status == GST_CLOCK_OK || status == GST_CLOCK_EARLY) {
@@ -861,7 +860,6 @@ gst_aggregator_start (GstAggregator * self)
   GstAggregatorClass *klass;
   gboolean result;
 
-  self->priv->running = TRUE;
   self->priv->send_stream_start = TRUE;
   self->priv->send_segment = TRUE;
   self->priv->send_eos = TRUE;
@@ -1313,34 +1311,39 @@ gst_aggregator_default_create_new_pad (GstAggregator * self,
     GstPadTemplate * templ, const gchar * req_name, const GstCaps * caps)
 {
   GstAggregatorPad *agg_pad;
-  GstElementClass *klass = GST_ELEMENT_GET_CLASS (self);
   GstAggregatorPrivate *priv = self->priv;
+  gint serial = 0;
+  gchar *name = NULL;
 
-  if (templ == gst_element_class_get_pad_template (klass, "sink_%u")) {
-    gint serial = 0;
-    gchar *name = NULL;
+  if (templ->direction != GST_PAD_SINK ||
+      g_strcmp0 (templ->name_template, "sink_%u"))
+    goto not_sink;
 
-    GST_OBJECT_LOCK (self);
-    if (req_name == NULL || strlen (req_name) < 6
-        || !g_str_has_prefix (req_name, "sink_")) {
-      /* no name given when requesting the pad, use next available int */
-      priv->padcount++;
-    } else {
-      /* parse serial number from requested padname */
-      serial = g_ascii_strtoull (&req_name[5], NULL, 10);
-      if (serial >= priv->padcount)
-        priv->padcount = serial;
-    }
-
-    name = g_strdup_printf ("sink_%u", priv->padcount);
-    agg_pad = g_object_new (GST_AGGREGATOR_GET_CLASS (self)->sinkpads_type,
-        "name", name, "direction", GST_PAD_SINK, "template", templ, NULL);
-    g_free (name);
-
-    GST_OBJECT_UNLOCK (self);
-
-    return agg_pad;
+  GST_OBJECT_LOCK (self);
+  if (req_name == NULL || strlen (req_name) < 6
+      || !g_str_has_prefix (req_name, "sink_")) {
+    /* no name given when requesting the pad, use next available int */
+    priv->padcount++;
   } else {
+    /* parse serial number from requested padname */
+    serial = g_ascii_strtoull (&req_name[5], NULL, 10);
+    if (serial >= priv->padcount)
+      priv->padcount = serial;
+  }
+
+  name = g_strdup_printf ("sink_%u", priv->padcount);
+  agg_pad = g_object_new (GST_AGGREGATOR_GET_CLASS (self)->sinkpads_type,
+      "name", name, "direction", GST_PAD_SINK, "template", templ, NULL);
+  g_free (name);
+
+  GST_OBJECT_UNLOCK (self);
+
+  return agg_pad;
+
+  /* errors */
+not_sink:
+  {
+    GST_WARNING_OBJECT (self, "request new pad that is not a SINK pad\n");
     return NULL;
   }
 }
@@ -1420,18 +1423,6 @@ gst_aggregator_query_latency_unlocked (GstAggregator * self, GstQuery * query)
     max += self->priv->sub_latency_max + our_latency;
   else
     max = GST_CLOCK_TIME_NONE;
-
-  if (live && min > max) {
-    GST_ELEMENT_WARNING (self, CORE, NEGOTIATION,
-        ("%s", "Latency too big"),
-        ("The requested latency value is too big for the current pipeline. "
-            "Limiting to %" G_GINT64_FORMAT, max));
-    min = max;
-    /* FIXME: This could in theory become negative, but in
-     * that case all is lost anyway */
-    self->priv->latency -= min - max;
-    /* FIXME: shouldn't we g_object_notify() the change here? */
-  }
 
   SRC_BROADCAST (self);
 
@@ -1881,7 +1872,7 @@ gst_aggregator_set_latency_property (GstAggregator * self, gint64 latency)
  * Gets the latency value. See gst_aggregator_set_latency for
  * more details.
  *
- * Returns: The time in nanoseconds to wait for data to arrive on a sink pad 
+ * Returns: The time in nanoseconds to wait for data to arrive on a sink pad
  * before a pad is deemed unresponsive. A value of -1 means an
  * unlimited time.
  */
@@ -2169,6 +2160,7 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
 
   for (;;) {
     SRC_LOCK (self);
+    GST_OBJECT_LOCK (self);
     PAD_LOCK (aggpad);
     if (gst_aggregator_pad_has_space (self, aggpad)
         && aggpad->priv->flow_return == GST_FLOW_OK) {
@@ -2185,10 +2177,12 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
 
     flow_return = aggpad->priv->flow_return;
     if (flow_return != GST_FLOW_OK) {
+      GST_OBJECT_UNLOCK (self);
       SRC_UNLOCK (self);
       goto flushing;
     }
     GST_DEBUG_OBJECT (aggpad, "Waiting for buffer to be consumed");
+    GST_OBJECT_UNLOCK (self);
     SRC_UNLOCK (self);
     PAD_WAIT_EVENT (aggpad);
 
@@ -2204,6 +2198,7 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
         start_time = 0;
         break;
       case GST_AGGREGATOR_START_TIME_SELECTION_FIRST:
+        GST_OBJECT_LOCK (aggpad);
         if (aggpad->segment.format == GST_FORMAT_TIME) {
           start_time = buf_pts;
           if (start_time != -1) {
@@ -2219,6 +2214,7 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
               "as the segment is a %s segment instead of a time segment",
               gst_format_get_name (aggpad->segment.format));
         }
+        GST_OBJECT_UNLOCK (aggpad);
         break;
       case GST_AGGREGATOR_START_TIME_SELECTION_SET:
         start_time = self->priv->start_time;
@@ -2239,6 +2235,7 @@ gst_aggregator_pad_chain_internal (GstAggregator * self,
   }
 
   PAD_UNLOCK (aggpad);
+  GST_OBJECT_UNLOCK (self);
   SRC_UNLOCK (self);
 
 done:

@@ -505,6 +505,7 @@ gst_vtenc_stop (GstVideoEncoder * enc)
 
   if (self->profile_level)
     CFRelease (self->profile_level);
+  self->profile_level = NULL;
 
   if (self->input_state)
     gst_video_codec_state_unref (self->input_state);
@@ -1201,10 +1202,6 @@ gst_vtenc_encode_frame (GstVTEnc * self, GstVideoCodecFrame * frame)
     GST_WARNING_OBJECT (self, "VTCompressionSessionEncodeFrame returned %d",
         (int) vt_status);
   }
-
-  /* VTCompressionSessionEncodeFrame retained pbuf
-   * and we want to free input_buffer ASAP */
-  gst_buffer_replace (&frame->input_buffer, NULL);
 
   gst_video_codec_frame_unref (frame);
 

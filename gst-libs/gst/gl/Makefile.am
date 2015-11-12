@@ -18,6 +18,7 @@ libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstglfilter.c \
 	gstglbasefilter.c \
 	gstglshader.c \
+	gstglshaderstrings.c \
 	gstglsl.c \
 	gstglslstage.c \
 	gstglcolorconvert.c \
@@ -47,6 +48,7 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglfilter.h \
 	gstglbasefilter.h \
 	gstglshader.h \
+	gstglshaderstrings.h \
 	gstglsl.h \
 	gstglslstage.h \
 	gstglcolorconvert.h \
@@ -61,6 +63,7 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglviewconvert.h \
 	gstgloverlaycompositor.h \
 	gstgl_fwd.h \
+	gstgl_enums.h \
 	gl.h
 
 libgstgl_@GST_API_VERSION@_la_LIBADD = \

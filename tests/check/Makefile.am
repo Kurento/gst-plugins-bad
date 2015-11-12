@@ -42,8 +42,10 @@ endif
 
 if USE_DASH
 check_dash = elements/dash_mpd
+check_dash_demux = elements/dash_demux
 else
 check_dash =
+check_dash_demux =
 endif
 
 if USE_FAAC
@@ -230,6 +232,7 @@ check_PROGRAMS = \
 	generic/states \
 	$(check_assrender) \
 	$(check_dash) \
+	$(check_dash_demux) \
 	$(check_faac)  \
 	$(check_faad)  \
 	$(check_voaacenc) \
@@ -265,7 +268,8 @@ check_PROGRAMS = \
 	elements/mxfdemux \
 	elements/mxfmux \
 	elements/pcapparse \
-	elements/rtponvif \
+	elements/rtponvifparse \
+	elements/rtponviftimestamp \
 	elements/id3mux \
 	pipelines/mxf \
 	$(check_mimic) \
@@ -437,6 +441,15 @@ elements_dash_mpd_LDADD = $(LDADD) $(LIBXML2_LIBS) \
 	$(top_builddir)/gst-libs/gst/uridownloader/libgsturidownloader-@GST_API_VERSION@.la
 elements_dash_mpd_SOURCES = elements/dash_mpd.c
 
+elements_dash_demux_CFLAGS = $(AM_CFLAGS) $(LIBXML2_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) $(GST_PLUGINS_BAD_CFLAGS)
+elements_dash_demux_LDADD = \
+	$(LDADD) $(LIBXML2_LIBS) $(GST_BASE_LIBS) \
+	-lgsttag-$(GST_API_VERSION) \
+	-lgstapp-$(GST_API_VERSION) \
+	$(top_builddir)/gst-libs/gst/adaptivedemux/libgstadaptivedemux-@GST_API_VERSION@.la
+
+elements_dash_demux_SOURCES = elements/fake_http_src.c elements/fake_http_src.h elements/dash_demux.c
+
 pipelines_streamheader_CFLAGS = $(GIO_CFLAGS) $(AM_CFLAGS)
 pipelines_streamheader_LDADD = $(GIO_LIBS) $(LDADD)
 
@@ -446,8 +459,11 @@ libs_insertbin_LDADD = \
 libs_insertbin_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) $(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS)
 
-elements_rtponvif_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
-elements_rtponvif_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
+elements_rtponvifparse_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
+elements_rtponvifparse_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
+
+elements_rtponviftimestamp_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
+elements_rtponviftimestamp_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
 
 EXTRA_DIST = gst-plugins-bad.supp $(uvch264_dist_data)
 
