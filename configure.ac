@@ -3651,6 +3651,10 @@ pkgconfig/gstreamer-bad-base.pc
 pkgconfig/gstreamer-bad-base-uninstalled.pc
 pkgconfig/gstreamer-bad-video.pc
 pkgconfig/gstreamer-bad-video-uninstalled.pc
+pkgconfig/gstreamer-uridownloader.pc
+pkgconfig/gstreamer-uridownloader-uninstalled.pc
+pkgconfig/gstreamer-adaptivedemux.pc
+pkgconfig/gstreamer-adaptivedemux-uninstalled.pc
 tools/Makefile
 m4/Makefile
 )
