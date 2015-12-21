@@ -25,9 +25,6 @@ gst_mpegts_stream_type_get_type
 
 gst_insert_bin_get_type
 
-
-gst_gl_buffer_allocator_get_type
-gst_gl_memory_allocator_get_type
 gst_gl_base_filter_get_type
 gst_gl_buffer_pool_get_type
 gst_gl_color_convert_get_type
