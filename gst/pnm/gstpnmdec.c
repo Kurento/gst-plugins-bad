@@ -25,7 +25,7 @@
  * <refsect2>
  * <title>Example launch line</title>
  * |[
- * gst-launch filesrc location=test.pnm ! pnmdec ! videoconvert ! autovideosink
+ * gst-launch-1.0 filesrc location=test.pnm ! pnmdec ! videoconvert ! autovideosink
  * ]| The above pipeline reads a pnm file and renders it to the screen.
  * </refsect2>
  */
@@ -138,6 +138,10 @@ gst_pnmdec_stop (GstVideoDecoder * decoder)
     pnmdec->input_state = NULL;
   }
 
+  if (pnmdec->buf) {
+    gst_buffer_unref (pnmdec->buf);
+    pnmdec->buf = NULL;
+  }
   return TRUE;
 }
 
@@ -186,6 +190,7 @@ gst_pnmdec_parse_ascii (GstPnmdec * s, const guint8 * b, guint bs)
       case G_TOKEN_INT:
         if (i == target) {
           GST_DEBUG_OBJECT (s, "PNM file contains too much data.");
+          g_scanner_destroy (scanner);
           goto drop_error;
         }
         outdata[i++] = scanner->value.v_int;

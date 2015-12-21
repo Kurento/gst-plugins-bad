@@ -27,7 +27,7 @@
  * <refsect>
  * <title>Example launch line</title>
  * |[
- * gst-launch videotestsrc num_buffers=1 ! videoconvert ! "video/x-raw,format=GRAY8" ! pnmenc ascii=true ! filesink location=test.pnm
+ * gst-launch-1.0 videotestsrc num_buffers=1 ! videoconvert ! "video/x-raw,format=GRAY8" ! pnmenc ascii=true ! filesink location=test.pnm
  * ]| The above pipeline writes a test pnm file (ASCII encoding).
  * </refsect2>
  */
@@ -174,7 +174,7 @@ gst_pnmenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
   GstPnmenc *pnmenc;
   guint size, pixels;
   GstMapInfo omap, imap;
-  gchar *header;
+  gchar *header = NULL;
   GstVideoInfo *info;
   GstFlowReturn ret = GST_FLOW_OK;
   guint i_rowstride, o_rowstride;
@@ -202,10 +202,10 @@ gst_pnmenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
 
   if (pnmenc->info.encoding == GST_PNM_ENCODING_ASCII) {
     /* Per component 4 bytes are used in case of ASCII encoding */
-    size = size * 4;
+    size = size * 4 + size / 20;
     size += strlen (header);
     frame->output_buffer =
-        gst_video_encoder_allocate_output_buffer (encoder, (size + size / 20));
+        gst_video_encoder_allocate_output_buffer (encoder, (size));
   } else {
     size += strlen (header);
     frame->output_buffer =
@@ -284,6 +284,7 @@ gst_pnmenc_handle_frame (GstVideoEncoder * encoder, GstVideoCodecFrame * frame)
     goto done;
 
 done:
+  g_free (header);
   return ret;
 }
 

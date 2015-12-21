@@ -344,12 +344,26 @@ gst_gl_composition_overlay_upload (GstGLCompositionOverlay * overlay,
   vinfo.stride[0] = vmeta->stride[0];
 
   if (gst_video_frame_map (comp_frame, &vinfo, comp_buffer, GST_MAP_READ)) {
+    GstGLVideoAllocationParams *params;
+    GstGLBaseMemoryAllocator *mem_allocator;
+    GstAllocator *allocator;
+
+    allocator =
+        GST_ALLOCATOR (gst_gl_memory_allocator_get_default (overlay->context));
+    mem_allocator = GST_GL_BASE_MEMORY_ALLOCATOR (allocator);
+
     gst_gl_composition_overlay_add_transformation (overlay, buf);
 
+    params = gst_gl_video_allocation_params_new_wrapped_data (overlay->context,
+        NULL, &comp_frame->info, 0, NULL, GST_GL_TEXTURE_TARGET_2D,
+        comp_frame->data[0], comp_frame, _video_frame_unmap_and_free);
+
     comp_gl_memory =
-        gst_gl_memory_wrapped (overlay->context, GST_GL_TEXTURE_TARGET_2D,
-        &comp_frame->info, 0, NULL, comp_frame->data[0], comp_frame,
-        _video_frame_unmap_and_free);
+        (GstGLMemory *) gst_gl_base_memory_alloc (mem_allocator,
+        (GstGLAllocationParams *) params);
+
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
+    gst_object_unref (allocator);
 
     overlay_buffer = gst_buffer_new ();
     gst_buffer_append_memory (overlay_buffer, (GstMemory *) comp_gl_memory);

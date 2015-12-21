@@ -461,8 +461,7 @@ gst_gl_context_set_error (GstGLContext * context, const char *format, ...)
 {
   va_list args;
 
-  if (error_message)
-    g_free (error_message);
+  g_free (error_message);
 
   va_start (args, format);
   error_message = g_strdup_vprintf (format, args);
@@ -903,6 +902,25 @@ gst_gl_get_plane_data_size (GstVideoInfo * info, GstVideoAlignment * align,
   plane_size = GST_VIDEO_INFO_PLANE_STRIDE (info, plane) * padded_height;
 
   return plane_size;
+}
+
+/* find the difference between the start of the plane and where the video
+ * data starts in the plane */
+gsize
+gst_gl_get_plane_start (GstVideoInfo * info, GstVideoAlignment * valign,
+    guint plane)
+{
+  gsize plane_start;
+  gint i;
+
+  /* find the start of the plane data including padding */
+  plane_start = 0;
+  for (i = 0; i < plane; i++) {
+    plane_start += gst_gl_get_plane_data_size (info, valign, i);
+  }
+
+  /* offset between the plane data start and where the video frame starts */
+  return (GST_VIDEO_INFO_PLANE_OFFSET (info, plane)) - plane_start;
 }
 
 GstCaps *

@@ -312,8 +312,7 @@ gst_glsl_stage_set_strings (GstGLSLStage * stage, GstGLSLVersion version,
 
   if (stage->priv->n_strings < n_strings) {
     /* only realloc if we need more space */
-    if (stage->priv->strings)
-      g_free (stage->priv->strings);
+    g_free (stage->priv->strings);
     stage->priv->strings = g_new0 (gchar *, n_strings);
   }
 
@@ -452,6 +451,7 @@ _compile_shader (GstGLContext * context, struct compile *data)
   gl->ShaderSource (priv->handle, n_vertex_sources,
       (const gchar **) vertex_sources, NULL);
   gl->CompileShader (priv->handle);
+  g_free (vertex_sources);
   /* FIXME: supported threaded GLSL compilers and don't destroy compilation
    * performance by getting the compilation result directly after compilation */
   status = GL_FALSE;

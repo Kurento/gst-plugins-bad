@@ -28,7 +28,7 @@
  * <refsect2>
  * <title>Example pipelines</title>
  * |[
- * gst-launch-0.10 filesrc location=h264crasher.pcap ! pcapparse ! rtph264depay
+ * gst-launch-1.0 filesrc location=h264crasher.pcap ! pcapparse ! rtph264depay
  * ! ffdec_h264 ! fakesink
  * ]| Read from a pcap dump file using filesrc, extract the raw UDP packets,
  * depayload and decode them.
@@ -624,7 +624,8 @@ gst_pcap_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
     case GST_EVENT_FLUSH_STOP:
       gst_pcap_parse_reset (self);
-      break;
+      /* Push event down the pipeline so that other elements stop flushing */
+      /* fall through */
     default:
       ret = gst_pad_push_event (self->src_pad, event);
       break;

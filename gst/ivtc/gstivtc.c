@@ -27,8 +27,8 @@
  * <refsect2>
  * <title>Example launch line</title>
  * |[
- * gst-launch -v videotestsrc pattern=ball ! video/x-raw,framerate=24/1 !
- *     interlace field-pattern=3:2 !
+ * gst-launch-1.0 -v videotestsrc pattern=ball ! video/x-raw,framerate=24/1 !
+ *     interlace !
  *     ivtc ! video/x-raw,framerate=24/1 ! fakesink
  * ]|
  *
@@ -169,8 +169,8 @@ gst_ivtc_transform_caps (GstBaseTransform * trans,
       gst_structure_set_value (structure, "interlace-mode", &value);
       gst_structure_remove_field (structure, "framerate");
     }
-    g_value_reset (&value);
-    g_value_reset (&v);
+    g_value_unset (&value);
+    g_value_unset (&v);
   } else {
     for (i = 0; i < gst_caps_get_size (othercaps); i++) {
       GstStructure *structure = gst_caps_get_structure (othercaps, i);

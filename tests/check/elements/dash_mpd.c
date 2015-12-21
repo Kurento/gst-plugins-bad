@@ -87,7 +87,7 @@ GST_START_TEST (dash_mpdparser_mpd)
       "     id=\"testId\""
       "     type=\"static\""
       "     availabilityStartTime=\"2015-03-24T1:10:50\""
-      "     availabilityEndTime=\"2015-03-24T1:10:50\""
+      "     availabilityEndTime=\"2015-03-24T1:10:50.123456\""
       "     mediaPresentationDuration=\"P0Y1M2DT12H10M20.5S\""
       "     minimumUpdatePeriod=\"P0Y1M2DT12H10M20.5S\""
       "     minBufferTime=\"P0Y1M2DT12H10M20.5S\""
@@ -119,6 +119,7 @@ GST_START_TEST (dash_mpdparser_mpd)
   assert_equals_int (gst_date_time_get_hour (availabilityStartTime), 1);
   assert_equals_int (gst_date_time_get_minute (availabilityStartTime), 10);
   assert_equals_int (gst_date_time_get_second (availabilityStartTime), 50);
+  assert_equals_int (gst_date_time_get_microsecond (availabilityStartTime), 0);
 
   availabilityEndTime = mpdclient->mpd_node->availabilityEndTime;
   assert_equals_int (gst_date_time_get_year (availabilityEndTime), 2015);
@@ -127,6 +128,8 @@ GST_START_TEST (dash_mpdparser_mpd)
   assert_equals_int (gst_date_time_get_hour (availabilityEndTime), 1);
   assert_equals_int (gst_date_time_get_minute (availabilityEndTime), 10);
   assert_equals_int (gst_date_time_get_second (availabilityEndTime), 50);
+  assert_equals_int (gst_date_time_get_microsecond (availabilityEndTime),
+      123456);
 
   assert_equals_uint64 (mpdclient->mpd_node->mediaPresentationDuration,
       duration_to_ms (0, 1, 2, 12, 10, 20, 500));
@@ -1077,10 +1080,14 @@ GST_START_TEST (dash_mpdparser_period_adaptationSet)
   assert_equals_uint64 (adaptationSet->maxWidth, 2000);
   assert_equals_uint64 (adaptationSet->minHeight, 1100);
   assert_equals_uint64 (adaptationSet->maxHeight, 2100);
-  assert_equals_uint64 (adaptationSet->minFrameRate->num, 25);
-  assert_equals_uint64 (adaptationSet->minFrameRate->den, 123);
-  assert_equals_uint64 (adaptationSet->maxFrameRate->num, 26);
-  assert_equals_uint64 (adaptationSet->maxFrameRate->den, 1);
+  assert_equals_uint64 (adaptationSet->RepresentationBase->minFrameRate->num,
+      25);
+  assert_equals_uint64 (adaptationSet->RepresentationBase->minFrameRate->den,
+      123);
+  assert_equals_uint64 (adaptationSet->RepresentationBase->maxFrameRate->num,
+      26);
+  assert_equals_uint64 (adaptationSet->RepresentationBase->maxFrameRate->den,
+      1);
   assert_equals_int (adaptationSet->segmentAlignment->flag, 1);
   assert_equals_uint64 (adaptationSet->segmentAlignment->value, 2);
   assert_equals_int (adaptationSet->subsegmentAlignment->flag, 0);
@@ -2426,6 +2433,48 @@ GST_START_TEST (dash_mpdparser_utctiming)
       &selected_method);
   fail_if (urls == NULL);
   assert_equals_int (selected_method, GST_MPD_UTCTIMING_TYPE_HTTP_XSDATE);
+  urls =
+      gst_mpd_client_get_utc_timing_sources (mpdclient,
+      GST_MPD_UTCTIMING_TYPE_NTP, &selected_method);
+  fail_if (urls == NULL);
+  assert_equals_int (selected_method, GST_MPD_UTCTIMING_TYPE_NTP);
+  assert_equals_int (g_strv_length (urls), 4);
+  assert_equals_string (urls[0], "0.europe.pool.ntp.org");
+  assert_equals_string (urls[1], "1.europe.pool.ntp.org");
+  assert_equals_string (urls[2], "2.europe.pool.ntp.org");
+  assert_equals_string (urls[3], "3.europe.pool.ntp.org");
+  gst_mpd_client_free (mpdclient);
+}
+
+GST_END_TEST;
+
+/*
+ * Test parsing invalid UTCTiming values:
+ * - elements with no schemeIdUri property should be rejected
+ * - elements with no value property should be rejected
+ * - elements with unrecognised UTCTiming scheme should be rejected
+ * - elements with empty values should be rejected
+ *
+ */
+GST_START_TEST (dash_mpdparser_utctiming_invalid_value)
+{
+  const gchar *xml =
+      "<?xml version=\"1.0\"?>"
+      "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
+      " profiles=\"urn:mpeg:dash:profile:isoff-main:2011\">"
+      "<UTCTiming invalid_schemeIdUri=\"dummy.uri.scheme\" value=\"dummy value\"/>"
+      "<UTCTiming schemeIdUri=\"urn:mpeg:dash:utc:ntp:2014\" invalid_value=\"dummy value\"/>"
+      "<UTCTiming schemeIdUri=\"dummy.uri.scheme\" value=\"dummy value\"/>"
+      "<UTCTiming schemeIdUri=\"urn:mpeg:dash:utc:ntp:2014\" value=\"\"/>"
+      "</MPD>";
+  gboolean ret;
+  GstMpdClient *mpdclient = gst_mpd_client_new ();
+
+  ret = gst_mpd_parse (mpdclient, xml, (gint) strlen (xml));
+
+  assert_equals_int (ret, TRUE);
+  fail_if (mpdclient->mpd_node == NULL);
+  fail_if (mpdclient->mpd_node->UTCTiming != NULL);
   gst_mpd_client_free (mpdclient);
 }
 
@@ -3839,12 +3888,9 @@ GST_START_TEST (dash_mpdparser_segments)
   gboolean hasNextSegment;
   GstActiveStream *activeStream;
   GstFlowReturn flow;
-  GstMediaSegment segment;
   GstDateTime *segmentEndTime;
   GstDateTime *gst_time;
   GDateTime *g_time;
-  GstClockTime ts;
-  gint64 diff;
 
   const gchar *xml =
       "<?xml version=\"1.0\"?>"
@@ -3932,11 +3978,6 @@ GST_START_TEST (dash_mpdparser_segments)
       gst_mpd_client_has_next_segment (mpdclient, activeStream, TRUE);
   assert_equals_int (hasNextSegment, 0);
 
-  /* get chunk 0. segment_index will not change */
-  ret = gst_mpdparser_get_chunk_by_index (mpdclient, 0, 0, &segment);
-  assert_equals_int (ret, 1);
-  assert_equals_int (segment.number, 1);
-
   /* segment index is still 1 */
   hasNextSegment =
       gst_mpd_client_has_next_segment (mpdclient, activeStream, TRUE);
@@ -3970,15 +4011,6 @@ GST_START_TEST (dash_mpdparser_segments)
   hasNextSegment =
       gst_mpd_client_has_next_segment (mpdclient, activeStream, TRUE);
   assert_equals_int (hasNextSegment, 1);
-
-  /* check if stream at moment ts is available.
-   * timeShiftBufferDepth was not set, so it is considered infinite.
-   * All segments from the past must be available
-   */
-  ts = 30 * GST_SECOND;
-  ret = gst_mpd_client_check_time_position (mpdclient, activeStream, ts, &diff);
-  assert_equals_int (ret, 0);
-  assert_equals_int64 (diff, 0);
 
   gst_mpd_client_free (mpdclient);
 }
@@ -4389,6 +4421,7 @@ GST_START_TEST (dash_mpdparser_segment_template)
   GstClockTime expectedTimestamp;
   GstClockTime periodStartTime;
   GstClockTime offset;
+  GstClockTime lastFragmentTimestampEnd;
   const gchar *xml =
       "<?xml version=\"1.0\"?>"
       "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\""
@@ -4463,6 +4496,17 @@ GST_START_TEST (dash_mpdparser_segment_template)
   assert_equals_uint64 (offset, 15 * GST_SECOND);
 
   gst_media_fragment_info_clear (&fragment);
+
+  /*
+   * Period starts at 10s.
+   * MPD has a duration of 3h3m30s, so period duration is 3h3m20s.
+   * We expect the last fragment to end at period start + period duration: 3h3m30s
+   */
+  expectedTimestamp = duration_to_ms (0, 0, 0, 3, 3, 30, 0);
+  gst_mpd_client_get_last_fragment_timestamp_end (mpdclient, 0,
+      &lastFragmentTimestampEnd);
+  assert_equals_uint64 (lastFragmentTimestampEnd,
+      expectedTimestamp * GST_MSECOND);
 
   gst_mpd_client_free (mpdclient);
 }
@@ -4900,7 +4944,7 @@ GST_END_TEST;
 
 GST_START_TEST (dash_mpdparser_rfc1738_strings)
 {
-  fail_unless (gst_mpdparser_validate_rfc1738_url ("/") == FALSE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url ("/") == TRUE);
   fail_unless (gst_mpdparser_validate_rfc1738_url (" ") == FALSE);
   fail_unless (gst_mpdparser_validate_rfc1738_url ("aaaaaaaa ") == FALSE);
 
@@ -4908,6 +4952,9 @@ GST_START_TEST (dash_mpdparser_rfc1738_strings)
   fail_unless (gst_mpdparser_validate_rfc1738_url ("a") == TRUE);
   fail_unless (gst_mpdparser_validate_rfc1738_url
       (";:@&=aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789$-_.+!*'(),%AA")
+      == TRUE);
+  fail_unless (gst_mpdparser_validate_rfc1738_url
+      (";:@&=aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789$-_.+!*'(),/%AA")
       == TRUE);
   fail_unless (gst_mpdparser_validate_rfc1738_url
       (";:@&=aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789$-_.+!*'(),% ")
@@ -5019,7 +5066,7 @@ GST_START_TEST (dash_mpdparser_read_unsigned_from_negative_values)
   fail_if (adaptationSet->par != NULL);
 
   /* minFrameRate parsing should fail */
-  fail_if (adaptationSet->minFrameRate != NULL);
+  fail_if (adaptationSet->RepresentationBase->minFrameRate != NULL);
 
   /* segmentAlignment parsing should fail */
   fail_if (adaptationSet->segmentAlignment != NULL);
@@ -5359,6 +5406,7 @@ dash_suite (void)
       dash_mpdparser_period_adaptationSet_representation_segmentTemplate);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_period_subset);
   tcase_add_test (tc_simpleMPD, dash_mpdparser_utctiming);
+  tcase_add_test (tc_simpleMPD, dash_mpdparser_utctiming_invalid_value);
 
   /* tests checking other possible values for attributes */
   tcase_add_test (tc_simpleMPD, dash_mpdparser_type_dynamic);

@@ -27,7 +27,7 @@
  * <refsect2>
  * <title>Examples</title>
  * |[
- * gst-launch -v videotestsrc ! glupload ! glbumper location=normalmap.bmp ! glimagesink
+ * gst-launch-1.0 -v videotestsrc ! glupload ! glbumper location=normalmap.bmp ! glimagesink
  * ]| A pipeline to test normal mapping.
  * FBO (Frame Buffer Object) and GLSL (OpenGL Shading Language) are required.
  * </refsect2>
@@ -329,8 +329,7 @@ gst_gl_bumper_set_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
     case PROP_LOCATION:
-      if (bumper->location != NULL)
-        g_free (bumper->location);
+      g_free (bumper->location);
       bumper->location = g_value_dup_string (value);
       break;
     default:

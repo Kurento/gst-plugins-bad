@@ -30,7 +30,7 @@
 #include <gst/video/video.h>
 #include <gst/gl/gstglcontext.h>
 #include "coremediabuffer.h"
-#include "corevideotexturecache.h"
+#include "videotexturecache.h"
 
 #define DEFAULT_DEVICE_INDEX  -1
 #define DEFAULT_DO_STATS      FALSE
@@ -46,7 +46,19 @@ GST_DEBUG_CATEGORY (gst_avf_video_src_debug);
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw, "
+    GST_STATIC_CAPS (
+#if !HAVE_IOS
+        GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
+            "UYVY") ", "
+        "texture-target = " GST_GL_TEXTURE_TARGET_RECTANGLE_STR ";"
+#else
+        GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
+            "BGRA") ", "
+        "texture-target = " GST_GL_TEXTURE_TARGET_2D_STR "; "
+#endif
+        "video/x-raw, "
         "format = (string) { NV12, UYVY, YUY2 }, "
         "framerate = " GST_VIDEO_FPS_RANGE ", "
         "width = " GST_VIDEO_SIZE_RANGE ", "
@@ -57,10 +69,6 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
         "framerate = " GST_VIDEO_FPS_RANGE ", "
         "width = " GST_VIDEO_SIZE_RANGE ", "
         "height = " GST_VIDEO_SIZE_RANGE "; "
-
-        GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
-            "RGBA") "; "
 ));
 
 typedef enum _QueueState {
@@ -93,7 +101,6 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
   BOOL stopRequest;
 
   GstCaps *caps;
-  GstVideoFormat internalFormat;
   GstVideoFormat format;
   gint width, height;
   GstClockTime latency;
@@ -107,7 +114,7 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
   BOOL captureScreenMouseClicks;
 
   BOOL useVideoMeta;
-  GstCoreVideoTextureCache *textureCache;
+  GstVideoTextureCache *textureCache;
 }
 
 - (id)init;
@@ -129,7 +136,7 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
 #if !HAVE_IOS
 - (CGDirectDisplayID)getDisplayIdFromDeviceIndex;
 #endif
-- (BOOL)getDeviceCaps:(GstCaps *)result;
+- (GstCaps *)getDeviceCaps;
 - (BOOL)setDeviceCaps:(GstVideoInfo *)info;
 - (BOOL)getSessionPresetCaps:(GstCaps *)result;
 - (BOOL)setSessionPresetCaps:(GstVideoInfo *)info;
@@ -142,6 +149,7 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
 - (BOOL)query:(GstQuery *)query;
 - (GstStateChangeReturn)changeState:(GstStateChange)transition;
 - (GstFlowReturn)create:(GstBuffer **)buf;
+- (GstCaps *)fixate:(GstCaps *)caps;
 - (void)updateStatistics;
 - (void)captureOutput:(AVCaptureOutput *)captureOutput
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
@@ -373,9 +381,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   case kCVPixelFormatType_32BGRA: /* BGRA */
     gst_format = GST_VIDEO_FORMAT_BGRA;
     break;
-  case kCVPixelFormatType_32RGBA: /* RGBA */
-    gst_format = GST_VIDEO_FORMAT_RGBA;
-    break;
   case kCVPixelFormatType_422YpCbCr8_yuvs: /* yuvs */
     gst_format = GST_VIDEO_FORMAT_YUY2;
     break;
@@ -408,12 +413,21 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 #endif
 
-- (BOOL)getDeviceCaps:(GstCaps *)result
+- (GstCaps *)getDeviceCaps
 {
   NSArray *formats = [device valueForKey:@"formats"];
   NSArray *pixel_formats = output.availableVideoCVPixelFormatTypes;
+  GstCaps *result_caps, *result_gl_caps;
+#if !HAVE_IOS
+  GstVideoFormat gl_format = GST_VIDEO_FORMAT_UYVY;
+#else
+  GstVideoFormat gl_format = GST_VIDEO_FORMAT_BGRA;
+#endif
 
   GST_DEBUG_OBJECT (element, "Getting device caps");
+
+  result_caps = gst_caps_new_empty ();
+  result_gl_caps = gst_caps_new_empty ();
 
   /* Do not use AVCaptureDeviceFormat or AVFrameRateRange only
    * available in iOS >= 7.0. We use a dynamic approach with key-value
@@ -437,27 +451,48 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
       for (NSNumber *pixel_format in pixel_formats) {
         GstVideoFormat gst_format = [self getGstVideoFormat:pixel_format];
+
         if (gst_format != GST_VIDEO_FORMAT_UNKNOWN) {
           if (min_fps != max_fps)
-            gst_caps_append (result, GST_AVF_FPS_RANGE_CAPS_NEW (gst_format, dimensions.width, dimensions.height, min_fps_n, min_fps_d, max_fps_n, max_fps_d));
+            gst_caps_append (result_caps, GST_AVF_FPS_RANGE_CAPS_NEW (gst_format, dimensions.width, dimensions.height, min_fps_n, min_fps_d, max_fps_n, max_fps_d));
           else
-            gst_caps_append (result, GST_AVF_CAPS_NEW (gst_format, dimensions.width, dimensions.height, max_fps_n, max_fps_d));
+            gst_caps_append (result_caps, GST_AVF_CAPS_NEW (gst_format, dimensions.width, dimensions.height, max_fps_n, max_fps_d));
         }
 
-        if (gst_format == GST_VIDEO_FORMAT_BGRA) {
-          GstCaps *rgba_caps;
-          if (min_fps != max_fps)
-            rgba_caps = GST_AVF_FPS_RANGE_CAPS_NEW (GST_VIDEO_FORMAT_RGBA, dimensions.width, dimensions.height, min_fps_n, min_fps_d, max_fps_n, max_fps_d);
-          else
-            rgba_caps = GST_AVF_CAPS_NEW (GST_VIDEO_FORMAT_RGBA, dimensions.width, dimensions.height, max_fps_n, max_fps_d);
-          gst_caps_set_features (rgba_caps, 0, gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, NULL));
-          gst_caps_append (result, rgba_caps);
+        if (gst_format == gl_format) {
+          GstCaps *gl_caps;
+          if (min_fps != max_fps) {
+            gl_caps = GST_AVF_FPS_RANGE_CAPS_NEW (gl_format,
+                    dimensions.width, dimensions.height,
+                    min_fps_n, min_fps_d,
+                    max_fps_n, max_fps_d);
+          } else {
+            gl_caps = GST_AVF_CAPS_NEW (gl_format,
+                    dimensions.width, dimensions.height,
+                    max_fps_n, max_fps_d);
+          }
+          gst_caps_set_features (gl_caps, 0,
+                  gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
+                      NULL));
+          gst_caps_set_simple (gl_caps,
+                  "texture-target", G_TYPE_STRING,
+#if !HAVE_IOS
+                  GST_GL_TEXTURE_TARGET_RECTANGLE_STR,
+#else
+                  GST_GL_TEXTURE_TARGET_2D_STR,
+#endif
+                  NULL);
+          gst_caps_append (result_gl_caps, gl_caps);
         }
       }
     }
   }
-  GST_LOG_OBJECT (element, "Device returned the following caps %" GST_PTR_FORMAT, result);
-  return YES;
+
+  result_gl_caps = gst_caps_simplify (gst_caps_merge (result_gl_caps, result_caps));
+
+  GST_INFO_OBJECT (element, "Device returned the following caps %" GST_PTR_FORMAT, result_gl_caps);
+
+  return result_gl_caps;
 }
 
 - (BOOL)setDeviceCaps:(GstVideoInfo *)info
@@ -618,11 +653,8 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   }
 
   @try {
-
-    [self getDeviceCaps:result];
-
+    result = gst_caps_merge (result, [self getDeviceCaps]);
   } @catch (NSException *exception) {
-
     if (![[exception name] isEqualToString:NSUndefinedKeyException]) {
       GST_WARNING ("An unexcepted error occured: %s", [exception.reason UTF8String]);
       return result;
@@ -646,7 +678,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   width = info.width;
   height = info.height;
   format = info.finfo->format;
-  internalFormat = GST_VIDEO_FORMAT_UNKNOWN;
   latency = gst_util_uint64_scale (GST_SECOND, info.fps_d, info.fps_n);
 
   dispatch_sync (mainQueue, ^{
@@ -686,7 +717,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
       }
     }
 
-    internalFormat = format;
     switch (format) {
       case GST_VIDEO_FORMAT_NV12:
         newformat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
@@ -696,15 +726,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         break;
       case GST_VIDEO_FORMAT_YUY2:
         newformat = kCVPixelFormatType_422YpCbCr8_yuvs;
-        break;
-      case GST_VIDEO_FORMAT_RGBA:
-#if !HAVE_IOS
-        newformat = kCVPixelFormatType_422YpCbCr8;
-        internalFormat = GST_VIDEO_FORMAT_UYVY;
-#else
-        newformat = kCVPixelFormatType_32BGRA;
-        internalFormat = GST_VIDEO_FORMAT_BGRA;
-#endif
         break;
       case GST_VIDEO_FORMAT_BGRA:
         newformat = kCVPixelFormatType_32BGRA;
@@ -716,10 +737,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         return;
     }
 
-    GST_INFO_OBJECT(element,
-        "width: %d height: %d format: %s internalFormat: %s", width, height,
-        gst_video_format_to_string (format),
-        gst_video_format_to_string (internalFormat));
+    GST_INFO_OBJECT (element,
+        "width: %d height: %d format: %s", width, height,
+        gst_video_format_to_string (format));
 
     output.videoSettings = [NSDictionary
         dictionaryWithObject:[NSNumber numberWithInt:newformat]
@@ -728,6 +748,22 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     if (caps)
       gst_caps_unref (caps);
     caps = gst_caps_copy (new_caps);
+
+    if (textureCache)
+      gst_video_texture_cache_free (textureCache);
+    textureCache = NULL;
+
+    GstCapsFeatures *features = gst_caps_get_features (caps, 0);
+    if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
+      GstGLContext *context = query_gl_context (GST_BASE_SRC_PAD (baseSrc));
+      textureCache = gst_video_texture_cache_new (context);
+      gst_video_texture_cache_set_format (textureCache, format, caps);
+      gst_object_unref (context);
+    }
+
+    GST_INFO_OBJECT (element, "configured caps %"GST_PTR_FORMAT
+        ", pushing textures %d", caps, textureCache != NULL);
+
     [session startRunning];
 
     /* Unlock device configuration only after session is started so the session
@@ -765,7 +801,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   bufQueue = nil;
 
   if (textureCache)
-      gst_core_video_texture_cache_free (textureCache);
+      gst_video_texture_cache_free (textureCache);
   textureCache = NULL;
 
   return YES;
@@ -792,43 +828,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   }
 
   return result;
-}
-
-- (BOOL)decideAllocation:(GstQuery *)query
-{
-  useVideoMeta = gst_query_find_allocation_meta (query,
-      GST_VIDEO_META_API_TYPE, NULL);
-
-  /* determine whether we can pass GL textures to downstream element */
-  GstCapsFeatures *features = gst_caps_get_features (caps, 0);
-  if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
-    GstGLContext *glContext = NULL;
-
-    /* get GL context from downstream element */
-    GstQuery *query = gst_query_new_context ("gst.gl.local_context");
-    if (gst_pad_peer_query (GST_BASE_SRC_PAD (element), query)) {
-      GstContext *context;
-      gst_query_parse_context (query, &context);
-      if (context) {
-        const GstStructure *s = gst_context_get_structure (context);
-        gst_structure_get (s, "context", GST_GL_TYPE_CONTEXT, &glContext,
-            NULL);
-      }
-    }
-    gst_query_unref (query);
-
-    if (glContext) {
-      GST_INFO_OBJECT (element, "pushing textures. Internal format %s, context %p",
-          gst_video_format_to_string (internalFormat), glContext);
-      textureCache = gst_core_video_texture_cache_new (glContext);
-      gst_core_video_texture_cache_set_format (textureCache, internalFormat, caps);
-      gst_object_unref (glContext);
-    } else {
-      GST_WARNING_OBJECT (element, "got memory:GLMemory caps but not GL context from downstream element");
-    }
-  } 
-
-  return YES;
 }
 
 - (BOOL)unlock
@@ -946,20 +945,10 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     CFRelease (sbuf);
     return GST_FLOW_ERROR;
   }
-
-  if (format == GST_VIDEO_FORMAT_RGBA) {
-    /* So now buf contains BGRA data (!) . Since downstream is actually going to
-     * use the GL upload meta to get RGBA textures (??), we need to override the
-     * VideoMeta format (!!!). Yes this is confusing, see setCaps:  */
-    GstVideoMeta *video_meta = gst_buffer_get_video_meta (*buf);
-    if (video_meta) {
-      video_meta->format = format;
-    }
-  }
   CFRelease (sbuf);
 
   if (textureCache != NULL) {
-    *buf = gst_core_video_texture_cache_get_gl_buffer (textureCache, *buf);
+    *buf = gst_video_texture_cache_get_gl_buffer (textureCache, *buf);
     if (*buf == NULL)
       return GST_FLOW_ERROR;
   }
@@ -973,6 +962,50 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     [self updateStatistics];
 
   return GST_FLOW_OK;
+}
+
+static GstGLContext *
+query_gl_context (GstPad *srcpad)
+{
+  GstGLContext *gl_context = NULL;
+  GstContext *context = NULL;
+  GstQuery *query;
+
+  query = gst_query_new_context ("gst.gl.local_context");
+  if (gst_pad_peer_query (srcpad, query)) {
+    gst_query_parse_context (query, &context);
+    if (context) {
+      const GstStructure *s = gst_context_get_structure (context);
+      gst_structure_get (s, "context", GST_GL_TYPE_CONTEXT, &gl_context, NULL);
+    }
+  }
+  gst_query_unref (query);
+
+  return gl_context;
+}
+
+static gboolean
+caps_filter_out_gl_memory (GstCapsFeatures * features, GstStructure * structure,
+    gpointer user_data)
+{
+  return !gst_caps_features_contains (features,
+      GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
+}
+
+
+- (GstCaps *)fixate:(GstCaps *)new_caps
+{
+  GstGLContext *context;
+
+  new_caps = gst_caps_make_writable (new_caps);
+
+  context = query_gl_context (GST_BASE_SRC_PAD (baseSrc));
+  if (!context)
+    gst_caps_filter_and_map_in_place (new_caps, caps_filter_out_gl_memory, NULL);
+  else
+    gst_object_unref (context);
+
+  return gst_caps_fixate (new_caps);
 }
 
 - (void)getSampleBuffer:(CMSampleBufferRef)sbuf
@@ -1099,13 +1132,13 @@ static gboolean gst_avf_video_src_start (GstBaseSrc * basesrc);
 static gboolean gst_avf_video_src_stop (GstBaseSrc * basesrc);
 static gboolean gst_avf_video_src_query (GstBaseSrc * basesrc,
     GstQuery * query);
-static gboolean gst_avf_video_src_decide_allocation (GstBaseSrc * basesrc,
-    GstQuery * query);
 static gboolean gst_avf_video_src_unlock (GstBaseSrc * basesrc);
 static gboolean gst_avf_video_src_unlock_stop (GstBaseSrc * basesrc);
 static GstFlowReturn gst_avf_video_src_create (GstPushSrc * pushsrc,
     GstBuffer ** buf);
 static gboolean gst_avf_video_src_negotiate (GstBaseSrc * basesrc);
+static GstCaps * gst_avf_video_src_fixate (GstBaseSrc * bsrc,
+    GstCaps * caps);
 
 
 static void
@@ -1129,7 +1162,7 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
   gstbasesrc_class->query = gst_avf_video_src_query;
   gstbasesrc_class->unlock = gst_avf_video_src_unlock;
   gstbasesrc_class->unlock_stop = gst_avf_video_src_unlock_stop;
-  gstbasesrc_class->decide_allocation = gst_avf_video_src_decide_allocation;
+  gstbasesrc_class->fixate = gst_avf_video_src_fixate;
   gstbasesrc_class->negotiate = gst_avf_video_src_negotiate;
 
   gstpushsrc_class->create = gst_avf_video_src_create;
@@ -1338,18 +1371,6 @@ gst_avf_video_src_query (GstBaseSrc * basesrc, GstQuery * query)
 }
 
 static gboolean
-gst_avf_video_src_decide_allocation (GstBaseSrc * basesrc, GstQuery * query)
-{
-  gboolean ret;
-
-  OBJC_CALLOUT_BEGIN ();
-  ret = [GST_AVF_VIDEO_SRC_IMPL (basesrc) decideAllocation:query];
-  OBJC_CALLOUT_END ();
-
-  return ret;
-}
-
-static gboolean
 gst_avf_video_src_unlock (GstBaseSrc * basesrc)
 {
   gboolean ret;
@@ -1395,3 +1416,15 @@ gst_avf_video_src_negotiate (GstBaseSrc * basesrc)
   return GST_BASE_SRC_CLASS (parent_class)->negotiate (basesrc);
 }
 
+
+static GstCaps *
+gst_avf_video_src_fixate (GstBaseSrc * bsrc, GstCaps * caps)
+{
+  GstCaps *ret;
+
+  OBJC_CALLOUT_BEGIN ();
+  ret = [GST_AVF_VIDEO_SRC_IMPL (bsrc) fixate:caps];
+  OBJC_CALLOUT_END ();
+
+  return ret;
+}

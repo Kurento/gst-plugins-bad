@@ -205,12 +205,12 @@ QtGLVideoItem::updatePaintNode(QSGNode * oldNode,
   if (!texNode) {
     texNode = new QSGSimpleTextureNode ();
     texNode->setOwnsTexture (true);
+    texNode->setTexture (new GstQSGTexture ());
   }
 
-  tex = new GstQSGTexture ();
+  tex = static_cast<GstQSGTexture *> (texNode->texture());
   tex->setCaps (this->priv->caps);
   tex->setBuffer (this->priv->buffer);
-  texNode->setTexture (tex);
 
   if (this->priv->force_aspect_ratio) {
     src.w = this->priv->display_width;
@@ -412,7 +412,11 @@ void
 QtGLVideoItem::handleWindowChanged(QQuickWindow *win)
 {
   if (win) {
-    connect(win, SIGNAL(sceneGraphInitialized()), this, SLOT(onSceneGraphInitialized()), Qt::DirectConnection);
+    if (win->isSceneGraphInitialized())
+      onSceneGraphInitialized();
+    else
+	  connect(win, SIGNAL(sceneGraphInitialized()), this, SLOT(onSceneGraphInitialized()), Qt::DirectConnection);
+
     connect(win, SIGNAL(sceneGraphInvalidated()), this, SLOT(onSceneGraphInvalidated()), Qt::DirectConnection);
   } else {
     this->priv->qt_context = NULL;

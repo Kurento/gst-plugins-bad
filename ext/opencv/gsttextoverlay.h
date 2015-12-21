@@ -3,7 +3,7 @@
  * Copyright (C) 2005 Thomas Vander Stichele <thomas@apestaart.org>
  * Copyright (C) 2005 Ronald S. Bultje <rbultje@ronald.bitfreak.net>
  * Copyright (C) 2010 Sreerenj Balachandran <bsreerenj@gmail.com>
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
@@ -46,8 +46,7 @@
 #ifndef __GST_OPENCV_TEXT_OVERLAY_H__
 #define __GST_OPENCV_TEXT_OVERLAY_H__
 
-#include <gst/gst.h>
-#include "gstopencvutils.h"
+#include <gstopencvvideofilter.h>
 #include <opencv2/core/core_c.h>
 G_BEGIN_DECLS
 
@@ -68,12 +67,9 @@ typedef struct _GstOpencvTextOverlayClass GstOpencvTextOverlayClass;
 
 struct _GstOpencvTextOverlay
 {
-  GstElement element;
+  GstOpencvVideoFilter element;
 
-  GstPad *sinkpad, *srcpad;
-
-  IplImage *cvImage;
-  CvFont font;  
+  CvFont font;
 
   gint xpos;
   gint ypos;
@@ -85,9 +81,9 @@ struct _GstOpencvTextOverlay
 
 };
 
-struct _GstOpencvTextOverlayClass 
+struct _GstOpencvTextOverlayClass
 {
-  GstElementClass parent_class;
+  GstOpencvVideoFilterClass parent_class;
 };
 
 GType gst_opencv_text_overlay_get_type (void);

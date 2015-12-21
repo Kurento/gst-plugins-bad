@@ -241,7 +241,7 @@ struct _TSDemuxStream
 
 /* Can also use the subpicture pads for text subtitles? */
 #define SUBPICTURE_CAPS \
-    GST_STATIC_CAPS ("subpicture/x-pgs; subpicture/x-dvd")
+    GST_STATIC_CAPS ("subpicture/x-pgs; subpicture/x-dvd; subpicture/x-dvb")
 
 static GstStaticPadTemplate video_template =
 GST_STATIC_PAD_TEMPLATE ("video_%04x", GST_PAD_SRC,
@@ -282,6 +282,9 @@ static void
 gst_ts_demux_program_started (MpegTSBase * base, MpegTSBaseProgram * program);
 static void
 gst_ts_demux_program_stopped (MpegTSBase * base, MpegTSBaseProgram * program);
+static gboolean
+gst_ts_demux_can_remove_program (MpegTSBase * base,
+    MpegTSBaseProgram * program);
 static void gst_ts_demux_reset (MpegTSBase * base);
 static GstFlowReturn
 gst_ts_demux_push (MpegTSBase * base, MpegTSPacketizerPacket * packet,
@@ -379,6 +382,7 @@ gst_ts_demux_class_init (GstTSDemuxClass * klass)
   ts_class->push_event = GST_DEBUG_FUNCPTR (push_event);
   ts_class->program_started = GST_DEBUG_FUNCPTR (gst_ts_demux_program_started);
   ts_class->program_stopped = GST_DEBUG_FUNCPTR (gst_ts_demux_program_stopped);
+  ts_class->can_remove_program = gst_ts_demux_can_remove_program;
   ts_class->stream_added = gst_ts_demux_stream_added;
   ts_class->stream_removed = gst_ts_demux_stream_removed;
   ts_class->seek = GST_DEBUG_FUNCPTR (gst_ts_demux_do_seek);
@@ -1177,7 +1181,7 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
           GST_MTS_DESC_DVB_SUBTITLING);
       if (desc) {
         GST_LOG ("subtitling");
-        is_private = TRUE;
+        is_subpicture = TRUE;
         caps = gst_caps_new_empty_simple ("subpicture/x-dvb");
         sparse = TRUE;
         break;
@@ -1357,6 +1361,8 @@ create_pad_for_stream (MpegTSBase * base, MpegTSBaseStream * bstream,
                     gst_codec_utils_opus_create_caps (48000, channels,
                     mapping_family, stream_count, coupled_count,
                     channel_mapping);
+
+                g_free (channel_mapping);
               }
             } else {
               GST_WARNING_OBJECT (demux,
@@ -1577,8 +1583,7 @@ done:
     gst_pad_set_event_function (pad, gst_ts_demux_srcpad_event);
   }
 
-  if (name)
-    g_free (name);
+  g_free (name);
   if (template)
     gst_object_unref (template);
   if (caps)
@@ -1690,16 +1695,8 @@ activate_pad_for_stream (GstTSDemux * tsdemux, TSDemuxStream * stream)
     gst_element_add_pad ((GstElement *) tsdemux, stream->pad);
     stream->active = TRUE;
     GST_DEBUG_OBJECT (stream->pad, "done adding pad");
-    /* force sending of pending sticky events which have been stored on the
-     * pad already and which otherwise would only be sent on the first buffer
-     * or serialized event (which means very late in case of subtitle streams),
-     * and playsink waits for stream-start or another serialized event */
-    if (stream->sparse) {
-      GST_DEBUG_OBJECT (stream->pad, "sparse stream, pushing GAP event");
-      gst_pad_push_event (stream->pad, gst_event_new_gap (0, 0));
-    }
   } else if (((MpegTSBaseStream *) stream)->stream_type != 0xff) {
-    GST_WARNING_OBJECT (tsdemux,
+    GST_DEBUG_OBJECT (tsdemux,
         "stream %p (pid 0x%04x, type:0x%02x) has no pad", stream,
         ((MpegTSBaseStream *) stream)->pid,
         ((MpegTSBaseStream *) stream)->stream_type);
@@ -1712,8 +1709,7 @@ gst_ts_demux_stream_flush (TSDemuxStream * stream, GstTSDemux * tsdemux,
 {
   GST_DEBUG ("flushing stream %p", stream);
 
-  if (stream->data)
-    g_free (stream->data);
+  g_free (stream->data);
   stream->data = NULL;
   stream->state = PENDING_PACKET_EMPTY;
   stream->expected_size = 0;
@@ -1760,6 +1756,24 @@ gst_ts_demux_flush_streams (GstTSDemux * demux, gboolean hard)
     gst_ts_demux_stream_flush (walk->data, demux, hard);
 }
 
+static gboolean
+gst_ts_demux_can_remove_program (MpegTSBase * base, MpegTSBaseProgram * program)
+{
+  GstTSDemux *demux = GST_TS_DEMUX (base);
+
+  /* If it's our current active program, we return FALSE, we'll deactivate it
+   * ourselves when the next program gets activated */
+  if (demux->program == program) {
+    GST_DEBUG
+        ("Attempting to remove current program, delaying until new program gets activated");
+    demux->previous_program = program;
+    demux->program_number = -1;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+
 static void
 gst_ts_demux_program_started (MpegTSBase * base, MpegTSBaseProgram * program)
 {
@@ -1784,10 +1798,44 @@ gst_ts_demux_program_started (MpegTSBase * base, MpegTSBaseProgram * program)
       demux->segment_event = NULL;
     }
 
+    /* DRAIN ALL STREAMS FIRST ! */
+    if (demux->previous_program) {
+      GList *tmp;
+      GST_DEBUG_OBJECT (demux, "Draining previous program");
+      for (tmp = demux->previous_program->stream_list; tmp; tmp = tmp->next) {
+        TSDemuxStream *stream = (TSDemuxStream *) tmp->data;
+        if (stream->pad)
+          gst_ts_demux_push_pending_data (demux, stream);
+      }
+    }
+
     /* Add all streams, then fire no-more-pads */
     for (tmp = program->stream_list; tmp; tmp = tmp->next) {
       TSDemuxStream *stream = (TSDemuxStream *) tmp->data;
       activate_pad_for_stream (demux, stream);
+    }
+
+    /* If there was a previous program, now is the time to deactivate it
+     * and remove old pads (including pushing EOS) */
+    if (demux->previous_program) {
+      GST_DEBUG ("Deactivating previous program");
+      mpegts_base_deactivate_and_free_program (base, demux->previous_program);
+      demux->previous_program = NULL;
+    }
+    /* If any of the stream is sparse, push a GAP event before anything else
+     * This is done here, and not in activate_pad_for_stream() because pushing
+     * a GAP event *is* considering data, and we want to ensure the (potential)
+     * old pads are all removed before we push any data on the new ones */
+    for (tmp = program->stream_list; tmp; tmp = tmp->next) {
+      TSDemuxStream *stream = (TSDemuxStream *) tmp->data;
+      if (stream->sparse) {
+        /* force sending of pending sticky events which have been stored on the
+         * pad already and which otherwise would only be sent on the first buffer
+         * or serialized event (which means very late in case of subtitle streams),
+         * and playsink waits for stream-start or another serialized event */
+        GST_DEBUG_OBJECT (stream->pad, "sparse stream, pushing GAP event");
+        gst_pad_push_event (stream->pad, gst_event_new_gap (0, 0));
+      }
     }
     gst_element_no_more_pads ((GstElement *) demux);
   }

@@ -27,7 +27,7 @@
  *
  * <refsect2>
  * |[
- * gst-launch -v -m videotestsrc num-buffers=50 ! gdppay ! filesink location=test.gdp
+ * gst-launch-1.0 -v -m videotestsrc num-buffers=50 ! gdppay ! filesink location=test.gdp
  * ]| This pipeline creates a serialized video stream that can be played back
  * with the example shown in gdpdepay.
  * </refsect2>
@@ -577,6 +577,8 @@ gst_gdp_pay_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
     flowret = gst_gdp_queue_buffer (this, outbuffer);
     if (flowret != GST_FLOW_OK)
       goto push_error;
+  } else {
+    gst_buffer_unref (outbuffer);
   }
 
 done:

@@ -2197,8 +2197,6 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
     GstTagList *taglist;
     GstCaps *caps;
 
-    taglist = gst_tag_list_new_empty ();
-
     /* codec tag */
     caps = gst_pad_get_current_caps (GST_BASE_PARSE_SRC_PAD (parse));
     if (caps == NULL) {
@@ -2210,6 +2208,8 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
         return GST_FLOW_NOT_NEGOTIATED;
       }
     }
+
+    taglist = gst_tag_list_new_empty ();
     gst_pb_utils_add_codec_description_to_tag_list (taglist,
         GST_TAG_VIDEO_CODEC, caps);
     gst_caps_unref (caps);
@@ -2702,6 +2702,7 @@ gst_h264_parse_event (GstBaseParse * parse, GstEvent * event)
     case GST_EVENT_FLUSH_STOP:
       h264parse->dts = GST_CLOCK_TIME_NONE;
       h264parse->ts_trn_nb = GST_CLOCK_TIME_NONE;
+      h264parse->push_codec = TRUE;
 
       res = GST_BASE_PARSE_CLASS (parent_class)->sink_event (parse, event);
       break;

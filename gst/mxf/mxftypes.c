@@ -22,6 +22,7 @@
 #endif
 
 #include <gst/gst.h>
+#include <gst/base/gstbytewriter.h>
 #include <string.h>
 
 #include "mxftypes.h"
@@ -1061,8 +1062,7 @@ mxf_random_index_pack_to_buffer (const GArray * array)
 /* SMPTE 377M 10.2.3 */
 gboolean
 mxf_index_table_segment_parse (const MXFUL * ul,
-    MXFIndexTableSegment * segment, const MXFPrimerPack * primer,
-    const guint8 * data, guint size)
+    MXFIndexTableSegment * segment, const guint8 * data, guint size)
 {
 #ifndef GST_DISABLE_GST_DEBUG
   gchar str[48];
@@ -1072,7 +1072,6 @@ mxf_index_table_segment_parse (const MXFUL * ul,
 
   g_return_val_if_fail (ul != NULL, FALSE);
   g_return_val_if_fail (data != NULL, FALSE);
-  g_return_val_if_fail (primer != NULL, FALSE);
 
   memset (segment, 0, sizeof (MXFIndexTableSegment));
 
@@ -1082,8 +1081,11 @@ mxf_index_table_segment_parse (const MXFUL * ul,
   GST_DEBUG ("Parsing index table segment:");
 
   while (mxf_local_tag_parse (data, size, &tag, &tag_size, &tag_data)) {
+    data += 4 + tag_size;
+    size -= 4 + tag_size;
+
     if (tag_size == 0 || tag == 0x0000)
-      goto next;
+      continue;
 
     switch (tag) {
       case 0x3c0a:
@@ -1154,7 +1156,7 @@ mxf_index_table_segment_parse (const MXFUL * ul,
         segment->n_delta_entries = len;
         GST_DEBUG ("  number of delta entries = %u", segment->n_delta_entries);
         if (len == 0)
-          goto next;
+          continue;
         tag_data += 4;
         tag_size -= 4;
 
@@ -1202,7 +1204,7 @@ mxf_index_table_segment_parse (const MXFUL * ul,
         segment->n_index_entries = len;
         GST_DEBUG ("  number of index entries = %u", segment->n_index_entries);
         if (len == 0)
-          goto next;
+          continue;
         tag_data += 4;
         tag_size -= 4;
 
@@ -1265,18 +1267,11 @@ mxf_index_table_segment_parse (const MXFUL * ul,
         break;
       }
       default:
-        if (!primer->mappings) {
-          GST_WARNING ("No valid primer pack for this partition");
-        } else if (!mxf_local_tag_add_to_hash_table (primer, tag, tag_data,
-                tag_size, &segment->other_tags)) {
-          goto error;
-        }
+        GST_WARNING
+            ("Unknown local tag 0x%04x of size %d in index table segment", tag,
+            tag_size);
         break;
     }
-
-  next:
-    data += 4 + tag_size;
-    size -= 4 + tag_size;
   }
   return TRUE;
 
@@ -1301,10 +1296,126 @@ mxf_index_table_segment_reset (MXFIndexTableSegment * segment)
   g_free (segment->index_entries);
   g_free (segment->delta_entries);
 
-  if (segment->other_tags)
-    g_hash_table_destroy (segment->other_tags);
-
   memset (segment, 0, sizeof (MXFIndexTableSegment));
+}
+
+GstBuffer *
+mxf_index_table_segment_to_buffer (const MXFIndexTableSegment * segment)
+{
+  guint len, slen, i;
+  guint8 ber[9];
+  GstBuffer *ret;
+  GstMapInfo map;
+  GstByteWriter bw;
+
+  g_return_val_if_fail (segment != NULL, NULL);
+  g_return_val_if_fail (segment->n_delta_entries * 6 < G_MAXUINT16, NULL);
+  g_return_val_if_fail (segment->n_index_entries * (11 +
+          4 * segment->slice_count + 8 * segment->pos_table_count) <
+      G_MAXUINT16, NULL);
+
+  len =
+      16 + 4 + 8 + 4 + 8 + 4 + 8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1 + 4 + 1 + 4 +
+      4 + 8 + segment->n_delta_entries * 6 + 4 + 8 +
+      segment->n_index_entries * (11 + 4 * segment->slice_count +
+      8 * segment->pos_table_count);
+  slen = mxf_ber_encode_size (len, ber);
+
+  ret = gst_buffer_new_and_alloc (16 + slen + len);
+  gst_buffer_map (ret, &map, GST_MAP_WRITE);
+
+  gst_byte_writer_init_with_data (&bw, map.data, map.size, FALSE);
+
+  gst_byte_writer_put_data_unchecked (&bw,
+      (const guint8 *) MXF_UL (INDEX_TABLE_SEGMENT), 16);
+  gst_byte_writer_put_data_unchecked (&bw, ber, slen);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3c0a);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 16);
+  gst_byte_writer_put_data_unchecked (&bw,
+      (const guint8 *) &segment->instance_id, 16);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f0b);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 8);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->index_edit_rate.n);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->index_edit_rate.d);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f0c);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 8);
+  gst_byte_writer_put_uint64_be_unchecked (&bw, segment->index_start_position);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f0d);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 8);
+  gst_byte_writer_put_uint64_be_unchecked (&bw, segment->index_duration);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f05);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 4);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->edit_unit_byte_count);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f06);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 4);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->index_sid);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f07);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 4);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->body_sid);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f08);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 1);
+  gst_byte_writer_put_uint8 (&bw, segment->slice_count);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f0e);
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 1);
+  gst_byte_writer_put_uint8 (&bw, segment->pos_table_count);
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f09);
+  gst_byte_writer_put_uint16_be_unchecked (&bw,
+      8 + segment->n_delta_entries * 6);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->n_delta_entries);
+  gst_byte_writer_put_uint32_be_unchecked (&bw, 6);
+  for (i = 0; i < segment->n_delta_entries; i++) {
+    gst_byte_writer_put_uint8_unchecked (&bw,
+        segment->delta_entries[i].pos_table_index);
+    gst_byte_writer_put_uint8_unchecked (&bw, segment->delta_entries[i].slice);
+    gst_byte_writer_put_uint32_be_unchecked (&bw,
+        segment->delta_entries[i].element_delta);
+  }
+
+  gst_byte_writer_put_uint16_be_unchecked (&bw, 0x3f0a);
+  gst_byte_writer_put_uint16_be_unchecked (&bw,
+      8 + segment->n_index_entries * (11 + 4 * segment->slice_count +
+          8 * segment->pos_table_count));
+  gst_byte_writer_put_uint32_be_unchecked (&bw, segment->n_index_entries);
+  gst_byte_writer_put_uint32_be_unchecked (&bw,
+      (11 + 4 * segment->slice_count + 8 * segment->pos_table_count));
+  for (i = 0; i < segment->n_index_entries; i++) {
+    guint j;
+
+    gst_byte_writer_put_uint8_unchecked (&bw,
+        segment->index_entries[i].temporal_offset);
+    gst_byte_writer_put_uint8_unchecked (&bw,
+        segment->index_entries[i].key_frame_offset);
+    gst_byte_writer_put_uint8_unchecked (&bw, segment->index_entries[i].flags);
+    gst_byte_writer_put_uint64_be_unchecked (&bw,
+        segment->index_entries[i].stream_offset);
+
+    for (j = 0; j < segment->slice_count; j++)
+      gst_byte_writer_put_uint32_be_unchecked (&bw,
+          segment->index_entries[i].slice_offset[j]);
+
+    for (j = 0; j < segment->pos_table_count; j++) {
+      gst_byte_writer_put_uint32_be_unchecked (&bw,
+          segment->index_entries[i].pos_table[j].n);
+      gst_byte_writer_put_uint32_be_unchecked (&bw,
+          segment->index_entries[i].pos_table[j].d);
+    }
+  }
+
+  g_assert (gst_byte_writer_get_pos (&bw) == map.size);
+
+  gst_buffer_unmap (ret, &map);
+
+  return ret;
 }
 
 /* SMPTE 377M 8.2 Table 1 and 2 */

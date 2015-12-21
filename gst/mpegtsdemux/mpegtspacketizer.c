@@ -212,8 +212,7 @@ mpegts_packetizer_clear_section (MpegTSPacketizerStream * stream)
   stream->section_length = 0;
   stream->section_offset = 0;
   stream->table_id = TABLE_ID_UNSET;
-  if (stream->section_data)
-    g_free (stream->section_data);
+  g_free (stream->section_data);
   stream->section_data = NULL;
 }
 
@@ -228,8 +227,6 @@ static void
 mpegts_packetizer_stream_free (MpegTSPacketizerStream * stream)
 {
   mpegts_packetizer_clear_section (stream);
-  if (stream->section_data)
-    g_free (stream->section_data);
   g_slist_foreach (stream->subtables,
       (GFunc) mpegts_packetizer_stream_subtable_free, NULL);
   g_slist_free (stream->subtables);
@@ -984,6 +981,7 @@ mpegts_packetizer_push_section (MpegTSPacketizer2 * packetizer,
       GST_LOG
           ("PID 0x%04x PUSI and pointer == 0, skipping straight to section_start parsing",
           packet->pid);
+      mpegts_packetizer_clear_section (stream);
       goto section_start;
     }
   }

@@ -26,7 +26,7 @@
  * <refsect2>
  * <title>Examples</title>
  * |[
- * gst-launch videotestsrc ! glupload ! gldifferencemate location=backgroundimagefile ! glimagesink
+ * gst-launch-1.0 videotestsrc ! glupload ! gldifferencemate location=backgroundimagefile ! glimagesink
  * ]|
  * FBO (Frame Buffer Object) and GLSL (OpenGL Shading Language) are required.
  * </refsect2>
@@ -236,8 +236,7 @@ gst_gl_differencematte_set_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
     case PROP_LOCATION:
-      if (differencematte->location != NULL)
-        g_free (differencematte->location);
+      g_free (differencematte->location);
       differencematte->bg_has_changed = TRUE;
       differencematte->location = g_value_dup_string (value);
       break;

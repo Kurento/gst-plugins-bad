@@ -29,7 +29,7 @@
  * <refsect2>
  * <title>Example pipelines</title>
  * |[
- * gst-launch -v filesrc location=opusdata ! opusparse ! opusdec ! audioconvert ! audioresample ! alsasink
+ * gst-launch-1.0 -v filesrc location=opusdata ! opusparse ! opusdec ! audioconvert ! audioresample ! alsasink
  * ]| Decode and plays an unmuxed Opus file.
  * </refsect2>
  */
@@ -200,7 +200,6 @@ gst_opus_parse_handle_frame (GstBaseParse * base,
       }
 
       packet_offset = 8;
-      data += packet_offset;
 
       /* for ad hoc framing, heed the framing, so we eat any padding */
       payload_offset = packet_size;
@@ -386,7 +385,7 @@ gst_opus_parse_parse_frame (GstBaseParse * base, GstBaseParseFrame * frame)
             parse->comment_header);
       } else {
         GstCaps *sink_caps;
-        guint32 sample_rate;
+        guint32 sample_rate = 48000;
         guint8 n_channels, n_streams, n_stereo_streams, channel_mapping_family;
         guint8 channel_mapping[256];
         GstBuffer *id_header;

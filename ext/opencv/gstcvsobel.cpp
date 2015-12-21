@@ -41,13 +41,23 @@
  * Boston, MA 02110-1301, USA.
  */
 
+/**
+ * SECTION:element-cvsobel
+ *
+ * Applies the cvSobel OpenCV function to the image.
+ *
+ * <refsect2>
+ * <title>Example launch line</title>
+ * |[
+ * gst-launch-1.0 videotestsrc ! cvsobel ! videoconvert ! autovideosink
+ * ]|
+ * </refsect2>
+ */
+
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
 #endif
 
-#include <gst/gst.h>
-
-#include "gstopencvutils.h"
 #include "gstcvsobel.h"
 #include <opencv2/imgproc/imgproc_c.h>
 

@@ -186,7 +186,7 @@ static const struct shader_templ templ_COMPOSE =
     { NULL, },
     "vec4 rgba;\n"
     "vec4 t = texture2D(tex, texcoord * tex_scale0);\n"
-    "rgba.rgb = dot(t.%c%c, compose_weight);"
+    "rgba.rgb = vec3 (dot(t.%c%c, compose_weight));"
     "rgba.a = 1.0;\n"
     "gl_FragColor = vec4(rgba.%c, rgba.%c, rgba.%c, rgba.%c);\n",
     GST_GL_TEXTURE_TARGET_2D
@@ -324,8 +324,8 @@ static const struct shader_templ templ_YUY2_UYVY_to_RGB =
     "  dx2 = -dx1;\n"
     "  dx1 = 0.0;\n"
     "}\n"
-    "uv_texel.rg = texture2D(Ytex, texcoord * tex_scale0 + dx1).r%c;\n"
-    "uv_texel.ba = texture2D(Ytex, texcoord * tex_scale0 + dx2).r%c;\n"
+    "uv_texel.rg = texture2D(Ytex, texcoord * tex_scale0 + vec2(dx1, 0.0)).r%c;\n"
+    "uv_texel.ba = texture2D(Ytex, texcoord * tex_scale0 + vec2(dx2, 0.0)).r%c;\n"
     "yuv.yz = uv_texel.%c%c;\n"
     "rgba.rgb = yuv_to_rgb (yuv, offset, coeff1, coeff2, coeff3);\n"
     "rgba.a = 1.0;\n"
@@ -343,15 +343,16 @@ static const struct shader_templ templ_RGB_to_YUY2_UYVY =
     "float inorder = mod (texcoord.x * width, 2.0);\n"
     "fx = texcoord.x;\n"
     "dx = 1.0 / width;\n"
-    "if (texcoord.x >= (1.0 - 0.5 * dx) || (texcoord.x > 0.5 * dx && inorder < 1.0)) {\n"
+    "if (inorder > 1.0) {\n"
     "  dx = -dx;\n"
     "}\n"
     "fy = texcoord.y;\n"
     "texel1 = texture2D(tex, vec2(fx, fy)).%c%c%c%c;\n"
     "texel2 = texture2D(tex, vec2(fx + dx, fy)).%c%c%c%c;\n"
-    "yuv1 = rgb_to_yuv (texel1.rgb, offset, coeff1, coeff2, coeff3);"
-    "yuv2 = rgb_to_yuv (texel2.rgb, offset, coeff1, coeff2, coeff3);"
-    "yuv = (yuv1 + yuv2) / 2.0;\n"
+    "yuv1 = rgb_to_yuv (texel1.rgb, offset, coeff1, coeff2, coeff3);\n"
+    "yuv2 = rgb_to_yuv (texel2.rgb, offset, coeff1, coeff2, coeff3);\n"
+    "yuv.x = yuv1.x;\n"
+    "yuv.yz = (yuv1.yz + yuv2.yz) * 0.5;\n"
     "if (inorder < 1.0) {\n"
     "  gl_FragColor = vec4(yuv.%c, yuv.%c, 0.0, 0.0);\n"
     "} else {\n"
@@ -529,6 +530,14 @@ gst_gl_color_convert_reset (GstGLColorConvert * convert)
   convert->priv->convert_info.chroma_sampling[0] = 1.0f;
   convert->priv->convert_info.chroma_sampling[1] = 1.0f;
 
+  if (convert->priv->convert_info.frag_prog) {
+    g_free (convert->priv->convert_info.frag_prog);
+    convert->priv->convert_info.frag_prog = NULL;
+  }
+  if (convert->priv->convert_info.frag_body) {
+    g_free (convert->priv->convert_info.frag_body);
+    convert->priv->convert_info.frag_body = NULL;
+  }
   if (convert->shader) {
     gst_object_unref (convert->shader);
     convert->shader = NULL;
@@ -1574,7 +1583,7 @@ _create_shader (GstGLColorConvert * convert)
   GstGLSLStage *stage;
   GstGLSLVersion version;
   GstGLSLProfile profile;
-  gchar *version_str, *tmp;
+  gchar *version_str, *tmp, *tmp1;
   const gchar *strings[2];
   GError *error = NULL;
   GstGLAPI gl_api;
@@ -1588,8 +1597,9 @@ _create_shader (GstGLColorConvert * convert)
       _mangle_shader (text_vertex_shader, GL_VERTEX_SHADER, info->templ->target,
       convert->priv->from_texture_target, gl_api, &version, &profile);
 
-  version_str = g_strdup_printf ("#version %s\n",
-      gst_glsl_version_profile_to_string (version, profile));
+  tmp1 = gst_glsl_version_profile_to_string (version, profile);
+  version_str = g_strdup_printf ("#version %s\n", tmp1);
+  g_free (tmp1);
 
   strings[0] = version_str;
   strings[1] = tmp;
@@ -1673,7 +1683,6 @@ _create_shader (GstGLColorConvert * convert)
     g_clear_error (&error);
     g_free (info->frag_prog);
     info->frag_prog = NULL;
-    g_free (version_str);
     gst_object_unref (stage);
     gst_object_unref (ret);
     return NULL;
@@ -1997,15 +2006,27 @@ _do_convert_one_view (GstGLContext * context, GstGLColorConvert * convert,
       /* Luminance formats are not color renderable */
       /* renderering to a framebuffer only renders the intersection of all
        * the attachments i.e. the smallest attachment size */
-      GstVideoInfo temp_info;
+      if (!convert->priv->out_tex[j]) {
+        GstGLVideoAllocationParams *params;
+        GstGLBaseMemoryAllocator *base_mem_allocator;
+        GstAllocator *allocator;
+        GstVideoInfo temp_info;
 
-      gst_video_info_set_format (&temp_info, GST_VIDEO_FORMAT_RGBA, out_width,
-          out_height);
+        gst_video_info_set_format (&temp_info, GST_VIDEO_FORMAT_RGBA, out_width,
+            out_height);
 
-      if (!convert->priv->out_tex[j])
+        allocator = gst_allocator_find (GST_GL_MEMORY_ALLOCATOR_NAME);
+        base_mem_allocator = GST_GL_BASE_MEMORY_ALLOCATOR (allocator);
+        params = gst_gl_video_allocation_params_new (context, NULL, &temp_info,
+            0, NULL, convert->priv->to_texture_target);
+
         convert->priv->out_tex[j] =
-            (GstGLMemory *) gst_gl_memory_alloc (context,
-            convert->priv->to_texture_target, NULL, &temp_info, 0, NULL);
+            (GstGLMemory *) gst_gl_base_memory_alloc (base_mem_allocator,
+            (GstGLAllocationParams *) params);
+
+        gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
+        gst_object_unref (allocator);
+      }
     } else {
       convert->priv->out_tex[j] = out_tex;
     }
@@ -2060,10 +2081,9 @@ out:
         res = FALSE;
         continue;
       }
-      gst_gl_memory_copy_into_texture (convert->priv->out_tex[j],
+      gst_gl_memory_copy_into (convert->priv->out_tex[j],
           out_tex->tex_id, convert->priv->to_texture_target, out_tex->tex_type,
-          mem_width, mem_height, GST_VIDEO_INFO_PLANE_STRIDE (&out_tex->info,
-              out_tex->plane), FALSE);
+          mem_width, mem_height);
       gst_memory_unmap ((GstMemory *) convert->priv->out_tex[j], &from_info);
       gst_memory_unmap ((GstMemory *) out_tex, &to_info);
     } else {
@@ -2098,6 +2118,9 @@ _do_convert (GstGLContext * context, GstGLColorConvert * convert)
   gint views, v;
   GstVideoOverlayCompositionMeta *composition_meta;
   GstGLSyncMeta *sync_meta;
+  GstGLVideoAllocationParams *params;
+  GstGLMemoryAllocator *mem_allocator;
+  GstAllocator *allocator;
 
   convert->outbuf = NULL;
 
@@ -2111,12 +2134,21 @@ _do_convert (GstGLContext * context, GstGLColorConvert * convert)
     gst_gl_sync_meta_wait (sync_meta, convert->context);
 
   convert->outbuf = gst_buffer_new ();
-  if (!gst_gl_memory_setup_buffer (convert->context,
-          convert->priv->to_texture_target, NULL, &convert->out_info, NULL,
-          convert->outbuf)) {
+
+  allocator = gst_allocator_find (GST_GL_MEMORY_ALLOCATOR_NAME);
+  mem_allocator = GST_GL_MEMORY_ALLOCATOR (allocator);
+  params =
+      gst_gl_video_allocation_params_new (context, NULL, &convert->out_info, 0,
+      NULL, convert->priv->to_texture_target);
+
+  if (!gst_gl_memory_setup_buffer (mem_allocator, convert->outbuf, params)) {
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
+    gst_object_unref (allocator);
     convert->priv->result = FALSE;
     return;
   }
+  gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
+  gst_object_unref (allocator);
 
   if (GST_VIDEO_INFO_MULTIVIEW_MODE (in_info) ==
       GST_VIDEO_MULTIVIEW_MODE_SEPARATED)

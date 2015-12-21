@@ -69,6 +69,7 @@ struct _GstGLImageSink
     /* format/caps we actually hand off to the app */
     GstVideoInfo out_info;
     GstCaps *out_caps;
+    GstGLTextureTarget texture_target;
 
     GstGLDisplay *display;
     GstGLContext *context;
@@ -88,6 +89,7 @@ struct _GstGLImageSink
     GstBuffer *next_buffer;
     GstBuffer *next_buffer2; /* frame-by-frame 2nd view */
     GstBuffer *next_sync;
+    GstGLSyncMeta *next_sync_meta;
 
     volatile gint to_quit;
     gboolean keep_aspect_ratio;
@@ -97,6 +99,7 @@ struct _GstGLImageSink
     GMutex drawing_lock;
     GstBuffer *stored_buffer[2];
     GstBuffer *stored_sync;
+    GstGLSyncMeta *stored_sync_meta;
     GLuint redisplay_texture;
 
     gboolean caps_change;

@@ -148,7 +148,7 @@ typedef struct {
 
   guint8 flags;
   guint64 stream_offset;
-  
+
   guint32 *slice_offset;
   MXFFraction *pos_table;
 } MXFIndexEntry;
@@ -169,9 +169,6 @@ typedef struct {
 
   guint32 n_index_entries;
   MXFIndexEntry *index_entries;
-
-  GHashTable *other_tags;
-  guint64 stream_offset;
 } MXFIndexTableSegment;
 
 #define GST_TAG_MXF_UMID "mxf-umid"
@@ -254,8 +251,9 @@ GstBuffer * mxf_primer_pack_to_buffer (const MXFPrimerPack *pack);
 gboolean mxf_random_index_pack_parse (const MXFUL *ul, const guint8 *data, guint size, GArray **array);
 GstBuffer * mxf_random_index_pack_to_buffer (const GArray *array);
 
-gboolean mxf_index_table_segment_parse (const MXFUL *ul, MXFIndexTableSegment *segment, const MXFPrimerPack *primer, const guint8 *data, guint size);
+gboolean mxf_index_table_segment_parse (const MXFUL *ul, MXFIndexTableSegment *segment, const guint8 *data, guint size);
 void mxf_index_table_segment_reset (MXFIndexTableSegment *segment);
+GstBuffer * mxf_index_table_segment_to_buffer (const MXFIndexTableSegment *segment);
 
 gboolean mxf_local_tag_parse (const guint8 * data, guint size, guint16 * tag,
     guint16 * tag_size, const guint8 ** tag_data);

@@ -221,6 +221,8 @@ struct _GstRepresentationBaseType
   guint width;
   guint height;
   GstRatio *sar;
+  GstFrameRate *minFrameRate;
+  GstFrameRate *maxFrameRate;
   GstFrameRate *frameRate;
   gchar *audioSamplingRate;
   gchar *mimeType;
@@ -306,8 +308,6 @@ struct _GstAdaptationSetNode
   guint maxWidth;
   guint minHeight;
   guint maxHeight;
-  GstFrameRate *minFrameRate;
-  GstFrameRate *maxFrameRate;
   GstConditionalUintType *segmentAlignment;
   GstConditionalUintType *subsegmentAlignment;
   GstSAPType subsegmentStartsWithSAP;
@@ -546,7 +546,6 @@ gboolean gst_mpd_client_get_next_header_index (GstMpdClient *client, gchar **uri
 gboolean gst_mpd_client_is_live (GstMpdClient * client);
 gboolean gst_mpd_client_stream_seek (GstMpdClient * client, GstActiveStream * stream, GstClockTime ts);
 gboolean gst_mpd_client_seek_to_time (GstMpdClient * client, GDateTime * time);
-gint gst_mpd_client_check_time_position (GstMpdClient * client, GstActiveStream * stream, GstClockTime ts, gint64 * diff);
 GstClockTime gst_mpd_parser_get_stream_presentation_offset (GstMpdClient *client, guint stream_idx);
 gchar** gst_mpd_client_get_utc_timing_sources (GstMpdClient *client, guint methods, GstMPDUTCTimingType *selected_method);
 GstClockTime gst_mpd_parser_get_period_start_time (GstMpdClient *client);
@@ -566,7 +565,6 @@ gint gst_mpdparser_get_rep_idx_with_min_bandwidth (GList * Representations);
 
 /* URL management */
 const gchar *gst_mpdparser_get_baseURL (GstMpdClient *client, guint indexStream);
-gboolean gst_mpdparser_get_chunk_by_index (GstMpdClient *client, guint indexStream, guint indexChunk, GstMediaSegment * segment);
 
 /* Active stream */
 guint gst_mpdparser_get_nb_active_stream (GstMpdClient *client);
@@ -588,6 +586,7 @@ GstCaps * gst_mpd_client_get_stream_caps (GstActiveStream * stream);
 gboolean gst_mpd_client_get_bitstream_switching_flag (GstActiveStream * stream);
 guint gst_mpd_client_get_video_stream_width (GstActiveStream * stream);
 guint gst_mpd_client_get_video_stream_height (GstActiveStream * stream);
+gboolean gst_mpd_client_get_video_stream_framerate (GstActiveStream * stream, gint * fps_num, gint * fps_den);
 guint gst_mpd_client_get_audio_stream_rate (GstActiveStream * stream);
 guint gst_mpd_client_get_audio_stream_num_channels (GstActiveStream * stream);
 

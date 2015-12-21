@@ -32,7 +32,7 @@
  * <refsect2>
  * <title>Example pipelines</title>
  * |[
- * gst-launch -v videotestsrc ! waylandsink
+ * gst-launch-1.0 -v videotestsrc ! waylandsink
  * ]| test the video rendering in wayland
  * </refsect2>
  */
@@ -219,8 +219,7 @@ gst_wayland_sink_finalize (GObject * object)
   if (sink->pool)
     gst_object_unref (sink->pool);
 
-  if (sink->display_name)
-    g_free (sink->display_name);
+  g_free (sink->display_name);
 
   g_mutex_clear (&sink->display_lock);
   g_mutex_clear (&sink->render_lock);

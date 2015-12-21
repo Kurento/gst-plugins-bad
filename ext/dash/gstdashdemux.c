@@ -210,11 +210,9 @@ struct _GstDashDemuxClockDrift
   GMutex clock_lock;            /* used to protect access to struct */
   guint selected_url;
   gint64 next_update;
-  GCond clock_cond;             /* used for waiting until got_clock==TRUE */
   /* @clock_compensation: amount (in usecs) to add to client's idea of
      now to map it to the server's idea of now */
   GTimeSpan clock_compensation;
-  gboolean got_clock;           /* indicates time source has returned a valid clock at least once */
   GstClock *ntp_clock;
 };
 
@@ -313,8 +311,8 @@ gst_dash_demux_get_live_seek_range (GstAdaptiveDemux * demux, gint64 * start,
   GstDashDemux *self = GST_DASH_DEMUX (demux);
   GDateTime *now = gst_dash_demux_get_server_now_utc (self);
   GDateTime *mstart =
-      gst_date_time_to_g_date_time (self->client->
-      mpd_node->availabilityStartTime);
+      gst_date_time_to_g_date_time (self->client->mpd_node->
+      availabilityStartTime);
   GTimeSpan stream_now;
 
   stream_now = g_date_time_difference (now, mstart);
@@ -611,9 +609,9 @@ gst_dash_demux_setup_all_streams (GstDashDemux * demux)
         active_stream->cur_adapt_set->RepresentationBase &&
         active_stream->cur_adapt_set->RepresentationBase->ContentProtection) {
       GST_DEBUG_OBJECT (demux, "Adding ContentProtection events to source pad");
-      g_list_foreach (active_stream->cur_adapt_set->
-          RepresentationBase->ContentProtection,
-          gst_dash_demux_send_content_protection_event, stream);
+      g_list_foreach (active_stream->cur_adapt_set->RepresentationBase->
+          ContentProtection, gst_dash_demux_send_content_protection_event,
+          stream);
     }
 
     gst_isoff_sidx_parser_init (&stream->sidx_parser);
@@ -866,6 +864,8 @@ gst_dash_demux_get_video_input_caps (GstDashDemux * demux,
     GstActiveStream * stream)
 {
   guint width = 0, height = 0;
+  gint fps_num = 0, fps_den = 1;
+  gboolean have_fps = FALSE;
   GstCaps *caps = NULL;
 
   if (stream == NULL)
@@ -875,6 +875,8 @@ gst_dash_demux_get_video_input_caps (GstDashDemux * demux,
   if (!gst_mpd_client_get_bitstream_switching_flag (stream)) {
     width = gst_mpd_client_get_video_stream_width (stream);
     height = gst_mpd_client_get_video_stream_height (stream);
+    have_fps =
+        gst_mpd_client_get_video_stream_framerate (stream, &fps_num, &fps_den);
   }
   caps = gst_mpd_client_get_stream_caps (stream);
   if (caps == NULL)
@@ -883,6 +885,11 @@ gst_dash_demux_get_video_input_caps (GstDashDemux * demux,
   if (width > 0 && height > 0) {
     gst_caps_set_simple (caps, "width", G_TYPE_INT, width, "height",
         G_TYPE_INT, height, NULL);
+  }
+
+  if (have_fps) {
+    gst_caps_set_simple (caps, "framerate", GST_TYPE_FRACTION, fps_num,
+        fps_den, NULL);
   }
 
   return caps;
@@ -1039,24 +1046,43 @@ gst_dash_demux_stream_update_fragment_info (GstAdaptiveDemuxStream * stream)
   return GST_FLOW_EOS;
 }
 
+static gint
+gst_dash_demux_index_entry_search (GstSidxBoxEntry * entry, GstClockTime * ts,
+    gpointer user_data)
+{
+  GstClockTime entry_ts = entry->pts + entry->duration;
+  if (entry_ts < *ts)
+    return -1;
+  else if (entry->pts > *ts)
+    return 1;
+  else
+    return 0;
+}
+
 static void
 gst_dash_demux_stream_sidx_seek (GstDashDemuxStream * dashstream,
     GstClockTime ts)
 {
   GstSidxBox *sidx = SIDX (dashstream);
-  gint i;
+  GstSidxBoxEntry *entry;
+  gint idx = sidx->entries_count;
 
-  /* TODO optimize to a binary search */
-  for (i = 0; i < sidx->entries_count; i++) {
-    if (sidx->entries[i].pts + sidx->entries[i].duration >= ts)
-      break;
-  }
-  sidx->entry_index = i;
-  dashstream->sidx_index = i;
-  if (i < sidx->entries_count)
-    dashstream->sidx_current_remaining = sidx->entries[i].size;
-  else
+  /* check whether ts is already past the last element or not */
+  if (sidx->entries[idx - 1].pts + sidx->entries[idx - 1].duration < ts) {
     dashstream->sidx_current_remaining = 0;
+  } else {
+    entry =
+        gst_util_array_binary_search (sidx->entries, sidx->entries_count,
+        sizeof (GstSidxBoxEntry),
+        (GCompareDataFunc) gst_dash_demux_index_entry_search,
+        GST_SEARCH_MODE_BEFORE, &ts, NULL);
+
+    idx = entry - sidx->entries;
+    dashstream->sidx_current_remaining = sidx->entries[idx].size;
+  }
+
+  sidx->entry_index = idx;
+  dashstream->sidx_index = idx;
 }
 
 static GstFlowReturn
@@ -1449,7 +1475,8 @@ gst_dash_demux_stream_get_fragment_waiting_time (GstAdaptiveDemuxStream *
     /* subtract the server's clock drift, so that if the server's
        time is behind our idea of UTC, we need to sleep for longer
        before requesting a fragment */
-    return diff - gst_dash_demux_get_clock_compensation (dashdemux);
+    return diff -
+        gst_dash_demux_get_clock_compensation (dashdemux) * GST_USECOND;
   }
   return 0;
 }
@@ -1629,7 +1656,6 @@ gst_dash_demux_clock_drift_new (void)
 
   clock_drift = g_slice_new0 (GstDashDemuxClockDrift);
   g_mutex_init (&clock_drift->clock_lock);
-  g_cond_init (&clock_drift->clock_cond);
   clock_drift->next_update = g_get_monotonic_time ();
   return clock_drift;
 }
@@ -1641,7 +1667,6 @@ gst_dash_demux_clock_drift_free (GstDashDemuxClockDrift * clock_drift)
     g_mutex_lock (&clock_drift->clock_lock);
     if (clock_drift->ntp_clock)
       g_object_unref (clock_drift->ntp_clock);
-    g_cond_clear (&clock_drift->clock_cond);
     g_mutex_unlock (&clock_drift->clock_lock);
     g_mutex_clear (&clock_drift->clock_lock);
     g_slice_free (GstDashDemuxClockDrift, clock_drift);
@@ -2001,8 +2026,6 @@ gst_dash_demux_poll_clock_drift (GstDashDemux * demux)
       g_mutex_lock (&clock_drift->clock_lock);
       clock_drift->clock_compensation =
           g_date_time_difference (server_now, client_now);
-      clock_drift->got_clock = TRUE;
-      g_cond_broadcast (&clock_drift->clock_cond);
       g_mutex_unlock (&clock_drift->clock_lock);
       GST_DEBUG_OBJECT (demux,
           "Difference between client and server clocks is %lfs",

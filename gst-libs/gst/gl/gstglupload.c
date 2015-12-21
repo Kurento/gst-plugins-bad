@@ -31,6 +31,10 @@
 #include "egl/gsteglimagememory.h"
 #endif
 
+#if GST_GL_HAVE_DMABUF
+#include <gst/allocators/gstdmabuf.h>
+#endif
+
 /**
  * SECTION:gstglupload
  * @short_description: an object that uploads to GL textures
@@ -209,16 +213,26 @@ _gl_memory_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
     GstQuery * query)
 {
   struct GLMemoryUpload *upload = impl;
-  GstAllocationParams params;
-  GstAllocator *allocator;
   GstBufferPool *pool = NULL;
   guint n_pools, i;
+  GstCaps *caps;
+  GstCapsFeatures *features;
 
-  gst_allocation_params_init (&params);
+  gst_query_parse_allocation (query, &caps, NULL);
+  features = gst_caps_get_features (caps, 0);
 
-  allocator = gst_allocator_find (GST_GL_MEMORY_ALLOCATOR);
-  gst_query_add_allocation_param (query, allocator, &params);
-  gst_object_unref (allocator);
+  /* Only offer our custom allocator if that type of memory was negotiated. */
+  if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
+    GstAllocator *allocator;
+    GstAllocationParams params;
+    gst_allocation_params_init (&params);
+
+    allocator =
+        GST_ALLOCATOR (gst_gl_memory_allocator_get_default (upload->
+            upload->context));
+    gst_query_add_allocation_param (query, allocator, &params);
+    gst_object_unref (allocator);
+  }
 
   n_pools = gst_query_get_n_allocation_pools (query);
   for (i = 0; i < n_pools; i++) {
@@ -232,10 +246,8 @@ _gl_memory_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
   if (!pool) {
     GstStructure *config;
     GstVideoInfo info;
-    GstCaps *caps;
     gsize size;
 
-    gst_query_parse_allocation (query, &caps, NULL);
 
     if (!gst_video_info_from_caps (&info, caps))
       goto invalid_caps;
@@ -302,7 +314,8 @@ _gl_memory_upload_perform (gpointer impl, GstBuffer * buffer,
             gl_mem->mem.context))
       return GST_GL_UPLOAD_UNSHARED_GL_CONTEXT;
 
-    gst_gl_memory_upload_transfer (gl_mem);
+    if (gst_is_gl_memory_pbo (mem))
+      gst_gl_memory_pbo_upload_transfer ((GstGLMemoryPBO *) mem);
   }
 
   *outbuf = gst_buffer_ref (buffer);
@@ -339,6 +352,7 @@ struct EGLImageUpload
   GstGLUpload *upload;
   GstBuffer *buffer;
   GstBuffer **outbuf;
+  GstGLVideoAllocationParams *params;
 };
 
 static gpointer
@@ -396,6 +410,14 @@ _egl_image_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
   if (!ret)
     return FALSE;
 
+  if (image->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) image->params);
+  if (!(image->params =
+          gst_gl_video_allocation_params_new (image->upload->context, NULL,
+              &image->upload->priv->in_info, -1, NULL,
+              GST_GL_TEXTURE_TARGET_2D)))
+    return FALSE;
+
   if (buffer) {
     GstVideoInfo *in_info = &image->upload->priv->in_info;
     guint expected_memories = GST_VIDEO_INFO_N_PLANES (in_info);
@@ -424,13 +446,22 @@ _egl_image_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
     GstQuery * query)
 {
   struct EGLImageUpload *image = impl;
-  GstAllocationParams params;
-  GstAllocator *allocator;
+  GstCaps *caps;
+  GstCapsFeatures *features;
 
-  gst_allocation_params_init (&params);
+  gst_query_parse_allocation (query, &caps, NULL);
+  features = gst_caps_get_features (caps, 0);
 
-  if (gst_gl_context_check_feature (image->upload->context,
+  /* Only offer our custom allocator if that type of memory was negotiated. */
+  if (gst_caps_features_contains (features,
+          GST_CAPS_FEATURE_MEMORY_EGL_IMAGE) &&
+      gst_gl_context_check_feature (image->upload->context,
           "EGL_KHR_image_base")) {
+    GstAllocationParams params;
+    GstAllocator *allocator;
+
+    gst_allocation_params_init (&params);
+
     allocator = gst_allocator_find (GST_EGL_IMAGE_MEMORY_TYPE);
     gst_query_add_allocation_param (query, allocator, &params);
     gst_object_unref (allocator);
@@ -441,12 +472,17 @@ static void
 _egl_image_upload_perform_gl_thread (GstGLContext * context,
     struct EGLImageUpload *image)
 {
+  GstGLMemoryAllocator *allocator;
   guint i, n;
+
+  allocator =
+      GST_GL_MEMORY_ALLOCATOR (gst_allocator_find
+      (GST_GL_MEMORY_PBO_ALLOCATOR_NAME));
 
   /* FIXME: buffer pool */
   *image->outbuf = gst_buffer_new ();
-  gst_gl_memory_setup_buffer (image->upload->context, GST_GL_TEXTURE_TARGET_2D,
-      NULL, &image->upload->priv->out_info, NULL, *image->outbuf);
+  gst_gl_memory_setup_buffer (allocator, *image->outbuf, image->params);
+  gst_object_unref (allocator);
 
   n = gst_buffer_n_memory (image->buffer);
   for (i = 0; i < n; i++) {
@@ -489,6 +525,11 @@ _egl_image_upload_perform (gpointer impl, GstBuffer * buffer,
 static void
 _egl_image_upload_free (gpointer impl)
 {
+  struct EGLImageUpload *image = impl;
+
+  if (image->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) image->params);
+
   g_free (impl);
 }
 
@@ -507,7 +548,265 @@ static const UploadMethod _egl_image_upload = {
   &_egl_image_upload_perform,
   &_egl_image_upload_free
 };
-#endif
+#endif /* GST_GL_HAVE_PLATFORM_EGL */
+
+#if GST_GL_HAVE_DMABUF
+struct DmabufUpload
+{
+  GstGLUpload *upload;
+
+  GstMemory *eglimage[GST_VIDEO_MAX_PLANES];
+  GstBuffer *outbuf;
+  GstGLVideoAllocationParams *params;
+};
+
+static GstStaticCaps _dma_buf_upload_caps =
+GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (GST_GL_MEMORY_VIDEO_FORMATS_STR));
+
+static gpointer
+_dma_buf_upload_new (GstGLUpload * upload)
+{
+  struct DmabufUpload *dmabuf = g_new0 (struct DmabufUpload, 1);
+  dmabuf->upload = upload;
+  return dmabuf;
+}
+
+static GstCaps *
+_dma_buf_upload_transform_caps (GstGLContext * context,
+    GstPadDirection direction, GstCaps * caps)
+{
+  GstCaps *ret;
+
+  if (direction == GST_PAD_SINK) {
+    ret = _set_caps_features (caps, GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
+  } else {
+    gint i, n;
+
+    ret = _set_caps_features (caps, GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY);
+
+    n = gst_caps_get_size (ret);
+    for (i = 0; i < n; i++) {
+      GstStructure *s = gst_caps_get_structure (ret, i);
+
+      gst_structure_remove_fields (s, "texture-target", NULL);
+    }
+  }
+
+  return ret;
+}
+
+static GQuark
+_eglimage_quark (gint plane)
+{
+  static GQuark quark[4] = { 0 };
+  static const gchar *quark_str[] = {
+    "GstGLDMABufEGLImage0",
+    "GstGLDMABufEGLImage1",
+    "GstGLDMABufEGLImage2",
+    "GstGLDMABufEGLImage3",
+  };
+
+  if (!quark[plane])
+    quark[plane] = g_quark_from_static_string (quark_str[plane]);
+
+  return quark[plane];
+}
+
+static GstMemory *
+_get_cached_eglimage (GstMemory * mem, gint plane)
+{
+  return gst_mini_object_get_qdata (GST_MINI_OBJECT (mem),
+      _eglimage_quark (plane));
+}
+
+static void
+_set_cached_eglimage (GstMemory * mem, GstMemory * eglimage, gint plane)
+{
+  return gst_mini_object_set_qdata (GST_MINI_OBJECT (mem),
+      _eglimage_quark (plane), eglimage, (GDestroyNotify) gst_memory_unref);
+}
+
+static gboolean
+_dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
+    GstCaps * out_caps)
+{
+  struct DmabufUpload *dmabuf = impl;
+  GstVideoInfo *in_info = &dmabuf->upload->priv->in_info;
+  guint n_planes = GST_VIDEO_INFO_N_PLANES (in_info);
+  GstVideoMeta *meta;
+  guint n_mem;
+  guint mems_idx[GST_VIDEO_MAX_PLANES];
+  gsize mems_skip[GST_VIDEO_MAX_PLANES];
+  GstMemory *mems[GST_VIDEO_MAX_PLANES];
+  guint i;
+
+  n_mem = gst_buffer_n_memory (buffer);
+  meta = gst_buffer_get_video_meta (buffer);
+
+  /* dmabuf upload is only supported with EGL contexts. */
+  if (!GST_IS_GL_CONTEXT_EGL (dmabuf->upload->context))
+    return FALSE;
+
+  if (!gst_gl_context_check_feature (dmabuf->upload->context,
+          "EGL_KHR_image_base"))
+    return FALSE;
+
+  /* This will eliminate most non-dmabuf out there */
+  if (!gst_is_dmabuf_memory (gst_buffer_peek_memory (buffer, 0)))
+    return FALSE;
+
+  /* We cannot have multiple dmabuf per plane */
+  if (n_mem > n_planes)
+    return FALSE;
+
+  /* Update video info based on video meta */
+  if (meta) {
+    in_info->width = meta->width;
+    in_info->height = meta->height;
+
+    for (i = 0; i < meta->n_planes; i++) {
+      in_info->offset[i] = meta->offset[i];
+      in_info->stride[i] = meta->stride[i];
+    }
+  }
+
+  if (dmabuf->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) dmabuf->params);
+  if (!(dmabuf->params =
+          gst_gl_video_allocation_params_new (dmabuf->upload->context, NULL,
+              &dmabuf->upload->priv->in_info, -1, NULL,
+              GST_GL_TEXTURE_TARGET_2D)))
+    return FALSE;
+
+  /* Find and validate all memories */
+  for (i = 0; i < n_planes; i++) {
+    guint plane_size;
+    guint length;
+
+    plane_size = gst_gl_get_plane_data_size (in_info, NULL, i);
+
+    if (!gst_buffer_find_memory (buffer, in_info->offset[i], plane_size,
+            &mems_idx[i], &length, &mems_skip[i]))
+      return FALSE;
+
+    /* We can't have more then one dmabuf per plane */
+    if (length != 1)
+      return FALSE;
+
+    mems[i] = gst_buffer_peek_memory (buffer, mems_idx[i]);
+
+    /* And all memory found must be dmabuf */
+    if (!gst_is_dmabuf_memory (mems[i]))
+      return FALSE;
+  }
+
+  /* Now create an EGLImage for each dmabufs */
+  for (i = 0; i < n_planes; i++) {
+    /* check if one is cached */
+    dmabuf->eglimage[i] = _get_cached_eglimage (mems[i], i);
+    if (dmabuf->eglimage[i])
+      continue;
+
+    /* otherwise create one and cache it */
+    dmabuf->eglimage[i] =
+        gst_egl_image_memory_from_dmabuf (dmabuf->upload->context,
+        gst_dmabuf_memory_get_fd (mems[i]), in_info, i, mems_skip[i]);
+
+    if (!dmabuf->eglimage[i])
+      return FALSE;
+
+    _set_cached_eglimage (mems[i], dmabuf->eglimage[i], i);
+  }
+
+  return TRUE;
+}
+
+static void
+_dma_buf_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
+    GstQuery * query)
+{
+  /* nothing to do for now. */
+}
+
+static void
+_dma_buf_upload_perform_gl_thread (GstGLContext * context,
+    struct DmabufUpload *dmabuf)
+{
+  GstGLMemoryAllocator *allocator;
+  guint i, n;
+
+  allocator =
+      GST_GL_MEMORY_ALLOCATOR (gst_allocator_find
+      (GST_GL_MEMORY_PBO_ALLOCATOR_NAME));
+
+  /* FIXME: buffer pool */
+  dmabuf->outbuf = gst_buffer_new ();
+  gst_gl_memory_setup_buffer (allocator, dmabuf->outbuf, dmabuf->params);
+  gst_object_unref (allocator);
+
+  n = gst_buffer_n_memory (dmabuf->outbuf);
+  for (i = 0; i < n; i++) {
+    const GstGLFuncs *gl = NULL;
+    GstGLMemory *gl_mem =
+        (GstGLMemory *) gst_buffer_peek_memory (dmabuf->outbuf, i);
+
+    if (!dmabuf->eglimage[i]) {
+      g_clear_pointer (&dmabuf->outbuf, gst_buffer_unref);
+      return;
+    }
+
+    gl = GST_GL_CONTEXT (((GstEGLImageMemory *) gl_mem)->context)->gl_vtable;
+
+    gl->ActiveTexture (GL_TEXTURE0 + i);
+    gl->BindTexture (GL_TEXTURE_2D, gl_mem->tex_id);
+    gl->EGLImageTargetTexture2D (GL_TEXTURE_2D,
+        gst_egl_image_memory_get_image (dmabuf->eglimage[i]));
+  }
+}
+
+static GstGLUploadReturn
+_dma_buf_upload_perform (gpointer impl, GstBuffer * buffer, GstBuffer ** outbuf)
+{
+  struct DmabufUpload *dmabuf = impl;
+
+  gst_gl_context_thread_add (dmabuf->upload->context,
+      (GstGLContextThreadFunc) _dma_buf_upload_perform_gl_thread, dmabuf);
+
+  if (!dmabuf->outbuf)
+    return GST_GL_UPLOAD_ERROR;
+
+  gst_buffer_add_parent_buffer_meta (dmabuf->outbuf, buffer);
+
+  *outbuf = dmabuf->outbuf;
+  dmabuf->outbuf = NULL;
+
+  return GST_GL_UPLOAD_DONE;
+}
+
+static void
+_dma_buf_upload_free (gpointer impl)
+{
+  struct DmabufUpload *dmabuf = impl;
+
+  if (dmabuf->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) dmabuf->params);
+
+  g_free (impl);
+}
+
+static const UploadMethod _dma_buf_upload = {
+  "Dmabuf",
+  0,
+  &_dma_buf_upload_caps,
+  &_dma_buf_upload_new,
+  &_dma_buf_upload_transform_caps,
+  &_dma_buf_upload_accept,
+  &_dma_buf_upload_propose_allocation,
+  &_dma_buf_upload_perform,
+  &_dma_buf_upload_free
+};
+
+#endif /* GST_GL_HAVE_DMABUF */
 
 struct GLUploadMeta
 {
@@ -516,6 +815,7 @@ struct GLUploadMeta
   gboolean result;
   GstVideoGLTextureUploadMeta *meta;
   guint texture_ids[GST_GL_UPLOAD_MAX_PLANES];
+  GstGLVideoAllocationParams *params;
 };
 
 static gpointer
@@ -576,6 +876,14 @@ _upload_meta_upload_accept (gpointer impl, GstBuffer * buffer,
 
   if (!ret)
     return ret;
+
+  if (upload->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) upload->params);
+  if (!(upload->params =
+          gst_gl_video_allocation_params_new (upload->upload->context, NULL,
+              &upload->upload->priv->in_info, -1, NULL,
+              GST_GL_TEXTURE_TARGET_2D)))
+    return FALSE;
 
   if (buffer) {
     if ((meta = gst_buffer_get_video_gl_texture_upload_meta (buffer)) == NULL)
@@ -650,6 +958,9 @@ _upload_meta_upload_perform (gpointer impl, GstBuffer * buffer,
   int i;
   GstVideoInfo *in_info = &upload->upload->priv->in_info;
   guint max_planes = GST_VIDEO_INFO_N_PLANES (in_info);
+  GstGLMemoryAllocator *allocator;
+
+  allocator = gst_gl_memory_allocator_get_default (upload->upload->context);
 
   /* Support stereo views for separated multiview mode */
   if (GST_VIDEO_INFO_MULTIVIEW_MODE (in_info) ==
@@ -662,8 +973,8 @@ _upload_meta_upload_perform (gpointer impl, GstBuffer * buffer,
 
   /* FIXME: buffer pool */
   *outbuf = gst_buffer_new ();
-  gst_gl_memory_setup_buffer (upload->upload->context, GST_GL_TEXTURE_TARGET_2D,
-      NULL, &upload->upload->priv->in_info, NULL, *outbuf);
+  gst_gl_memory_setup_buffer (allocator, *outbuf, upload->params);
+  gst_object_unref (allocator);
 
   for (i = 0; i < GST_GL_UPLOAD_MAX_PLANES; i++) {
     guint tex_id = 0;
@@ -705,6 +1016,10 @@ _upload_meta_upload_free (gpointer impl)
       gst_gl_context_del_texture (upload->upload->context,
           &upload->texture_ids[i]);
   }
+
+  if (upload->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) upload->params);
+
   g_free (upload);
 }
 
@@ -734,6 +1049,7 @@ struct RawUpload
 {
   GstGLUpload *upload;
   struct RawUploadFrame *in_frame;
+  GstGLVideoAllocationParams *params;
 };
 
 static struct RawUploadFrame *
@@ -832,6 +1148,15 @@ _raw_data_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     _raw_upload_frame_unref (raw->in_frame);
   raw->in_frame = _raw_upload_frame_new (raw, buffer);
 
+  if (raw->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) raw->params);
+  if (!(raw->params =
+          gst_gl_video_allocation_params_new_wrapped_data (raw->upload->context,
+              NULL, &raw->upload->priv->in_info, -1, NULL,
+              GST_GL_TEXTURE_TARGET_2D, NULL, raw->in_frame,
+              (GDestroyNotify) _raw_upload_frame_unref)))
+    return FALSE;
+
   return (raw->in_frame != NULL);
 }
 
@@ -846,27 +1171,39 @@ static GstGLUploadReturn
 _raw_data_upload_perform (gpointer impl, GstBuffer * buffer,
     GstBuffer ** outbuf)
 {
-  GstGLMemory *in_tex[GST_GL_UPLOAD_MAX_PLANES] = { 0, };
+  GstGLBaseMemoryAllocator *allocator;
   struct RawUpload *raw = impl;
   int i;
   GstVideoInfo *in_info = &raw->upload->priv->in_info;
-  guint max_planes = GST_VIDEO_INFO_N_PLANES (in_info);
+  guint n_mem = GST_VIDEO_INFO_N_PLANES (in_info);
 
-  /* Support stereo views for separated multiview mode */
-  if (GST_VIDEO_INFO_MULTIVIEW_MODE (in_info) ==
-      GST_VIDEO_MULTIVIEW_MODE_SEPARATED)
-    max_planes *= GST_VIDEO_INFO_VIEWS (in_info);
-
-  gst_gl_memory_setup_wrapped (raw->upload->context, GST_GL_TEXTURE_TARGET_2D,
-      &raw->upload->priv->in_info, NULL, raw->in_frame->frame.data, in_tex,
-      raw->in_frame, (GDestroyNotify) _raw_upload_frame_unref);
+  allocator =
+      GST_GL_BASE_MEMORY_ALLOCATOR (gst_gl_memory_allocator_get_default
+      (raw->upload->context));
 
   /* FIXME Use a buffer pool to cache the generated textures */
+  /* FIXME: multiview support with separated left/right frames? */
   *outbuf = gst_buffer_new ();
-  for (i = 0; i < max_planes; i++) {
+  for (i = 0; i < n_mem; i++) {
+    GstGLBaseMemory *tex;
+
+    raw->params->parent.wrapped_data = raw->in_frame->frame.data[i];
+    raw->params->plane = i;
+
+    tex =
+        gst_gl_base_memory_alloc (allocator,
+        (GstGLAllocationParams *) raw->params);
+    if (!tex) {
+      gst_buffer_unref (*outbuf);
+      *outbuf = NULL;
+      GST_ERROR_OBJECT (raw->upload, "Failed to allocate wrapped texture");
+      return GST_GL_UPLOAD_ERROR;
+    }
+
     _raw_upload_frame_ref (raw->in_frame);
-    gst_buffer_append_memory (*outbuf, (GstMemory *) in_tex[i]);
+    gst_buffer_append_memory (*outbuf, (GstMemory *) tex);
   }
+  gst_object_unref (allocator);
 
   _raw_upload_frame_unref (raw->in_frame);
   raw->in_frame = NULL;
@@ -877,6 +1214,9 @@ static void
 _raw_data_upload_free (gpointer impl)
 {
   struct RawUpload *raw = impl;
+
+  if (raw->params)
+    gst_gl_allocation_params_free ((GstGLAllocationParams *) raw->params);
 
   g_free (raw);
 }
@@ -899,6 +1239,9 @@ static const UploadMethod _raw_data_upload = {
 static const UploadMethod *upload_methods[] = { &_gl_memory_upload,
 #if GST_GL_HAVE_PLATFORM_EGL
   &_egl_image_upload,
+#endif
+#if GST_GL_HAVE_DMABUF
+  &_dma_buf_upload,
 #endif
   &_upload_meta_upload, &_raw_data_upload
 };

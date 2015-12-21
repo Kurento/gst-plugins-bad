@@ -41,11 +41,22 @@
  * Boston, MA 02110-1301, USA.
  */
 
+/**
+ * SECTION:element-cvdilate
+ *
+ * Dilates the image with the cvDilate OpenCV function.
+ *
+ * <refsect2>
+ * <title>Example launch line</title>
+ * |[
+ * gst-launch-1.0 videotestsrc ! cvdilate ! videoconvert ! autovideosink
+ * ]|
+ * </refsect2>
+ */
+
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
 #endif
-
-#include <gst/gst.h>
 
 #include "gstcvdilate.h"
 #include <opencv2/imgproc/imgproc_c.h>

@@ -132,7 +132,6 @@ GST_DEBUG_CATEGORY (adaptivedemux_debug);
 
 #define MAX_DOWNLOAD_ERROR_COUNT 3
 #define DEFAULT_FAILED_COUNT 3
-#define DEFAULT_LOOKBACK_FRAGMENTS 3
 #define DEFAULT_CONNECTION_SPEED 0
 #define DEFAULT_BITRATE_LIMIT 0.8
 #define SRC_QUEUE_MAX_BYTES 20 * 1024 * 1024    /* For safety. Large enough to hold a segment. */
@@ -148,7 +147,6 @@ GST_DEBUG_CATEGORY (adaptivedemux_debug);
 enum
 {
   PROP_0,
-  PROP_LOOKBACK_FRAGMENTS,
   PROP_CONNECTION_SPEED,
   PROP_BITRATE_LIMIT,
   PROP_LAST
@@ -301,9 +299,6 @@ gst_adaptive_demux_set_property (GObject * object, guint prop_id,
   GST_MANIFEST_LOCK (demux);
 
   switch (prop_id) {
-    case PROP_LOOKBACK_FRAGMENTS:
-      demux->num_lookback_fragments = g_value_get_uint (value);
-      break;
     case PROP_CONNECTION_SPEED:
       demux->connection_speed = g_value_get_uint (value) * 1000;
       GST_DEBUG_OBJECT (demux, "Connection speed set to %u",
@@ -330,9 +325,6 @@ gst_adaptive_demux_get_property (GObject * object, guint prop_id,
   GST_MANIFEST_LOCK (demux);
 
   switch (prop_id) {
-    case PROP_LOOKBACK_FRAGMENTS:
-      g_value_set_uint (value, demux->num_lookback_fragments);
-      break;
     case PROP_CONNECTION_SPEED:
       g_value_set_uint (value, demux->connection_speed / 1000);
       break;
@@ -367,13 +359,6 @@ gst_adaptive_demux_class_init (GstAdaptiveDemuxClass * klass)
   gobject_class->set_property = gst_adaptive_demux_set_property;
   gobject_class->get_property = gst_adaptive_demux_get_property;
   gobject_class->finalize = gst_adaptive_demux_finalize;
-
-  g_object_class_install_property (gobject_class, PROP_LOOKBACK_FRAGMENTS,
-      g_param_spec_uint ("num-lookback-fragments",
-          "Number of fragments to look back",
-          "The number of fragments the demuxer will look back to calculate an average bitrate",
-          1, G_MAXUINT, DEFAULT_LOOKBACK_FRAGMENTS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT_ONLY));
 
   g_object_class_install_property (gobject_class, PROP_CONNECTION_SPEED,
       g_param_spec_uint ("connection-speed", "Connection Speed",
@@ -442,7 +427,6 @@ gst_adaptive_demux_init (GstAdaptiveDemux * demux,
       GST_DEBUG_FUNCPTR (gst_adaptive_demux_sink_chain));
 
   /* Properties */
-  demux->num_lookback_fragments = DEFAULT_LOOKBACK_FRAGMENTS;
   demux->bitrate_limit = DEFAULT_BITRATE_LIMIT;
   demux->connection_speed = DEFAULT_CONNECTION_SPEED;
 
@@ -1678,6 +1662,9 @@ gst_adaptive_demux_stream_push_buffer (GstAdaptiveDemuxStream * stream,
   GstAdaptiveDemux *demux = stream->demux;
   GstFlowReturn ret = GST_FLOW_OK;
   gboolean discont = FALSE;
+  /* Pending events */
+  GstEvent *pending_caps = NULL, *pending_segment = NULL, *pending_tags = NULL;
+  GList *pending_events = NULL;
 
   if (stream->first_fragment_buffer) {
     GstClockTime offset =
@@ -1704,6 +1691,9 @@ gst_adaptive_demux_stream_push_buffer (GstAdaptiveDemuxStream * stream,
         demux->segment.position =
             stream->segment.position - offset + period_start;
     }
+    GST_LOG_OBJECT (stream->pad,
+        "Going to push buffer with PTS %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (GST_BUFFER_PTS (buffer)));
   } else {
     GST_BUFFER_PTS (buffer) = GST_CLOCK_TIME_NONE;
   }
@@ -1724,37 +1714,63 @@ gst_adaptive_demux_stream_push_buffer (GstAdaptiveDemuxStream * stream,
 
   GST_BUFFER_DURATION (buffer) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_DTS (buffer) = GST_CLOCK_TIME_NONE;
-
   if (G_UNLIKELY (stream->pending_caps)) {
-    GST_DEBUG_OBJECT (stream->pad, "Setting pending caps: %" GST_PTR_FORMAT,
-        stream->pending_caps);
-    gst_pad_set_caps (stream->pad, stream->pending_caps);
+    pending_caps = gst_event_new_caps (stream->pending_caps);
     gst_caps_unref (stream->pending_caps);
     stream->pending_caps = NULL;
   }
   if (G_UNLIKELY (stream->pending_segment)) {
-    GST_DEBUG_OBJECT (stream->pad, "Sending pending seg: %" GST_PTR_FORMAT,
-        stream->pending_segment);
-    gst_pad_push_event (stream->pad, stream->pending_segment);
+    pending_segment = stream->pending_segment;
     stream->pending_segment = NULL;
   }
-  if (G_UNLIKELY (stream->pending_tags)) {
-    GST_DEBUG_OBJECT (stream->pad, "Sending pending tags: %" GST_PTR_FORMAT,
-        stream->pending_tags);
-    gst_pad_push_event (stream->pad, gst_event_new_tag (stream->pending_tags));
+  if (G_UNLIKELY (stream->pending_tags || stream->bitrate_changed)) {
+    GstTagList *tags = stream->pending_tags;
+
     stream->pending_tags = NULL;
+    stream->bitrate_changed = 0;
+
+    if (stream->fragment.bitrate != 0) {
+      if (tags)
+        tags = gst_tag_list_make_writable (tags);
+      else
+        tags = gst_tag_list_new_empty ();
+
+      gst_tag_list_add (tags, GST_TAG_MERGE_KEEP,
+          GST_TAG_NOMINAL_BITRATE, stream->fragment.bitrate, NULL);
+    }
+    pending_tags = gst_event_new_tag (tags);
   }
-  while (stream->pending_events != NULL) {
-    GstEvent *event = stream->pending_events->data;
+  if (G_UNLIKELY (stream->pending_events)) {
+    pending_events = stream->pending_events;
+    stream->pending_events = NULL;
+  }
+
+  GST_MANIFEST_UNLOCK (demux);
+
+  /* Do not push events or buffers holding the manifest lock */
+  if (G_UNLIKELY (pending_caps)) {
+    GST_DEBUG_OBJECT (stream->pad, "Setting pending caps: %" GST_PTR_FORMAT,
+        pending_caps);
+    gst_pad_push_event (stream->pad, pending_caps);
+  }
+  if (G_UNLIKELY (pending_segment)) {
+    GST_DEBUG_OBJECT (stream->pad, "Sending pending seg: %" GST_PTR_FORMAT,
+        pending_segment);
+    gst_pad_push_event (stream->pad, pending_segment);
+  }
+  if (G_UNLIKELY (pending_tags)) {
+    GST_DEBUG_OBJECT (stream->pad, "Sending pending tags: %" GST_PTR_FORMAT,
+        pending_tags);
+    gst_pad_push_event (stream->pad, pending_tags);
+  }
+  while (pending_events != NULL) {
+    GstEvent *event = pending_events->data;
 
     if (!gst_pad_push_event (stream->pad, event))
       GST_ERROR_OBJECT (stream->pad, "Failed to send pending event");
 
-    stream->pending_events =
-        g_list_delete_link (stream->pending_events, stream->pending_events);
+    pending_events = g_list_delete_link (pending_events, pending_events);
   }
-
-  GST_MANIFEST_UNLOCK (demux);
 
   ret = gst_pad_push (stream->pad, buffer);
 
@@ -1831,7 +1847,10 @@ _src_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
     stream->starting_fragment = FALSE;
     if (klass->start_fragment) {
-      klass->start_fragment (demux, stream);
+      if (!klass->start_fragment (demux, stream)) {
+        ret = GST_FLOW_ERROR;
+        goto error;
+      }
     }
 
     GST_BUFFER_PTS (buffer) = stream->fragment.timestamp;
@@ -1854,6 +1873,34 @@ _src_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 
   } else {
     GST_BUFFER_PTS (buffer) = GST_CLOCK_TIME_NONE;
+  }
+  if (stream->downloading_first_buffer) {
+    gint64 chunk_size = 0;
+
+    stream->downloading_first_buffer = FALSE;
+
+    if (!stream->downloading_header && !stream->downloading_index) {
+      /* If this is the first buffer of a fragment (not the headers or index)
+       * and we don't have a birate from the sub-class, then see if we
+       * can work it out from the fragment size and duration */
+      if (stream->fragment.bitrate == 0 &&
+          stream->fragment.duration != 0 &&
+          gst_element_query_duration (stream->uri_handler, GST_FORMAT_BYTES,
+              &chunk_size)) {
+        guint bitrate = MIN (G_MAXUINT, gst_util_uint64_scale (chunk_size,
+                8 * GST_SECOND, stream->fragment.duration));
+        GST_LOG_OBJECT (demux,
+            "Fragment has size %" G_GUINT64_FORMAT " duration %" GST_TIME_FORMAT
+            " = bitrate %u", chunk_size,
+            GST_TIME_ARGS (stream->fragment.duration), bitrate);
+        stream->fragment.bitrate = bitrate;
+      }
+      if (stream->fragment.bitrate) {
+        stream->bitrate_changed = TRUE;
+      } else {
+        GST_WARNING_OBJECT (demux, "Bitrate for fragment not available");
+      }
+    }
   }
 
   stream->download_total_time +=
@@ -1896,6 +1943,8 @@ _src_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
     if (ret == (GstFlowReturn) GST_ADAPTIVE_DEMUX_FLOW_SWITCH)
       ret = GST_FLOW_EOS;       /* return EOS to make the source stop */
   }
+
+error:
 
   GST_MANIFEST_UNLOCK (demux);
 
@@ -2287,6 +2336,7 @@ gst_adaptive_demux_stream_download_uri (GstAdaptiveDemux * demux,
        */
       g_mutex_lock (&stream->fragment_download_lock);
       stream->download_finished = FALSE;
+      stream->downloading_first_buffer = TRUE;
       g_mutex_unlock (&stream->fragment_download_lock);
 
       GST_MANIFEST_UNLOCK (demux);
@@ -3106,6 +3156,10 @@ gst_adaptive_demux_stream_update_fragment_info (GstAdaptiveDemux * demux,
 
   g_return_val_if_fail (klass->stream_update_fragment_info != NULL,
       GST_FLOW_ERROR);
+
+  /* Make sure the sub-class will update bitrate, or else
+   * we will later */
+  stream->fragment.bitrate = 0;
 
   return klass->stream_update_fragment_info (stream);
 }

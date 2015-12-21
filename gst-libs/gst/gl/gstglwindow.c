@@ -85,21 +85,23 @@ static void gst_gl_window_default_send_message (GstGLWindow * window,
 static void gst_gl_window_default_send_message_async (GstGLWindow * window,
     GstGLWindowCB callback, gpointer data, GDestroyNotify destroy);
 static gpointer gst_gl_window_navigation_thread (GstGLWindow * window);
-void gst_gl_window_run_navigation (GstGLWindow * window);
-void gst_gl_window_open_navigation (GstGLWindow * window);
-void gst_gl_window_close_navigation (GstGLWindow * window);
-void gst_gl_window_quit_navigation (GstGLWindow * window);
 
 struct _GstGLWindowPrivate
 {
   GMainContext *main_context;
   GMainLoop *loop;
-  GThread *navigation_thread;
 
   guint surface_width;
   guint surface_height;
 
   gboolean alive;
+
+  GThread *navigation_thread;
+  GMainContext *navigation_context;
+  GMainLoop *navigation_loop;
+  GMutex nav_lock;
+  GCond nav_create_cond;
+  gboolean nav_alive;
 };
 
 static void gst_gl_window_finalize (GObject * object);
@@ -187,12 +189,11 @@ gst_gl_window_init (GstGLWindow * window)
   window->priv = priv;
 
   g_mutex_init (&window->lock);
-  g_mutex_init (&window->nav_lock);
-  g_cond_init (&window->nav_create_cond);
-  g_cond_init (&window->nav_destroy_cond);
-  window->nav_created = FALSE;
-  window->nav_alive = FALSE;
   window->is_drawing = FALSE;
+
+  g_mutex_init (&window->priv->nav_lock);
+  g_cond_init (&window->priv->nav_create_cond);
+  window->priv->nav_alive = FALSE;
 
   g_weak_ref_init (&window->context_ref, NULL);
 
@@ -310,16 +311,13 @@ gst_gl_window_new (GstGLDisplay * display)
 
   window->display = gst_object_ref (display);
 
-  g_mutex_lock (&window->nav_lock);
+  g_mutex_lock (&window->priv->nav_lock);
+  window->priv->navigation_thread = g_thread_new ("gstglnavigation",
+      (GThreadFunc) gst_gl_window_navigation_thread, window);
 
-  if (!window->nav_created) {
-    window->priv->navigation_thread = g_thread_new ("gstglnavigation",
-        (GThreadFunc) gst_gl_window_navigation_thread, window);
-
-    g_cond_wait (&window->nav_create_cond, &window->nav_lock);
-    window->nav_created = TRUE;
-  }
-  g_mutex_unlock (&window->nav_lock);
+  while (!window->priv->nav_alive)
+    g_cond_wait (&window->priv->nav_create_cond, &window->priv->nav_lock);
+  g_mutex_unlock (&window->priv->nav_lock);
 
   return window;
 }
@@ -330,15 +328,11 @@ gst_gl_window_finalize (GObject * object)
   GstGLWindow *window = GST_GL_WINDOW (object);
   GstGLWindowPrivate *priv = window->priv;
 
-  if (window->nav_alive) {
-    g_mutex_lock (&window->nav_lock);
-    GST_INFO ("send quit navigation loop");
-    gst_gl_window_quit_navigation (window);
-    while (window->nav_alive) {
-      g_cond_wait (&window->nav_destroy_cond, &window->nav_lock);
-    }
-    g_mutex_unlock (&window->nav_lock);
-  }
+  GST_INFO ("quit navigation loop");
+  g_main_loop_quit (window->priv->navigation_loop);
+  /* wait until navigation thread finished */
+  g_thread_join (window->priv->navigation_thread);
+  window->priv->navigation_thread = NULL;
 
   if (priv->loop)
     g_main_loop_unref (priv->loop);
@@ -349,9 +343,8 @@ gst_gl_window_finalize (GObject * object)
   g_weak_ref_clear (&window->context_ref);
 
   g_mutex_clear (&window->lock);
-  g_mutex_clear (&window->nav_lock);
-  g_cond_clear (&window->nav_create_cond);
-  g_cond_clear (&window->nav_destroy_cond);
+  g_mutex_clear (&window->priv->nav_lock);
+  g_cond_clear (&window->priv->nav_create_cond);
   gst_object_unref (window->display);
 
   G_OBJECT_CLASS (gst_gl_window_parent_class)->finalize (object);
@@ -556,23 +549,6 @@ gst_gl_window_run (GstGLWindow * window)
 
   window->priv->alive = TRUE;
   window_class->run (window);
-}
-
-/**
- * gst_gl_window_run_navigation:
- * @window: a #GstGLWindow
- *
- * Start the execution of the navigation runloop.
- *
- * Since: 1.6
- */
-void
-gst_gl_window_run_navigation (GstGLWindow * window)
-{
-  g_return_if_fail (GST_IS_GL_WINDOW (window));
-  g_return_if_fail (window->navigation_context != NULL);
-  g_return_if_fail (window->navigation_loop != NULL);
-  g_main_loop_run (window->navigation_loop);
 }
 
 static void
@@ -926,50 +902,47 @@ GType gst_gl_dummy_window_get_type (void);
 
 G_DEFINE_TYPE (GstGLDummyWindow, gst_gl_dummy_window, GST_GL_TYPE_WINDOW);
 
-void
-gst_gl_window_open_navigation (GstGLWindow * window)
+static gboolean
+gst_gl_window_navigation_started (gpointer data)
 {
-  g_return_if_fail (GST_IS_GL_WINDOW (window));
-  g_mutex_lock (&window->nav_lock);
-  window->navigation_context = g_main_context_new ();
-  window->navigation_loop = g_main_loop_new (window->navigation_context, FALSE);
-  g_main_context_push_thread_default (window->navigation_context);
-  window->nav_alive = TRUE;
-  g_cond_signal (&window->nav_create_cond);
-  g_mutex_unlock (&window->nav_lock);
-}
+  GstGLWindow *window = data;
 
-void
-gst_gl_window_close_navigation (GstGLWindow * window)
-{
-  g_return_if_fail (GST_IS_GL_WINDOW (window));
-  g_return_if_fail (window->navigation_context != NULL);
-  g_return_if_fail (window->navigation_loop != NULL);
+  g_mutex_lock (&window->priv->nav_lock);
+  window->priv->nav_alive = TRUE;
+  g_cond_signal (&window->priv->nav_create_cond);
+  g_mutex_unlock (&window->priv->nav_lock);
 
-  g_mutex_lock (&window->nav_lock);
-  window->nav_alive = FALSE;
-  g_main_context_pop_thread_default (window->navigation_context);
-  g_main_loop_unref (window->navigation_loop);
-  g_main_context_unref (window->navigation_context);
-  g_cond_signal (&window->nav_destroy_cond);
-  g_mutex_unlock (&window->nav_lock);
-}
-
-void
-gst_gl_window_quit_navigation (GstGLWindow * window)
-{
-  g_return_if_fail (GST_IS_GL_WINDOW (window));
-
-  g_main_loop_quit (window->navigation_loop);
+  return G_SOURCE_REMOVE;
 }
 
 static gpointer
 gst_gl_window_navigation_thread (GstGLWindow * window)
 {
-  gst_gl_window_open_navigation (window);
-  gst_gl_window_run_navigation (window);
+  GSource *source;
+
+  g_return_val_if_fail (GST_IS_GL_WINDOW (window), NULL);
+
+  window->priv->navigation_context = g_main_context_new ();
+  window->priv->navigation_loop =
+      g_main_loop_new (window->priv->navigation_context, FALSE);
+  g_main_context_push_thread_default (window->priv->navigation_context);
+
+  source = g_idle_source_new ();
+  g_source_set_callback (source, (GSourceFunc) gst_gl_window_navigation_started,
+      window, NULL);
+  g_source_attach (source, window->priv->navigation_context);
+  g_source_unref (source);
+
+  g_main_loop_run (window->priv->navigation_loop);
+
+  g_main_context_pop_thread_default (window->priv->navigation_context);
+
+  g_main_loop_unref (window->priv->navigation_loop);
+  g_main_context_unref (window->priv->navigation_context);
+  window->priv->navigation_loop = NULL;
+  window->priv->navigation_context = NULL;
+
   GST_INFO ("navigation loop exited\n");
-  gst_gl_window_close_navigation (window);
 
   return NULL;
 }
@@ -1021,20 +994,6 @@ gst_gl_dummy_window_new (void)
   return g_object_new (gst_gl_dummy_window_get_type (), NULL);
 }
 
-gboolean
-gst_gl_window_key_event_cb (gpointer data)
-{
-  struct key_event *key_data = (struct key_event *) data;
-  GST_DEBUG
-      ("%s called data struct %p window %p key %s event %s ",
-      __func__, key_data, key_data->window, key_data->key_str,
-      key_data->event_type);
-  gst_gl_window_send_key_event (GST_GL_WINDOW (key_data->window),
-      key_data->event_type, key_data->key_str);
-  g_slice_free (struct key_event, key_data);
-  return G_SOURCE_REMOVE;
-}
-
 void
 gst_gl_window_send_key_event (GstGLWindow * window, const char *event_type,
     const char *key_str)
@@ -1043,18 +1002,42 @@ gst_gl_window_send_key_event (GstGLWindow * window, const char *event_type,
       event_type, key_str);
 }
 
-gboolean
-gst_gl_window_mouse_event_cb (gpointer data)
+typedef struct
 {
-  struct mouse_event *mouse_data = (struct mouse_event *) data;
-  GST_DEBUG ("%s called data struct %p mouse event %s button %d at %g, %g",
-      __func__, mouse_data, mouse_data->event_type, mouse_data->button,
-      mouse_data->posx, mouse_data->posy);
-  gst_gl_window_send_mouse_event (GST_GL_WINDOW (mouse_data->window),
-      mouse_data->event_type, mouse_data->button, mouse_data->posx,
-      mouse_data->posy);
-  g_slice_free (struct mouse_event, mouse_data);
+  GstGLWindow *window;
+  const char *event_type;
+  const char *key_str;
+} KeyEventData;
+
+static gboolean
+gst_gl_window_key_event_cb (gpointer data)
+{
+  KeyEventData *key_data = data;
+
+  GST_DEBUG
+      ("%s called data struct %p window %p key %s event %s ",
+      __func__, key_data, key_data->window, key_data->key_str,
+      key_data->event_type);
+
+  gst_gl_window_send_key_event (GST_GL_WINDOW (key_data->window),
+      key_data->event_type, key_data->key_str);
+
   return G_SOURCE_REMOVE;
+}
+
+void
+gst_gl_window_send_key_event_async (GstGLWindow * window,
+    const char *event_type, const char *key_str)
+{
+  KeyEventData *key_data = g_new0 (KeyEventData, 1);
+
+  key_data->window = window;
+  key_data->key_str = key_str;
+  key_data->event_type = event_type;
+
+  g_main_context_invoke_full (window->priv->navigation_context,
+      G_PRIORITY_DEFAULT, (GSourceFunc) gst_gl_window_key_event_cb, key_data,
+      (GDestroyNotify) g_free);
 }
 
 void
@@ -1063,6 +1046,48 @@ gst_gl_window_send_mouse_event (GstGLWindow * window, const char *event_type,
 {
   g_signal_emit (window, gst_gl_window_signals[EVENT_MOUSE_SIGNAL], 0,
       event_type, button, posx, posy);
+}
+
+typedef struct
+{
+  GstGLWindow *window;
+  const char *event_type;
+  int button;
+  double posx;
+  double posy;
+} MouseEventData;
+
+static gboolean
+gst_gl_window_mouse_event_cb (gpointer data)
+{
+  MouseEventData *mouse_data = data;
+
+  GST_DEBUG ("%s called data struct %p mouse event %s button %d at %g, %g",
+      __func__, mouse_data, mouse_data->event_type, mouse_data->button,
+      mouse_data->posx, mouse_data->posy);
+
+  gst_gl_window_send_mouse_event (GST_GL_WINDOW (mouse_data->window),
+      mouse_data->event_type, mouse_data->button, mouse_data->posx,
+      mouse_data->posy);
+
+  return G_SOURCE_REMOVE;
+}
+
+void
+gst_gl_window_send_mouse_event_async (GstGLWindow * window,
+    const char *event_type, int button, double posx, double posy)
+{
+  MouseEventData *mouse_data = g_new0 (MouseEventData, 1);
+
+  mouse_data->window = window;
+  mouse_data->event_type = event_type;
+  mouse_data->button = button;
+  mouse_data->posx = posx;
+  mouse_data->posy = posy;
+
+  g_main_context_invoke_full (window->priv->navigation_context,
+      G_PRIORITY_DEFAULT, (GSourceFunc) gst_gl_window_mouse_event_cb,
+      mouse_data, (GDestroyNotify) g_free);
 }
 
 /**

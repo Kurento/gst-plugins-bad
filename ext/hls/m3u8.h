@@ -71,7 +71,6 @@ struct _GstM3U8
   GList *lists;                 /* list of GstM3U8 from the main playlist */
   GList *iframe_lists;          /* I-frame lists from the main playlist */
   GList *current_variant;       /* Current variant playlist used */
-  gint64 mediasequence;          /* EXT-X-MEDIA-SEQUENCE & increased with new media file */
 };
 
 struct _GstM3U8MediaFile
@@ -90,7 +89,6 @@ struct _GstM3U8Client
 {
   GstM3U8 *main;                /* main playlist */
   GstM3U8 *current;
-  guint update_failed_count;
   GList *current_file;
   GstClockTime current_file_duration; /* Duration of current fragment */
   gint64 sequence;              /* the next sequence for this client */
@@ -142,16 +140,12 @@ gchar *         gst_m3u8_client_get_uri             (GstM3U8Client * client);
 
 gchar *         gst_m3u8_client_get_current_uri     (GstM3U8Client * client);
 
-gboolean        gst_m3u8_client_has_main            (GstM3U8Client * client);
-
 gboolean        gst_m3u8_client_has_variant_playlist (GstM3U8Client * client);
 
 gboolean        gst_m3u8_client_is_live             (GstM3U8Client * client);
 
 GList *         gst_m3u8_client_get_playlist_for_bitrate (GstM3U8Client * client,
                                                           guint           bitrate);
-
-guint64         gst_m3u8_client_get_current_fragment_duration (GstM3U8Client * client);
 
 gboolean        gst_m3u8_client_get_seek_range      (GstM3U8Client * client,
                                                      gint64        * start,

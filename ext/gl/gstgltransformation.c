@@ -26,16 +26,16 @@
  * <refsect2>
  * <title>Examples</title>
  * |[
- * gst-launch gltestsrc ! gltransformation rotation-z=45 ! glimagesink
+ * gst-launch-1.0 gltestsrc ! gltransformation rotation-z=45 ! glimagesink
  * ]| A pipeline to rotate by 45 degrees
  * |[
- * gst-launch gltestsrc ! gltransformation translation-x=0.5 ! glimagesink
+ * gst-launch-1.0 gltestsrc ! gltransformation translation-x=0.5 ! glimagesink
  * ]| Translate the video by 0.5
  * |[
- * gst-launch gltestsrc ! gltransformation scale-y=0.5 scale-x=0.5 ! glimagesink
+ * gst-launch-1.0 gltestsrc ! gltransformation scale-y=0.5 scale-x=0.5 ! glimagesink
  * ]| Resize the video by 0.5
  * |[
- * gst-launch gltestsrc ! gltransformation rotation-x=-45 ortho=True ! glimagesink
+ * gst-launch-1.0 gltestsrc ! gltransformation rotation-x=-45 ortho=True ! glimagesink
  * ]| Rotate the video around the X-Axis by -45° with an orthographic projection
  * </refsect2>
  */
@@ -597,7 +597,7 @@ gst_gl_transformation_callback (gpointer stuff)
   gst_gl_context_clear_shader (GST_GL_BASE_FILTER (filter)->context);
   gl->BindTexture (GL_TEXTURE_2D, 0);
 
-  gl->ClearColor (0.f, 0.f, 0.f, 1.f);
+  gl->ClearColor (0.f, 0.f, 0.f, 0.f);
   gl->Clear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   gst_gl_shader_use (transformation->shader);

@@ -242,6 +242,22 @@ if test "x$BUILD_EXAMPLES" = "xyes"; then
 fi
 AM_CONDITIONAL(HAVE_GTK, test "x$HAVE_GTK" = "xyes")
 
+dnl Check for -Bsymbolic-functions linker flag used to avoid
+dnl intra-library PLT jumps, if available.
+AC_ARG_ENABLE(Bsymbolic,
+              [AS_HELP_STRING([--disable-Bsymbolic],[avoid linking with -Bsymbolic])],,
+              [SAVED_LDFLAGS="${LDFLAGS}" SAVED_LIBS="${LIBS}"
+               AC_MSG_CHECKING([for -Bsymbolic-functions linker flag])
+               LDFLAGS=-Wl,-Bsymbolic-functions
+               LIBS=
+               AC_TRY_LINK([], [return 0],
+                           AC_MSG_RESULT(yes)
+                           enable_Bsymbolic=yes,
+                           AC_MSG_RESULT(no)
+                           enable_Bsymbolic=no)
+               LDFLAGS="${SAVED_LDFLAGS}" LIBS="${SAVED_LIBS}"])
+
+dnl *** set variables based on configure arguments ***
 
 dnl GTK is optional and used in examples
 HAVE_GTK3=NO
@@ -426,8 +442,8 @@ GST_PLUGINS_NONPORTED=" cdxaparse \
  apexsink dc1394 \
  gsettings \
  musepack nas sdl timidity \
- acm wininet \
- xvid lv2 teletextdec sndio libvisual"
+ wininet \
+ xvid lv2 sndio libvisual"
 AC_SUBST(GST_PLUGINS_NONPORTED)
 
 dnl these are all the gst plug-ins, compilable without additional libs
@@ -435,6 +451,7 @@ AG_GST_CHECK_PLUGIN(accurip)
 AG_GST_CHECK_PLUGIN(adpcmdec)
 AG_GST_CHECK_PLUGIN(adpcmenc)
 AG_GST_CHECK_PLUGIN(aiff)
+AG_GST_CHECK_PLUGIN(videoframe_audiolevel)
 AG_GST_CHECK_PLUGIN(asfmux)
 AG_GST_CHECK_PLUGIN(audiofxbad)
 AG_GST_CHECK_PLUGIN(audiomixer)
@@ -670,13 +687,22 @@ case $host in
   ;;
   *)
     if test "x$NEED_GL" != "xno"; then
-      AG_GST_CHECK_LIBHEADER(GL, GL, glTexImage2D,, GL/gl.h)
+      AG_GST_PKG_CHECK_MODULES(GL, gl)
+      if test "x$HAVE_GL" != "xyes"; then
+        AG_GST_CHECK_LIBHEADER(GL, GL, glTexImage2D,, GL/gl.h)
+      fi
     fi
     if test "x$NEED_GLES2" != "xno"; then
-      AG_GST_CHECK_LIBHEADER(GLES2, GLESv2, glTexImage2D,, GLES2/gl2.h)
+      AG_GST_PKG_CHECK_MODULES(GLES2, glesv2)
+      if test "x$HAVE_GLES2" != "xyes"; then
+        AG_GST_CHECK_LIBHEADER(GLES2, GLESv2, glTexImage2D,, GLES2/gl2.h)
+      fi
     fi
     if test "x$NEED_EGL" != "xno"; then
-      AG_GST_CHECK_LIBHEADER(EGL, EGL, eglGetError,, EGL/egl.h)
+      AG_GST_PKG_CHECK_MODULES(EGL, egl)
+      if test "x$HAVE_EGL" != "xyes"; then
+        AG_GST_CHECK_LIBHEADER(EGL, EGL, eglGetError,, EGL/egl.h)
+      fi
     fi
 
     old_LIBS=$LIBS
@@ -803,9 +829,28 @@ else
   fi
 fi
 
+dnl check for DMABUF support
+HAVE_DRM_FOURCC_HEADER=no
+AC_CHECK_HEADER(libdrm/drm_fourcc.h,
+  HAVE_DRM_FOURCC_HEADER=yes, )
+
+HAVE_GST_ALLOCATORS=no
+PKG_CHECK_MODULES(GST_ALLOCATORS, gstreamer-allocators-1.0,
+  HAVE_GST_ALLOCATORS=yes, )
+
+if test "x$HAVE_DRM_FOURCC_HEADER" = "xyes" -a \
+        "x$HAVE_GST_ALLOCATORS" = "xyes" -a \
+        "x$HAVE_EGL" = "xyes"; then
+          AC_DEFINE(GST_GL_HAVE_DMABUF, [1] , [DMABUF available for gl plugins])
+fi
+
 dnl check if we can include both GL and GLES2 at the same time
 if test "x$HAVE_GL" = "xyes" -a "x$HAVE_GLES2" = "xyes"; then
   GL_INCLUDES="
+#ifdef __GNUC__
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored \"-Wredundant-decls\"
+#endif
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES 1
 #endif
@@ -829,11 +874,12 @@ if test "x$HAVE_GL" = "xyes" -a "x$HAVE_GLES2" = "xyes"; then
 #   include <GL/glext.h>
 #  endif
 # endif
+int main (int argc, char **argv) { return 0; }
 "
   AC_MSG_CHECKING([whether it is possible to include both GL and GLES2 headers])
-  save_CPPFLAGS="$CPPFLAGS"
-  CPPFLAGS="$CPPFLAGS $ERROR_CFLAGS"
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[$GL_INCLUDES]], [[
+  save_CFLAGS="$CFLAGS"
+  CFLAGS="$CFLAGS $GL_CFLAGS $GLES2_CFLAGS $WARNING_CFLAGS $ERROR_CFLAGS"
+  AC_COMPILE_IFELSE([AC_LANG_SOURCE([[$GL_INCLUDES]], [[
     #if !defined(GL_FALSE)
     #error Failed to include GL headers
     #endif
@@ -851,7 +897,7 @@ if test "x$HAVE_GL" = "xyes" -a "x$HAVE_GLES2" = "xyes"; then
       HAVE_GLES2=no
     fi
   ])
-  CPPFLAGS="$save_CPPFLAGS"
+  CFLAGS="$save_CFLAGS"
 fi
 
 #dnl Check for OpenGL
@@ -3385,6 +3431,9 @@ AC_SUBST(GST_PLUGINS_BAD_OBJCFLAGS)
 dnl LDFLAGS really should only contain flags, not libs - they get added before
 dnl whatevertarget_LIBS and -L flags here affect the rest of the linking
 GST_ALL_LDFLAGS="-no-undefined"
+if test "x${enable_Bsymbolic}" = "xyes"; then
+  GST_ALL_LDFLAGS="$GST_ALL_LDFLAGS -Wl,-Bsymbolic-functions"
+fi
 AC_SUBST(GST_ALL_LDFLAGS)
 
 dnl GST_LIB_LDFLAGS
@@ -3415,6 +3464,7 @@ gst/accurip/Makefile
 gst/adpcmdec/Makefile
 gst/adpcmenc/Makefile
 gst/aiff/Makefile
+gst/videoframe_audiolevel/Makefile
 gst/asfmux/Makefile
 gst/audiofxbad/Makefile
 gst/audiomixer/Makefile
@@ -3559,6 +3609,7 @@ tests/examples/mpegts/Makefile
 tests/examples/mxf/Makefile
 tests/examples/opencv/Makefile
 tests/examples/uvch264/Makefile
+tests/examples/waylandsink/Makefile
 tests/icles/Makefile
 ext/voamrwbenc/Makefile
 ext/voaacenc/Makefile

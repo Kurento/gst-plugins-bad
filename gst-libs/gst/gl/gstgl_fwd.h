@@ -39,13 +39,21 @@ typedef struct _GstGLWindow        GstGLWindow;
 typedef struct _GstGLWindowPrivate GstGLWindowPrivate;
 typedef struct _GstGLWindowClass   GstGLWindowClass;
 
-typedef struct _GstGLBaseBuffer GstGLBaseBuffer;
-typedef struct _GstGLBaseBufferAllocator GstGLBaseBufferAllocator;
-typedef struct _GstGLBaseBufferAllocatorClass GstGLBaseBufferAllocatorClass;
+typedef struct _GstGLBaseMemory GstGLBaseMemory;
+typedef struct _GstGLBaseMemoryAllocator GstGLBaseMemoryAllocator;
+typedef struct _GstGLBaseMemoryAllocatorClass GstGLBaseMemoryAllocatorClass;
+
+typedef struct _GstGLBuffer GstGLBuffer;
+typedef struct _GstGLBufferAllocator GstGLBufferAllocator;
+typedef struct _GstGLBufferAllocatorClass GstGLBufferAllocatorClass;
 
 typedef struct _GstGLMemory GstGLMemory;
-typedef struct _GstGLAllocator GstGLAllocator;
-typedef struct _GstGLAllocatorClass GstGLAllocatorClass;
+typedef struct _GstGLMemoryAllocator GstGLMemoryAllocator;
+typedef struct _GstGLMemoryAllocatorClass GstGLMemoryAllocatorClass;
+
+typedef struct _GstGLMemoryPBO GstGLMemoryPBO;
+typedef struct _GstGLMemoryPBOAllocator GstGLMemoryPBOAllocator;
+typedef struct _GstGLMemoryPBOAllocatorClass GstGLMemoryPBOAllocatorClass;
 
 typedef struct _GstGLSLStage        GstGLSLStage;
 typedef struct _GstGLSLStagePrivate GstGLSLStagePrivate;
@@ -55,17 +63,9 @@ typedef struct _GstGLShader        GstGLShader;
 typedef struct _GstGLShaderPrivate GstGLShaderPrivate;
 typedef struct _GstGLShaderClass   GstGLShaderClass;
 
-typedef struct _GstGLDownload GstGLDownload;
-typedef struct _GstGLDownloadClass GstGLDownloadClass;
-typedef struct _GstGLDownloadPrivate GstGLDownloadPrivate;
-
 typedef struct _GstGLUpload GstGLUpload;
 typedef struct _GstGLUploadClass GstGLUploadClass;
 typedef struct _GstGLUploadPrivate GstGLUploadPrivate;
-
-typedef struct _GstGLUploadMeta GstGLUploadMeta;
-typedef struct _GstGLUploadMetaClass GstGLUploadMetaClass;
-typedef struct _GstGLUploadMetaPrivate GstGLUploadMetaPrivate;
 
 typedef struct _GstGLBufferPool GstGLBufferPool;
 typedef struct _GstGLBufferPoolClass GstGLBufferPoolClass;
@@ -88,6 +88,72 @@ typedef struct _GstGLViewConvertPrivate GstGLViewConvertPrivate;
 
 typedef struct _GstGLOverlayCompositor GstGLOverlayCompositor;
 typedef struct _GstGLOverlayCompositorClass GstGLOverlayCompositorClass;
+
+#include <gst/gl/gstgl_enums.h>
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLBaseFilter, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLBaseMemoryAllocator, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLBufferAllocator, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLBufferPool, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLColorConvert, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLContext, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLDisplay, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLFilter, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLMemoryAllocator, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLMemoryPBOAllocator, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLOverlayCompositor, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLSLStage, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLShader, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLUpload, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLViewConvert, gst_object_unref)
+#endif
+
+#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstGLWindow, gst_object_unref)
+#endif
 
 G_END_DECLS
 

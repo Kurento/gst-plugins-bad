@@ -12,19 +12,20 @@ libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstgldisplay.c \
 	gstglcontext.c \
 	gstgldebug.c \
-	gstglbasebuffer.c \
+	gstglbasememory.c \
+	gstglbuffer.c \
 	gstglmemory.c \
+	gstglmemorypbo.c \
 	gstglbufferpool.c \
 	gstglfilter.c \
+	gstglformat.c \
 	gstglbasefilter.c \
 	gstglshader.c \
 	gstglshaderstrings.c \
 	gstglsl.c \
 	gstglslstage.c \
 	gstglcolorconvert.c \
-	gstgldownload.c \
 	gstglupload.c \
-	gstgluploadmeta.c \
 	gstglwindow.c \
 	gstglapi.c \
 	gstglfeature.c \
@@ -42,18 +43,19 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstgldisplay.h \
 	gstglcontext.h \
 	gstgldebug.h \
-	gstglbasebuffer.h \
+	gstglbasememory.h \
+	gstglbuffer.h \
 	gstglmemory.h \
+	gstglmemorypbo.h \
 	gstglbufferpool.h \
 	gstglfilter.h \
+	gstglformat.h \
 	gstglbasefilter.h \
 	gstglshader.h \
 	gstglshaderstrings.h \
 	gstglsl.h \
 	gstglslstage.h \
 	gstglcolorconvert.h \
-	gstgldownload.h \
-	gstgluploadmeta.h \
 	gstglupload.h \
 	gstglapi.h \
 	gstglfeature.h \
@@ -112,6 +114,7 @@ endif
 if USE_EGL
 SUBDIRS += egl
 libgstgl_@GST_API_VERSION@_la_LIBADD += egl/libgstgl-egl.la
+libgstgl_@GST_API_VERSION@_la_LIBADD += -lgstallocators-$(GST_API_VERSION)
 endif
 
 configexecincludedir = $(libdir)/gstreamer-@GST_API_VERSION@/include/gst/gl
@@ -145,7 +148,8 @@ GstGL-@GST_API_VERSION@.gir: $(INTROSPECTION_SCANNER) libgstgl-@GST_API_VERSION@
 		GST_PLUGIN_SYSTEM_PATH_1_0="" GST_PLUGIN_PATH_1_0="" GST_REGISTRY_UPDATE=no \
 		$(INTROSPECTION_SCANNER) -v --namespace GstGL \
 		--nsversion=@GST_API_VERSION@ \
-		--strip-prefix=Gst \
+		--identifier-prefix=Gst \
+		--symbol-prefix=gst \
 		--warn-all \
 		--c-include "gst/gl/gl.h" \
 		-I$(top_srcdir)/gst-libs \

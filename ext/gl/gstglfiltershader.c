@@ -27,7 +27,7 @@
  * <refsect2>
  * <title>Examples</title>
  * |[
- * gst-launch videotestsrc ! glupload ! glshader location=myshader.fs ! glimagesink
+ * gst-launch-1.0 videotestsrc ! glupload ! glshader location=myshader.fs ! glimagesink
  * ]|
  * FBO (Frame Buffer Object) and GLSL (OpenGL Shading Language) are required.
  * </refsect2>
@@ -164,12 +164,10 @@ gst_gl_filtershader_finalize (GObject * object)
 {
   GstGLFilterShader *filtershader = GST_GL_FILTERSHADER (object);
 
-  if (filtershader->vertex)
-    g_free (filtershader->vertex);
+  g_free (filtershader->vertex);
   filtershader->vertex = NULL;
 
-  if (filtershader->fragment)
-    g_free (filtershader->fragment);
+  g_free (filtershader->fragment);
   filtershader->fragment = NULL;
 
   if (filtershader->uniforms)
@@ -195,16 +193,14 @@ gst_gl_filtershader_set_property (GObject * object, guint prop_id,
       break;
     case PROP_VERTEX:
       GST_OBJECT_LOCK (filtershader);
-      if (filtershader->vertex)
-        g_free (filtershader->vertex);
+      g_free (filtershader->vertex);
       filtershader->vertex = g_value_dup_string (value);
       filtershader->new_source = TRUE;
       GST_OBJECT_UNLOCK (filtershader);
       break;
     case PROP_FRAGMENT:
       GST_OBJECT_LOCK (filtershader);
-      if (filtershader->fragment)
-        g_free (filtershader->fragment);
+      g_free (filtershader->fragment);
       filtershader->fragment = g_value_dup_string (value);
       filtershader->new_source = TRUE;
       GST_OBJECT_UNLOCK (filtershader);

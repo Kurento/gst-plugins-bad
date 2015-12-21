@@ -62,7 +62,7 @@
  * <para>
  * This encodes a DVD SPU track to a Kate stream:
  * <programlisting>
- * gst-launch dvdreadsrc ! dvddemux ! dvdsubparse ! kateenc category=spu-subtitles ! oggmux ! filesink location=test.ogg
+ * gst-launch-1.0 dvdreadsrc ! dvddemux ! dvdsubparse ! kateenc category=spu-subtitles ! oggmux ! filesink location=test.ogg
  * </programlisting>
  * </para>
  * </refsect2>
@@ -791,12 +791,9 @@ gst_kate_enc_chain_spu (GstKateEnc * ke, GstBuffer * buf)
   kbitmap = (kate_bitmap *) g_malloc (sizeof (kate_bitmap));
   kpalette = (kate_palette *) g_malloc (sizeof (kate_palette));
   if (!kregion || !kpalette || !kbitmap) {
-    if (kregion)
-      g_free (kregion);
-    if (kbitmap)
-      g_free (kbitmap);
-    if (kpalette)
-      g_free (kpalette);
+    g_free (kregion);
+    g_free (kbitmap);
+    g_free (kpalette);
     GST_ELEMENT_ERROR (ke, STREAM, ENCODE, (NULL), ("Out of memory"));
     return GST_FLOW_ERROR;
   }

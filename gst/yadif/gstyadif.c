@@ -29,7 +29,7 @@
  * <refsect2>
  * <title>Example launch line</title>
  * |[
- * gst-launch -v videotestsrc pattern=ball ! interlace ! yadif ! xvimagesink
+ * gst-launch-1.0 -v videotestsrc pattern=ball ! interlace ! yadif ! xvimagesink
  * ]|
  * This pipeline creates an interlaced test pattern, and then deinterlaces
  * it using the yadif filter.
@@ -243,8 +243,8 @@ gst_yadif_transform_caps (GstBaseTransform * trans,
     gst_value_list_append_value (&value, &v);
 
     gst_caps_set_value (othercaps, "interlace-mode", &value);
-    g_value_reset (&value);
-    g_value_reset (&v);
+    g_value_unset (&value);
+    g_value_unset (&v);
   } else {
     gst_caps_set_simple (othercaps, "interlace-mode", G_TYPE_STRING,
         "progressive", NULL);
