@@ -835,7 +835,7 @@ AC_CHECK_HEADER(libdrm/drm_fourcc.h,
   HAVE_DRM_FOURCC_HEADER=yes, )
 
 HAVE_GST_ALLOCATORS=no
-PKG_CHECK_MODULES(GST_ALLOCATORS, gstreamer-allocators-1.0,
+PKG_CHECK_MODULES(GST_ALLOCATORS, gstreamer-allocators-$GST_API_VERSION,
   HAVE_GST_ALLOCATORS=yes, )
 
 if test "x$HAVE_DRM_FOURCC_HEADER" = "xyes" -a \
