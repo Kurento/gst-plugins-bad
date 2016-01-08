@@ -6,17 +6,17 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: gst-plugins-bad 1.5.1\n"
+"Project-Id-Version: gst-plugins-bad 1.6.0\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/\n"
-"POT-Creation-Date: 2015-09-25 22:59+0200\n"
-"PO-Revision-Date: 2015-07-11 01:15+0100\n"
+"POT-Creation-Date: 2015-12-24 13:55+0100\n"
+"PO-Revision-Date: 2015-12-22 21:08+0100\n"
 "Last-Translator: Johnny A. Solbu <johnny@solbu.net>\n"
 "Language-Team: Norwegian Bokmaal <i18n-nb@lister.ping.uio.no>\n"
 "Language: nb_NO\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 1.5.7\n"
+"X-Generator: Poedit 1.6.9\n"
 
 msgid "format wasn't negotiated before get function"
 msgstr "formatet ble ikke forhandlet før get-funksjon"
@@ -181,9 +181,8 @@ msgid "File location is set to NULL, please set it to a valid filename"
 msgstr ""
 "Filplassering er satt til NULL, vennligst sett den til et gyldig filnavn"
 
-#, fuzzy
 msgid "Digitalzoom element couldn't be created"
-msgstr "Digitalzoom element kunne ikke opprettes"
+msgstr "Digitalzoom-element kunne ikke opprettes"
 
 msgid "Subpicture format was not configured before data flow"
 msgstr "Underbildeformat er ikke konfigurert før dataflyt"

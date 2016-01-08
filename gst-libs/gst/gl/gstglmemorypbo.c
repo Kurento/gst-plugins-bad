@@ -56,7 +56,6 @@
 #define USING_GLES2(context) (gst_gl_context_check_gl_version (context, GST_GL_API_GLES2, 2, 0))
 #define USING_GLES3(context) (gst_gl_context_check_gl_version (context, GST_GL_API_GLES2, 3, 0))
 
-#define GL_MEM_WIDTH(gl_mem) _get_plane_width (&gl_mem->mem.info, gl_mem->mem.plane)
 #define GL_MEM_HEIGHT(gl_mem) _get_plane_height (&gl_mem->mem.info, gl_mem->mem.plane)
 #define GL_MEM_STRIDE(gl_mem) GST_VIDEO_INFO_PLANE_STRIDE (&gl_mem->mem.info, gl_mem->mem.plane)
 
@@ -118,18 +117,6 @@ typedef struct
   /* out */
   gboolean result;
 } GstGLMemoryPBOCopyParams;
-
-static inline guint
-_get_plane_width (GstVideoInfo * info, guint plane)
-{
-  if (GST_VIDEO_INFO_IS_YUV (info))
-    /* For now component width and plane width are the same and the
-     * plane-component mapping matches
-     */
-    return GST_VIDEO_INFO_COMP_WIDTH (info, plane);
-  else                          /* RGB, GRAY */
-    return GST_VIDEO_INFO_WIDTH (info);
-}
 
 static inline guint
 _get_plane_height (GstVideoInfo * info, guint plane)
@@ -232,8 +219,8 @@ _gl_mem_create (GstGLMemoryPBO * gl_mem, GError ** error)
   if (!alloc_class->create ((GstGLBaseMemory *) gl_mem, error))
     return FALSE;
 
-  if (USING_OPENGL (context) || USING_OPENGL3 (context)
-      || USING_GLES3 (context)) {
+  if (CONTEXT_SUPPORTS_PBO_DOWNLOAD (context)
+      || CONTEXT_SUPPORTS_PBO_UPLOAD (context)) {
     GstAllocationParams alloc_params =
         { 0, GST_MEMORY_CAST (gl_mem)->align, 0, 0 };
     GstGLBaseMemoryAllocator *buf_allocator;
@@ -712,15 +699,16 @@ _gl_mem_pbo_alloc (GstGLBaseMemoryAllocator * allocator,
     GstGLVideoAllocationParams * params)
 {
   GstGLMemoryPBO *mem;
+  guint alloc_flags;
 
-  g_return_val_if_fail (params->
-      parent.alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_VIDEO, NULL);
+  alloc_flags = params->parent.alloc_flags;
+
+  g_return_val_if_fail (alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_VIDEO,
+      NULL);
 
   mem = g_new0 (GstGLMemoryPBO, 1);
 
-  if (params->
-      parent.alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_GPU_HANDLE)
-  {
+  if (alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_GPU_HANDLE) {
     mem->mem.tex_id = params->parent.gl_handle;
     mem->mem.texture_wrapped = TRUE;
   }
@@ -730,18 +718,17 @@ _gl_mem_pbo_alloc (GstGLBaseMemoryAllocator * allocator,
       params->v_info, params->plane, params->valign, params->parent.user_data,
       params->parent.notify);
 
-  if (params->
-      parent.alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_GPU_HANDLE)
-  {
+  if (alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_GPU_HANDLE) {
     GST_MINI_OBJECT_FLAG_SET (mem, GST_GL_BASE_MEMORY_TRANSFER_NEED_DOWNLOAD);
   }
-  if (params->
-      parent.alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_SYSMEM) {
-    mem->pbo->mem.data = params->parent.wrapped_data;
-
+  if (alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_SYSMEM) {
     GST_MINI_OBJECT_FLAG_SET (mem, GST_GL_BASE_MEMORY_TRANSFER_NEED_UPLOAD);
-    GST_MINI_OBJECT_FLAG_SET (mem->pbo,
-        GST_GL_BASE_MEMORY_TRANSFER_NEED_UPLOAD);
+    if (mem->pbo) {
+      GST_MINI_OBJECT_FLAG_SET (mem->pbo,
+          GST_GL_BASE_MEMORY_TRANSFER_NEED_UPLOAD);
+      mem->pbo->mem.data = params->parent.wrapped_data;
+    }
+    mem->mem.mem.data = params->parent.wrapped_data;
   }
 
   return mem;

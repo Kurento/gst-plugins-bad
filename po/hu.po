@@ -6,10 +6,10 @@
 # Balázs Úr <urbalazs@gmail.com>, 2014, 2015.
 msgid ""
 msgstr ""
-"Project-Id-Version: gst-plugins-bad 1.5.1\n"
+"Project-Id-Version: gst-plugins-bad 1.6.0\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/\n"
-"POT-Creation-Date: 2015-09-25 22:59+0200\n"
-"PO-Revision-Date: 2015-06-14 08:15+0200\n"
+"POT-Creation-Date: 2015-12-24 13:55+0100\n"
+"PO-Revision-Date: 2015-11-20 23:46+0100\n"
 "Last-Translator: Balázs Úr <urbalazs@gmail.com>\n"
 "Language-Team: Hungarian <translation-team-hu@lists.sourceforge.net>\n"
 "Language: hu\n"
@@ -191,7 +191,6 @@ msgstr ""
 "A fájl helye NULL értékre lett állítva, kérjük állítsa be egy érvényes "
 "fájlnévre"
 
-#, fuzzy
 msgid "Digitalzoom element couldn't be created"
 msgstr "A digitális nagyítás elemet nem sikerült létrehozni"
 

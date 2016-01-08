@@ -2,13 +2,13 @@
 # Copyright (C) 2014 Free Software Foundation, Inc.
 # This file is distributed under the same license as the gst-plugins-bad package.
 # Danilo Segan <dsegan@gmx.net>, 2004.
-# Мирослав Николић <miroslavnikolic@rocketmail.com>, 2011—2014.
+# Мирослав Николић <miroslavnikolic@rocketmail.com>, 2011—2015.
 msgid ""
 msgstr ""
-"Project-Id-Version: gst-plugins-bad-1.4.1\n"
+"Project-Id-Version: gst-plugins-bad-1.6.0\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/\n"
-"POT-Creation-Date: 2015-09-25 22:59+0200\n"
-"PO-Revision-Date: 2014-09-13 10:39+0200\n"
+"POT-Creation-Date: 2015-12-24 13:55+0100\n"
+"PO-Revision-Date: 2015-12-24 11:34+0200\n"
 "Last-Translator: Мирослав Николић <miroslavnikolic@rocketmail.com>\n"
 "Language-Team: Serbian <(nothing)>\n"
 "Language: sr\n"
@@ -24,7 +24,6 @@ msgstr "запис није договорен пре функције доба�
 msgid "default GStreamer sound events audiosink"
 msgstr "основни аудио усклађивач звучних догађаја Гстримера"
 
-#, fuzzy
 msgid ""
 "GStreamer can play audio using any number of output elements. Some possible "
 "choices are osssink, pulsesink and alsasink. The audiosink can be a partial "
@@ -129,7 +128,7 @@ msgid "Describes the selected visualization element."
 msgstr "Описује изабрани елемент приказивања."
 
 msgid "OpenCV failed to load template image"
-msgstr ""
+msgstr "ОтворениЦВ није успео да учита слику шаблона"
 
 msgid "Could not read title information for DVD."
 msgstr "Не могу да прочитам информације о наслову ДВД-а."
@@ -184,7 +183,7 @@ msgstr ""
 "Место датотеке је подешено на НИШТА, подесите га на исправан назив датотеке"
 
 msgid "Digitalzoom element couldn't be created"
-msgstr ""
+msgstr "Елемент дигиталног зума не може бити направљен"
 
 msgid "Subpicture format was not configured before data flow"
 msgstr "Запис подслике није подешен пре протока података"

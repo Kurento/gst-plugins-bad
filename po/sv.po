@@ -1,21 +1,22 @@
 # Swedish translation for gst-plugins-bad.
-# Copyright (C) 2007-2014 Free Software Foundation, Inc.
+# Copyright (C) 2007-2015 Free Software Foundation, Inc.
 # This file is distributed under the same license as the gst-plugins-bad package.
 # Daniel Nylander <po@danielnylander.se>, 2007, 2008, 2009.
-# Sebastian Rasmussen <sebras@gmail.com>, 2014.
+# Sebastian Rasmussen <sebras@gmail.com>, 2014, 2015.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: gst-plugins-bad 1.4.1\n"
+"Project-Id-Version: gst-plugins-bad 1.6.0\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/\n"
-"POT-Creation-Date: 2015-09-25 22:59+0200\n"
-"PO-Revision-Date: 2014-09-19 02:43+0200\n"
+"POT-Creation-Date: 2015-12-24 13:55+0100\n"
+"PO-Revision-Date: 2015-11-01 00:48+0100\n"
 "Last-Translator: Sebastian Rasmussen <sebras@gmail.com>\n"
 "Language-Team: Swedish <tp-sv@listor.tp-sv.se>\n"
 "Language: sv\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 1.8.6\n"
 
 msgid "format wasn't negotiated before get function"
 msgstr "formatet förhandlades inte fram innan hämtfunktionen"
@@ -23,7 +24,6 @@ msgstr "formatet förhandlades inte fram innan hämtfunktionen"
 msgid "default GStreamer sound events audiosink"
 msgstr "standard GStreamer-ljudutgång för ljudhändelser"
 
-#, fuzzy
 msgid ""
 "GStreamer can play audio using any number of output elements. Some possible "
 "choices are osssink, pulsesink and alsasink. The audiosink can be a partial "
@@ -79,8 +79,8 @@ msgid ""
 "choices are osssrc, pulsesrc and alsasrc. The audio source can be a partial "
 "pipeline instead of just one element."
 msgstr ""
-"GStreamer kan spela in ljud från ett antal ingångslement. Några möjliga val "
-"är osssrc, pulsesrc och alsasrc. Ljudkällan kan vara en delrörleding "
+"GStreamer kan spela in ljud från ett antal ingångselement. Några möjliga val "
+"är osssrc, pulsesrc och alsasrc. Ljudkällan kan vara en delrörledning "
 "istället för bara ett element."
 
 msgid "description for default GStreamer audiosrc"
@@ -128,7 +128,7 @@ msgid "Describes the selected visualization element."
 msgstr "Beskriver det valda visualiseringselementet."
 
 msgid "OpenCV failed to load template image"
-msgstr ""
+msgstr "OpenCV misslyckades med att läsa in mallbild"
 
 msgid "Could not read title information for DVD."
 msgstr "Kunde inte läsa titelinformation för dvd."
@@ -183,7 +183,7 @@ msgstr ""
 "Filposition är satt till NULL, vänligen sätt den till ett giltigt filnamn"
 
 msgid "Digitalzoom element couldn't be created"
-msgstr ""
+msgstr "Elementet Digitalzoom kunde inte skapas"
 
 msgid "Subpicture format was not configured before data flow"
 msgstr "Delbildsformat var inte konfigurerat före dataflöde"

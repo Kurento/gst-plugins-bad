@@ -1,5 +1,5 @@
 /*
- * GStreamer MotioCells detect areas of motion
+ * GStreamer MotionCells detect areas of motion
  * Copyright (C) 2011 Robert Jobbagy <jobbagy.robert@gmail.com>
  * Copyright (C) 2011 Nicola Murino <nicola.murino@gmail.com>
  *
@@ -204,52 +204,55 @@ gst_motion_cells_class_init (GstMotioncellsClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_GRID_X,
       g_param_spec_int ("gridx", "Number of Horizontal Grids",
-          "You can give number of horizontal grid cells.", GRID_MIN, GRID_MAX,
+          "Number of horizontal grid cells.", GRID_MIN, GRID_MAX,
           GRID_DEF,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_GRID_Y,
       g_param_spec_int ("gridy", "Number of Vertical Grids",
-          "You can give number of vertical grid cells.", GRID_MIN, GRID_MAX,
+          "Number of vertical grid cells.", GRID_MIN, GRID_MAX,
           GRID_DEF,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_SENSITIVITY,
       g_param_spec_double ("sensitivity", "Motion Sensitivity",
-          "You can tunning the element motion sensitivity.", SENSITIVITY_MIN,
+          "Motion detection sensitivity.", SENSITIVITY_MIN,
           SENSITIVITY_MAX, SENSITIVITY_DEFAULT,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_THRESHOLD,
       g_param_spec_double ("threshold", "Lower bound of motion cells number",
-          "Threshold value for motion, when motion cells number greater sum cells * threshold, we show motion.",
+          "Threshold value for motion. Filter detects motion when at least "
+          "this fraction of the cells have moved",
           THRESHOLD_MIN, THRESHOLD_MAX, THRESHOLD_DEFAULT,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_GAP,
-      g_param_spec_int ("gap",
-          "Gap is time in second, elapsed time from last motion timestamp. ",
-          "If elapsed time minus form last motion timestamp is greater or equal than gap then we post motion finished bus message. ",
+      g_param_spec_int ("gap", "Motion-finished Threshold",
+          "Interval in seconds after which motion is considered finished "
+          "and a motion finished bus message is posted.",
           GAP_MIN, GAP_MAX, GAP_DEF,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_POSTNOMOTION,
-      g_param_spec_int ("postnomotion", "POSTNOMOTION",
-          "If non 0 post a no_motion event is posted on the bus if no motion is detected for N seconds",
+      g_param_spec_int ("postnomotion", "No-motion Threshold",
+          "If non 0, post a no_motion event on the bus if no motion is "
+          "detected for the given number of seconds",
           POST_NO_MOTION_MIN, POST_NO_MOTION_MAX, POST_NO_MOTION_DEF,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_MINIMUNMOTIONFRAMES,
-      g_param_spec_int ("minimummotionframes", "MINIMUN MOTION FRAMES",
-          "Define the minimum number of motion frames that trigger a motion event",
+      g_param_spec_int ("minimummotionframes", "Minimum Motion Frames",
+          "Minimum number of motion frames triggering a motion event",
           MINIMUM_MOTION_FRAMES_MIN, MINIMUM_MOTION_FRAMES_MAX,
           MINIMUM_MOTION_FRAMES_DEF,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_DISPLAY,
       g_param_spec_boolean ("display", "Display",
-          "Motion Cells visible or not on Current Frame", FALSE,
+          "Toggle display of motion cells on current frame", FALSE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_POSTALLMOTION,
       g_param_spec_boolean ("postallmotion", "Post All Motion",
-          "Element post bus msg for every motion frame or just motion start and motion stop",
+          "Post bus messages for every motion frame or just motion start and "
+          "motion stop",
           FALSE, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_USEALPHA,
       g_param_spec_boolean ("usealpha", "Use alpha",
-          "Use or not alpha blending on frames with motion cells", TRUE,
+          "Toggle usage of alpha blending on frames with motion cells", TRUE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 #if 0
   /* FIXME: should not be a long property, make it either gint or gint64
@@ -269,31 +272,33 @@ gst_motion_cells_class_init (GstMotioncellsClass * klass)
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_MOTIONMASKCOORD,
       g_param_spec_string ("motionmaskcoords", "Motion Mask with Coordinates",
-          "The upper left x, y and lower right x, y coordinates separated with \":\", "
-          "describe a region. Regions separated with \",\"", NULL,
+          "Describe a region with its upper left and lower right x, y "
+          "coordinates separated with \":\". Pass multiple regions as a "
+          "comma-separated list", NULL,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_MOTIONMASKCELLSPOS,
       g_param_spec_string ("motionmaskcellspos",
           "Motion Mask with Cells Position",
-          "The line and column idx separated with \":\" what cells want we mask-out, "
-          "describe a cell. Cells separated with \",\"", NULL,
+          "Describe a cell with its line and column idx separated with \":\". "
+          "Pass multiple cells as a comma-separated list", NULL,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_CELLSCOLOR,
       g_param_spec_string ("cellscolor", "Color of Motion Cells",
-          "The color of motion cells separated with \",\"", "255,255,0",
+          "Color for motion cells in R,G,B format. Max per channel is 255",
+          "255,255,0",
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_MOTIONCELLSIDX,
       g_param_spec_string ("motioncellsidx", "Motion Cells Of Interest(MOCI)",
-          "The line and column idx separated with \":\", "
-          "describe a cell. Cells separated with \",\"", NULL,
+          "Describe a cell with its line and column idx separated with \":\". "
+          "Pass multiple cells as a comma-separated list", NULL,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_CALCULATEMOTION,
       g_param_spec_boolean ("calculatemotion", "Calculate Motion",
-          "If needs calculate motion on frame you need this property setting true otherwise false",
+          "Toggles motion calculation. If FALSE, this filter does nothing",
           TRUE, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_MOTIONCELLTHICKNESS,
       g_param_spec_int ("motioncellthickness", "Motion Cell Thickness",
-          "Motion Cell Border Thickness, if it's -1 then motion cell will be fill",
+          "Motion Cell Border Thickness. Set to -1 to fill motion cell",
           THICKNESS_MIN, THICKNESS_MAX, THICKNESS_DEF,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
@@ -331,9 +336,9 @@ gst_motion_cells_init (GstMotioncells * filter)
   filter->postnomotion = POST_NO_MOTION_DEF;
   filter->minimum_motion_frames = MINIMUM_MOTION_FRAMES_DEF;
 
-  filter->prev_datafile = g_strdup (NULL);
-  filter->cur_datafile = g_strdup (NULL);
-  filter->basename_datafile = g_strdup (NULL);
+  filter->prev_datafile = NULL;
+  filter->cur_datafile = NULL;
+  filter->basename_datafile = NULL;
   filter->datafile_extension = g_strdup (DEF_DATAFILEEXT);
   filter->sensitivity = SENSITIVITY_DEFAULT;
   filter->threshold = THRESHOLD_DEFAULT;
@@ -451,7 +456,7 @@ gst_motion_cells_set_property (GObject * object, guint prop_id,
       filter->basename_datafile = g_value_dup_string (value);
 
       if (strlen (filter->basename_datafile) == 0) {
-        filter->cur_datafile = g_strdup (NULL);
+        filter->cur_datafile = NULL;
         break;
       }
       filter->cur_datafile =
@@ -536,10 +541,13 @@ gst_motion_cells_set_property (GObject * object, guint prop_id,
       tmply = -1;
       break;
     case PROP_CELLSCOLOR:
-      colorstr = g_strsplit (g_value_get_string (value), ",", 255);
+      colorstr = g_strsplit (g_value_get_string (value), ",", 4);
       for (cellscolorscnt = 0; colorstr[cellscolorscnt] != NULL;
           ++cellscolorscnt);
-      if (cellscolorscnt == 3) {
+      if (cellscolorscnt != 3) {
+        GST_WARNING_OBJECT (filter, "Ignoring badly-formatted cellscolor RGB "
+            "string");
+      } else {
         sscanf (colorstr[0], "%d", &r);
         sscanf (colorstr[1], "%d", &g);
         sscanf (colorstr[2], "%d", &b);
@@ -1077,7 +1085,7 @@ gst_motion_cells_transform_ip (GstOpencvVideoFilter * base, GstBuffer * buf,
     GFREE (motionmaskcellsidx);
     GFREE (motioncellsidx);
   } else {
-    GST_WARNING_OBJECT (filter, "error mapping input buffer");
+    GST_WARNING_OBJECT (filter, "Motion detection disabled");
     GST_OBJECT_UNLOCK (filter);
   }
   return GST_FLOW_OK;

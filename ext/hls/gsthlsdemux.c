@@ -247,7 +247,8 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
   gint64 current_sequence;
   GstM3U8MediaFile *file;
   guint64 bitrate;
-  gboolean snap_before, snap_after, snap_nearest;
+  gboolean snap_before, snap_after, snap_nearest, keyunit;
+  gboolean reverse;
 
   gst_event_parse_seek (seek, &rate, &format, &flags, &start_type, &start,
       &stop_type, &stop);
@@ -304,16 +305,15 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
   file = GST_M3U8_MEDIA_FILE (hlsdemux->client->current->files->data);
   current_sequence = file->sequence;
   current_pos = 0;
-  target_pos = rate > 0 ? start : stop;
+  reverse = rate < 0;
+  target_pos = reverse ? stop : start;
 
   /* Snap to segment boundary. Improves seek performance on slow machines. */
-  snap_before = snap_after = snap_nearest = FALSE;
-  if ((flags & GST_SEEK_FLAG_SNAP_NEAREST) == GST_SEEK_FLAG_SNAP_NEAREST)
-    snap_nearest = TRUE;
-  else if (flags & GST_SEEK_FLAG_SNAP_BEFORE)
-    snap_before = TRUE;
-  else if (flags & GST_SEEK_FLAG_SNAP_AFTER)
-    snap_after = TRUE;
+  keyunit = ! !(flags & GST_SEEK_FLAG_KEY_UNIT);
+  snap_nearest =
+      (flags & GST_SEEK_FLAG_SNAP_NEAREST) == GST_SEEK_FLAG_SNAP_NEAREST;
+  snap_before = ! !(flags & GST_SEEK_FLAG_SNAP_BEFORE);
+  snap_after = ! !(flags & GST_SEEK_FLAG_SNAP_AFTER);
 
   /* FIXME: Here we need proper discont handling */
   for (walk = hlsdemux->client->current->files; walk; walk = walk->next) {
@@ -321,11 +321,19 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
 
     current_sequence = file->sequence;
     current_file = walk;
-    if (snap_after || snap_nearest) {
+    if ((!reverse && snap_after) || snap_nearest) {
       if (current_pos >= target_pos)
         break;
       if (snap_nearest && target_pos - current_pos < file->duration / 2)
         break;
+    } else if (reverse && snap_after) {
+      /* check if the next fragment is our target, in this case we want to
+       * start from the previous fragment */
+      GstClockTime next_pos = current_pos + file->duration;
+
+      if (next_pos <= target_pos && target_pos < next_pos + file->duration) {
+        break;
+      }
     } else if (current_pos <= target_pos
         && target_pos < current_pos + file->duration) {
       break;
@@ -346,9 +354,18 @@ gst_hls_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
   hlsdemux->client->sequence_position = current_pos;
   GST_M3U8_CLIENT_UNLOCK (hlsdemux->client);
 
-  if (snap_before || snap_after || snap_nearest)
-    gst_segment_do_seek (&demux->segment, rate, format, flags, start_type,
-        current_pos, stop_type, stop, NULL);
+  /* Play from the end of the current selected segment */
+  if (reverse && (snap_before || snap_after || snap_nearest))
+    current_pos += file->duration;
+
+  if (keyunit || snap_before || snap_after || snap_nearest) {
+    if (!reverse)
+      gst_segment_do_seek (&demux->segment, rate, format, flags, start_type,
+          current_pos, stop_type, stop, NULL);
+    else
+      gst_segment_do_seek (&demux->segment, rate, format, flags, start_type,
+          start, stop_type, current_pos, NULL);
+  }
 
   return TRUE;
 }
@@ -829,20 +846,20 @@ retry:
   if (download == NULL) {
     gchar *base_uri;
 
-    g_clear_error (err);
     if (!update || main_checked
         || !gst_m3u8_client_has_variant_playlist (demux->client)) {
       g_free (uri);
       return FALSE;
     }
 
+    g_clear_error (err);
     main_uri = gst_m3u8_client_get_uri (demux->client);
     GST_INFO_OBJECT (demux,
         "Updating playlist %s failed, attempt to refresh variant playlist %s",
         uri, main_uri);
     download =
         gst_uri_downloader_fetch_uri (adaptive_demux->downloader,
-        main_uri, NULL, TRUE, TRUE, TRUE, NULL);
+        main_uri, NULL, TRUE, TRUE, TRUE, err);
     g_free (main_uri);
     if (download == NULL) {
       g_free (uri);
@@ -858,6 +875,8 @@ retry:
           "Failed to validate variant playlist encoding");
       g_free (uri);
       g_object_unref (download);
+      g_set_error (err, GST_STREAM_ERROR, GST_STREAM_ERROR_WRONG_TYPE,
+          "Couldn't validate playlist encoding");
       return FALSE;
     }
 
@@ -874,6 +893,8 @@ retry:
             uri, base_uri)) {
       GST_WARNING_OBJECT (demux, "Failed to update the variant playlist");
       g_object_unref (download);
+      g_set_error (err, GST_STREAM_ERROR, GST_STREAM_ERROR_FAILED,
+          "Couldn't update playlist");
       return FALSE;
     }
 

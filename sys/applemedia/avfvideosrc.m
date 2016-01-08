@@ -55,7 +55,7 @@ static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src",
 #else
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
-            "BGRA") ", "
+            "NV12") ", "
         "texture-target = " GST_GL_TEXTURE_TARGET_2D_STR "; "
 #endif
         "video/x-raw, "
@@ -421,7 +421,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 #if !HAVE_IOS
   GstVideoFormat gl_format = GST_VIDEO_FORMAT_UYVY;
 #else
-  GstVideoFormat gl_format = GST_VIDEO_FORMAT_BGRA;
+  GstVideoFormat gl_format = GST_VIDEO_FORMAT_NV12;
 #endif
 
   GST_DEBUG_OBJECT (element, "Getting device caps");
@@ -490,7 +490,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 
   result_gl_caps = gst_caps_simplify (gst_caps_merge (result_gl_caps, result_caps));
 
-  GST_INFO_OBJECT (element, "Device returned the following caps %" GST_PTR_FORMAT, result_gl_caps);
+  GST_DEBUG_OBJECT (element, "Device returned the following caps %" GST_PTR_FORMAT, result_gl_caps);
 
   return result_gl_caps;
 }
@@ -683,8 +683,6 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   dispatch_sync (mainQueue, ^{
     int newformat;
 
-    g_assert (![session isRunning]);
-
     if (captureScreen) {
 #if !HAVE_IOS
       AVCaptureScreenInput *screenInput = (AVCaptureScreenInput *)input;
@@ -764,7 +762,8 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     GST_INFO_OBJECT (element, "configured caps %"GST_PTR_FORMAT
         ", pushing textures %d", caps, textureCache != NULL);
 
-    [session startRunning];
+    if (![session isRunning])
+      [session startRunning];
 
     /* Unlock device configuration only after session is started so the session
      * won't reset the capture formats */
@@ -996,6 +995,7 @@ caps_filter_out_gl_memory (GstCapsFeatures * features, GstStructure * structure,
 - (GstCaps *)fixate:(GstCaps *)new_caps
 {
   GstGLContext *context;
+  GstStructure *structure;
 
   new_caps = gst_caps_make_writable (new_caps);
 
@@ -1004,6 +1004,20 @@ caps_filter_out_gl_memory (GstCapsFeatures * features, GstStructure * structure,
     gst_caps_filter_and_map_in_place (new_caps, caps_filter_out_gl_memory, NULL);
   else
     gst_object_unref (context);
+
+  /* this can happen if video/x-raw(memory:GLMemory) is forced but a context is
+   * not available */
+  if (gst_caps_is_empty (new_caps)) {
+    GST_WARNING_OBJECT (element, "GLMemory requested but no context available");
+    return new_caps;
+  }
+
+  new_caps = gst_caps_truncate (new_caps);
+  structure = gst_caps_get_structure (new_caps, 0);
+  /* crank up to 11. This is what the presets do, but we don't use the presets
+   * in ios >= 7.0 */
+  gst_structure_fixate_field_nearest_int (structure, "height", G_MAXINT);
+  gst_structure_fixate_field_nearest_fraction (structure, "framerate", G_MAXINT, 1);
 
   return gst_caps_fixate (new_caps);
 }
@@ -1136,10 +1150,8 @@ static gboolean gst_avf_video_src_unlock (GstBaseSrc * basesrc);
 static gboolean gst_avf_video_src_unlock_stop (GstBaseSrc * basesrc);
 static GstFlowReturn gst_avf_video_src_create (GstPushSrc * pushsrc,
     GstBuffer ** buf);
-static gboolean gst_avf_video_src_negotiate (GstBaseSrc * basesrc);
 static GstCaps * gst_avf_video_src_fixate (GstBaseSrc * bsrc,
     GstCaps * caps);
-
 
 static void
 gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
@@ -1163,7 +1175,6 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
   gstbasesrc_class->unlock = gst_avf_video_src_unlock;
   gstbasesrc_class->unlock_stop = gst_avf_video_src_unlock_stop;
   gstbasesrc_class->fixate = gst_avf_video_src_fixate;
-  gstbasesrc_class->negotiate = gst_avf_video_src_negotiate;
 
   gstpushsrc_class->create = gst_avf_video_src_create;
 
@@ -1404,16 +1415,6 @@ gst_avf_video_src_create (GstPushSrc * pushsrc, GstBuffer ** buf)
   OBJC_CALLOUT_END ();
 
   return ret;
-}
-
-static gboolean
-gst_avf_video_src_negotiate (GstBaseSrc * basesrc)
-{
-  /* FIXME: We don't support reconfiguration yet */
-  if (gst_pad_has_current_caps (GST_BASE_SRC_PAD (basesrc)))
-    return TRUE;
-
-  return GST_BASE_SRC_CLASS (parent_class)->negotiate (basesrc);
 }
 
 

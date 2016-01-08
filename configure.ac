@@ -3,7 +3,7 @@ AC_PREREQ([2.69])
 dnl initialize autoconf
 dnl when going to/from release please set the nano (fourth number) right !
 dnl releases only do Wall, git and prerelease does Werror too
-AC_INIT([GStreamer Bad Plug-ins],[1.7.0.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
+AC_INIT([GStreamer Bad Plug-ins],[1.7.1.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
 
 AG_GST_INIT
 
@@ -51,11 +51,11 @@ dnl - interfaces added/removed/changed -> increment CURRENT, REVISION = 0
 dnl - interfaces added -> increment AGE
 dnl - interfaces removed -> AGE = 0
 dnl sets GST_LT_LDFLAGS
-AS_LIBTOOL(GST, 700, 0, 700)
+AS_LIBTOOL(GST, 701, 0, 701)
 
 dnl *** required versions of GStreamer stuff ***
-GST_REQ=1.7.0.1
-GSTPB_REQ=1.7.0.1
+GST_REQ=1.7.1.1
+GSTPB_REQ=1.7.1.1
 
 dnl *** autotools stuff ****
 
@@ -395,6 +395,17 @@ else
 fi
 AC_SUBST(GST_PLUGIN_LIBTOOLFLAGS)
 AM_CONDITIONAL(GST_PLUGIN_BUILD_STATIC, test "x$enable_static_plugins" = "xyes")
+
+AC_ARG_WITH([player-tests],
+  AS_HELP_STRING([--with-player-tests],[Enable GstPlayer tests that need network access (default: no)]))
+if test x$with_player_tests = xyes; then
+  AC_PATH_PROG([WGET], [wget], no)
+  if test x$WGET = xno; then
+    AC_MSG_WARN([wget required for GstPlayer tests but not found - disabling])
+    with_player_tests=no
+  fi
+fi
+AM_CONDITIONAL(WITH_GST_PLAYER_TESTS, test "x$with_player_tests" = "xyes")
 
 # set by AG_GST_PARSE_SUBSYSTEM_DISABLES above
 dnl make sure it doesn't complain about unused variables if debugging is disabled
@@ -3550,6 +3561,7 @@ gst-libs/gst/mpegts/Makefile
 gst-libs/gst/uridownloader/Makefile
 gst-libs/gst/wayland/Makefile
 gst-libs/gst/base/Makefile
+gst-libs/gst/player/Makefile
 gst-libs/gst/video/Makefile
 sys/Makefile
 sys/dshowdecwrapper/Makefile
@@ -3696,6 +3708,8 @@ pkgconfig/gstreamer-gl.pc
 pkgconfig/gstreamer-gl-uninstalled.pc
 pkgconfig/gstreamer-mpegts.pc
 pkgconfig/gstreamer-mpegts-uninstalled.pc
+pkgconfig/gstreamer-player.pc
+pkgconfig/gstreamer-player-uninstalled.pc
 pkgconfig/gstreamer-wayland.pc
 pkgconfig/gstreamer-wayland-uninstalled.pc
 pkgconfig/gstreamer-bad-base.pc

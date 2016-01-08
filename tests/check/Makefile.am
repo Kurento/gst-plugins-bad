@@ -169,9 +169,17 @@ check_curl_sftp =
 endif
 
 if USE_HLS
-check_hlsdemux = elements/hlsdemux_m3u8
+check_hlsdemux_m3u8 = elements/hlsdemux_m3u8
+check_hlsdemux = elements/hls_demux
 else
+check_hlsdemux_m3u8 =
 check_hlsdemux =
+endif
+
+if WITH_GST_PLAYER_TESTS
+check_player = libs/player
+else
+check_player =
 endif
 
 if USE_CURL
@@ -288,7 +296,9 @@ check_PROGRAMS = \
 	$(check_orc) \
 	libs/insertbin \
 	$(check_gl) \
+	$(check_hlsdemux_m3u8) \
 	$(check_hlsdemux) \
+	$(check_player) \
 	$(EXPERIMENTAL_CHECKS)
 
 noinst_HEADERS = elements/mxfdemux.h
@@ -456,7 +466,7 @@ elements_dash_demux_LDADD = \
 	-lgstapp-$(GST_API_VERSION) \
 	$(top_builddir)/gst-libs/gst/adaptivedemux/libgstadaptivedemux-@GST_API_VERSION@.la
 
-elements_dash_demux_SOURCES = elements/fake_http_src.c elements/fake_http_src.h elements/dash_demux.c
+elements_dash_demux_SOURCES = elements/test_http_src.c elements/test_http_src.h elements/adaptive_demux_engine.c elements/adaptive_demux_engine.h elements/adaptive_demux_common.c elements/adaptive_demux_common.h elements/dash_demux.c
 
 pipelines_streamheader_CFLAGS = $(GIO_CFLAGS) $(AM_CFLAGS)
 pipelines_streamheader_LDADD = $(GIO_LIBS) $(LDADD)
@@ -466,6 +476,36 @@ libs_insertbin_LDADD = \
 	$(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
 libs_insertbin_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) $(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS)
+
+libs_player_SOURCES = libs/player.c
+
+libs_player_LDADD = \
+	$(top_builddir)/gst-libs/gst/player/libgstplayer-@GST_API_VERSION@.la \
+	$(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
+libs_player_CFLAGS = \
+	$(GST_PLUGINS_BAD_CFLAGS) $(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS) \
+	-DTEST_PATH=\"$(builddir)/media\"
+
+if WITH_GST_PLAYER_TESTS
+PLAYER_MEDIA_FILES = \
+	media/audio.ogg \
+	media/audio-video.ogg \
+	media/audio-short.ogg \
+	media/audio-video-short.ogg \
+	media/sintel.mkv \
+	media/test_sub.srt
+
+$(PLAYER_MEDIA_FILES):
+	$(MKDIR_P) media
+	$(WGET) -c http://gstreamer.freedesktop.org/data/media/small/$(subst media/,,$@) -O media/$(subst media/,,$@)
+
+libs/player_dummy.c: $(PLAYER_MEDIA_FILES)
+	touch libs/player_dummy.c
+
+nodist_libs_player_SOURCES = libs/player_dummy.c
+
+CLEANFILES += $(PLAYER_MEDIA_FILES) libs/player_dummy.c
+endif
 
 elements_rtponvifparse_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_rtponvifparse_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
@@ -569,6 +609,13 @@ elements_compositor_CFLAGS = \
 elements_hlsdemux_m3u8_CFLAGS = $(GST_BASE_CFLAGS) $(AM_CFLAGS) -I$(top_srcdir)/ext/hls
 elements_hlsdemux_m3u8_LDADD = $(GST_BASE_LIBS) $(LDADD)
 elements_hlsdemux_m3u8_SOURCES = elements/hlsdemux_m3u8.c
+
+elements_hls_demux_CFLAGS = $(GST_BASE_CFLAGS) $(AM_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) $(GST_PLUGINS_BAD_CFLAGS)
+elements_hls_demux_LDADD = $(GST_BASE_LIBS) $(LDADD) \
+	-lgsttag-$(GST_API_VERSION) \
+	-lgstapp-$(GST_API_VERSION) \
+	$(top_builddir)/gst-libs/gst/adaptivedemux/libgstadaptivedemux-@GST_API_VERSION@.la
+elements_hls_demux_SOURCES = elements/test_http_src.c elements/test_http_src.h elements/adaptive_demux_engine.c elements/adaptive_demux_engine.h elements/adaptive_demux_common.c elements/adaptive_demux_common.h elements/hls_demux.c
 
 orc_compositor_CFLAGS = $(ORC_CFLAGS)
 orc_compositor_LDADD = $(ORC_LIBS) -lorc-test-0.4
