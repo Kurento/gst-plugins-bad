@@ -59,7 +59,7 @@ GTKDOC_LIBS = \
 	$(top_builddir)/gst-libs/gst/gl/.libs/libgstgl-@GST_API_VERSION@.so \
 	$(top_builddir)/gst-libs/gst/insertbin/.libs/libgstinsertbin-@GST_API_VERSION@.so \
 	$(top_builddir)/gst-libs/gst/mpegts/.libs/libgstmpegts-@GST_API_VERSION@.so \
-	$(top_builddir)/gst-libs/gst/player/.libs/libgstplayer-@GST_API_VERSION@.so \
+	$(top_builddir)/gst-libs/gst/player/libgstplayer-@GST_API_VERSION@.la \
   $(GST_BASE_LIBS)
 
 # If you need to override some of the declarations, place them in this file
