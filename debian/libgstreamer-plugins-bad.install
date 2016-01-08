@@ -7,5 +7,6 @@ debian/tmp/usr/lib/*/libgstgl-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgstinsertbin-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgstcodecparsers-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgstmpegts-@GST_ABI@.so.*
+debian/tmp/usr/lib/*/libgstplayer-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgsturidownloader-@GST_ABI@.so.*
 @wayland@
