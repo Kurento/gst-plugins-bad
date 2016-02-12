@@ -1,4 +1,3 @@
-libgstreamer1.0-dev
 autoconf (>= 2.62)
 automake (>= 1.11)
 autopoint (>= 0.17)

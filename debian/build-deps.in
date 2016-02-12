@@ -1,4 +1,3 @@
-libgstreamer1.0-dev
 @GST_LIB_DEV_DEP@
 @GST_EXTRA_BUILD_DEPENDS@
 libgstreamer-plugins-base@GST_ABI@-dev (>= 1.5.0.1~0)
