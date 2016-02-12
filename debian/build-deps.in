@@ -43,8 +43,8 @@ libmimic-dev (>= 1.0)
 libgme-dev
 librsvg2-dev (>= 2.36)
 libcairo2-dev
-libpng-dev
-flite-dev
+libpng-dev | libpng12-dev
+flite-dev | flite1-dev
 gstreamer@GST_ABI@-doc
 gstreamer@GST_ABI@-plugins-base-doc
 libzbar-dev (>= 0.9)

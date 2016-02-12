@@ -6,7 +6,7 @@ cdbs (>= 0.4.93)
 debhelper (>= 9)
 dh-autoreconf
 dpkg-dev (>= 1.15.1)
-flite-dev
+flite-dev | flite1-dev
 gir1.2-freedesktop
 gir1.2-glib-2.0
 gir1.2-gst-plugins-base-1.5
@@ -60,7 +60,7 @@ libopenexr-dev
 libopenjpeg-dev
 libopus-dev (>= 0.9.4)
 liborc-0.4-dev (>= 1:0.4.17)
-libpng-dev
+libpng-dev | libpng12-dev
 librsvg2-dev (>= 2.36)
 librtmp-dev
 libschroedinger-dev (>= 1.0.7)
