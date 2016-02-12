@@ -4,7 +4,8 @@ Priority: extra
 Maintainer: Maintainers of GStreamer packages <pkg-gstreamer-maintainers@lists.alioth.debian.org>
 Uploaders: Sebastian Dröge <slomo@debian.org>,
            Sjoerd Simons <sjoerd@debian.org>
-Build-Depends: autoconf (>= 2.62),
+Build-Depends: libgstreamer1.0-dev,
+               autoconf (>= 2.62),
                automake (>= 1.11),
                autopoint (>= 0.17),
                autotools-dev,
