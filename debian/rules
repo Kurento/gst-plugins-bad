@@ -207,7 +207,7 @@ endif
 
 common-binary-fixup-arch::
 	LD_LIBRARY_PATH=debian/libgstreamer-plugins-bad1.5-0/usr/lib/$(DEB_HOST_MULTIARCH):$(LD_LIBRARY_PATH) \
-		dh_gstscancodecs
+		dh_gstscancodecs1.5
 
 clean::
 	# get rid of the sym links
