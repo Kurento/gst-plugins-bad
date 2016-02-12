@@ -24,7 +24,7 @@ libbs2b-dev
 libbz2-dev
 libcairo2-dev
 libchromaprint-dev
-libcurl4-gnutls-dev (>= 7.21.0)
+libcurl4-openssl-dev
 libdca-dev
 libde265-dev
 libdirectfb-dev (>= 0.9.25)
@@ -81,4 +81,5 @@ libxvidcore-dev
 libzbar-dev (>= 0.9)
 libzvbi-dev
 nettle-dev
+openh264
 pkg-config (>= 0.11.0)

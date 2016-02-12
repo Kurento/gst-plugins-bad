@@ -32,7 +32,7 @@ libwildmidi-dev (>= 0.2.3)
 gstreamer@GST_ABI@-plugins-base (>= 1.5.0.1~0)
 libofa0-dev (>= 0.9.3)
 libdvdnav-dev (>= 4.1.2) [!hurd-any]
-libssl-dev
+libssl-dev (>=1.0.2)
 libjasper-dev
 libx11-dev
 libass-dev (>= 0.9.4)
