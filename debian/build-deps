@@ -44,6 +44,7 @@ libgnutls28-dev (>= 2.11.3)
 libgsm1-dev
 libgstreamer-plugins-base@GST_ABI@-dev (>= 1.5.0.1~0)
 libgtk2.0-dev (>= 2.14.0)
+libgtk-3-dev
 libiptcdata0-dev (>= 1.0.2)
 libjasper-dev
 libkate-dev (>= 0.1.7)

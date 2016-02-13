@@ -21,6 +21,7 @@ libmms-dev (>= 0.4)
 libmpcdec-dev
 libsoundtouch-dev (>= 1.5.0)
 libgtk2.0-dev (>= 2.14.0)
+libgtk-3-dev
 ladspa-sdk
 libsndfile1-dev (>= 1.0.16)
 libfaad-dev
