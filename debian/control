@@ -130,6 +130,7 @@ Pre-Depends: ${misc:Pre-Depends}
 Depends: ${misc:Depends},
          ${shlibs:Depends},
          gstreamer1.5-plugins-base,
+         libssl1.0.0 (>= 1.0.2),
          libgstreamer-plugins-bad1.5-0 (= ${binary:Version}),
 Provides: ${gstreamer:Provides}
 Suggests: frei0r-plugins
