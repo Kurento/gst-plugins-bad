@@ -96,6 +96,7 @@ Build-Depends: autoconf (>= 2.62),
                libzvbi-dev,
                nettle-dev,
                openh264,
+               libpcap-dev,
                pkg-config (>= 0.11.0)
 Standards-Version: 3.9.3
 Vcs-Git: git://anonscm.debian.org/pkg-gstreamer/gst-plugins-bad1.5.git

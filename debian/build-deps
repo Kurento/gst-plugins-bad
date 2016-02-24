@@ -83,4 +83,5 @@ libzbar-dev (>= 0.9)
 libzvbi-dev
 nettle-dev
 openh264
+libpcap-dev
 pkg-config (>= 0.11.0)
