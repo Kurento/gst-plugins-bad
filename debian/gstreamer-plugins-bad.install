@@ -56,7 +56,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmpegpsdemux.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmpegtsdemux.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmpegpsmux.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmpegtsmux.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmpg123.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmplex.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmxf.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstofa.so
@@ -65,7 +64,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopencv.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopengl.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopenexr.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopenjpeg.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopus.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstpcapparse.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstpnm.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrawparse.so
@@ -74,7 +72,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrfbsrc.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrsvg.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrtmp.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrtponvif.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrtpbad.so
 @sbc@
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstschro.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstsdpelem.so
@@ -103,6 +100,7 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstx265.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgsty4mdec.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstyadif.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstzbar.so
+debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopusparse.so
 debian/tmp/usr/share/locale
 debian/tmp/usr/share/gstreamer-@GST_ABI@/presets/
 @dvb@

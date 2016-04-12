@@ -9,4 +9,5 @@ debian/tmp/usr/lib/*/libgstcodecparsers-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgstmpegts-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgstplayer-@GST_ABI@.so.*
 debian/tmp/usr/lib/*/libgsturidownloader-@GST_ABI@.so.*
+debian/tmp/usr/lib/*/libgstbadaudio-@GST_ABI@.so.*
 @wayland@

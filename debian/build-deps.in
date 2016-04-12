@@ -59,7 +59,6 @@ libopenal-dev (>= 1:1.14)
 libzvbi-dev
 libspandsp-dev
 libopus-dev (>= 0.9.4)
-libmpg123-dev (>= 1.13)
 libgl1-mesa-dev
 libegl1-mesa-dev
 libgles2-mesa-dev
