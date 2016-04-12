@@ -45,7 +45,7 @@
 #define GST_CAT_DEFAULT gst_gl_stereosplit_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
-#define SUPPORTED_GL_APIS GST_GL_API_OPENGL | GST_GL_API_OPENGL3
+#define SUPPORTED_GL_APIS GST_GL_API_GLES2 | GST_GL_API_OPENGL | GST_GL_API_OPENGL3
 #define DEBUG_INIT \
   GST_DEBUG_CATEGORY_INIT (gst_gl_stereosplit_debug, "glstereosplit", 0, "glstereosplit element");
 
@@ -584,8 +584,27 @@ ensure_context (GstGLStereoSplit * self)
     GST_OBJECT_UNLOCK (self->display);
   }
 
+  {
+    GstGLAPI current_gl_api = gst_gl_context_get_gl_api (self->context);
+    if ((current_gl_api & (SUPPORTED_GL_APIS)) == 0)
+      goto unsupported_gl_api;
+  }
+
   return TRUE;
 
+unsupported_gl_api:
+  {
+    GstGLAPI gl_api = gst_gl_context_get_gl_api (self->context);
+    gchar *gl_api_str = gst_gl_api_to_string (gl_api);
+    gchar *supported_gl_api_str = gst_gl_api_to_string (SUPPORTED_GL_APIS);
+    GST_ELEMENT_ERROR (self, RESOURCE, BUSY,
+        ("GL API's not compatible context: %s supported: %s", gl_api_str,
+            supported_gl_api_str), (NULL));
+
+    g_free (supported_gl_api_str);
+    g_free (gl_api_str);
+    return FALSE;
+  }
 context_error:
   {
     GST_ELEMENT_ERROR (self, RESOURCE, NOT_FOUND, ("%s", error->message),

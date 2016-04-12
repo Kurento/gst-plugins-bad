@@ -114,6 +114,7 @@ struct _GstAdaptiveDemuxStreamFragment
 struct _GstAdaptiveDemuxStream
 {
   GstPad *pad;
+  GstPad *internal_pad;
 
   GstAdaptiveDemux *demux;
 
@@ -158,6 +159,11 @@ struct _GstAdaptiveDemuxStream
   gint64 download_total_time;
   gint64 download_total_bytes;
   guint64 current_download_rate;
+
+  /* Average for the last fragments */
+  guint64 moving_bitrate;
+  guint moving_index;
+  guint64 *fragment_bitrates;
 
   GstAdaptiveDemuxStreamFragment fragment;
 
@@ -309,7 +315,7 @@ struct _GstAdaptiveDemuxClass
   void          (*advance_period)  (GstAdaptiveDemux * demux);
 
   void          (*stream_free)     (GstAdaptiveDemuxStream * stream);
-  GstFlowReturn (*stream_seek)     (GstAdaptiveDemuxStream * stream, GstClockTime ts);
+  GstFlowReturn (*stream_seek)     (GstAdaptiveDemuxStream * stream, gboolean forward, GstSeekFlags flags, GstClockTime target_ts, GstClockTime * final_ts);
   gboolean      (*stream_has_next_fragment)  (GstAdaptiveDemuxStream * stream);
   GstFlowReturn (*stream_advance_fragment) (GstAdaptiveDemuxStream * stream);
   /**
@@ -429,6 +435,8 @@ void     gst_adaptive_demux_set_stream_struct_size (GstAdaptiveDemux * demux,
 
 GstAdaptiveDemuxStream *gst_adaptive_demux_stream_new (GstAdaptiveDemux * demux,
                                                        GstPad * pad);
+GstAdaptiveDemuxStream *gst_adaptive_demux_find_stream_for_pad (GstAdaptiveDemux * demux,
+                                                                GstPad * pad);
 void gst_adaptive_demux_stream_set_caps (GstAdaptiveDemuxStream * stream,
                                          GstCaps * caps);
 void gst_adaptive_demux_stream_set_tags (GstAdaptiveDemuxStream * stream,

@@ -27,6 +27,12 @@
 #include "gstglshader.h"
 #include "gstglsl_private.h"
 
+/**
+ * SECTION:gstglshader
+ * @short_description: object representing an OpenGL shader program
+ * @see_also: #GstGLSLStage
+ */
+
 #ifndef GLhandleARB
 #define GLhandleARB GLuint
 #endif
@@ -73,6 +79,7 @@ struct _GstGLShaderPrivate
   GList *stages;
 
   gboolean linked;
+  GHashTable *uniform_locations;
 
   GstGLSLFuncs vtable;
 };
@@ -122,6 +129,7 @@ gst_gl_shader_finalize (GObject * object)
       (GstGLContextThreadFunc) _cleanup_shader, shader);
 
   priv->program_handle = 0;
+  g_hash_table_destroy (priv->uniform_locations);
 
   if (shader->context) {
     gst_object_unref (shader->context);
@@ -189,6 +197,30 @@ gst_gl_shader_init (GstGLShader * self)
   priv = self->priv = GST_GL_SHADER_GET_PRIVATE (self);
 
   priv->linked = FALSE;
+  priv->uniform_locations =
+      g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+}
+
+static int
+_get_uniform_location (GstGLShader * shader, const gchar * name)
+{
+  GstGLShaderPrivate *priv = shader->priv;
+  int location;
+  gpointer value;
+
+  g_return_val_if_fail (priv->linked, 0);
+
+  if (!g_hash_table_lookup_extended (priv->uniform_locations, name, NULL,
+          &value)) {
+    const GstGLFuncs *gl = shader->context->gl_vtable;
+    location = gl->GetUniformLocation (priv->program_handle, name);
+    g_hash_table_insert (priv->uniform_locations, g_strdup (name),
+        GINT_TO_POINTER (location));
+  } else {
+    location = GPOINTER_TO_INT (value);
+  }
+
+  return location;
 }
 
 static GstGLShader *
@@ -235,6 +267,7 @@ _new_with_stages_va_list (GstGLContext * context, GError ** error,
  * gst_gl_shader_new_link_with_stages:
  * @context: a #GstGLContext
  * @error: a #GError
+ * @...: a NULL terminated list of #GstGLSLStage's
  *
  * Each stage will attempt to be compiled and attached to @shader.  Then
  * the shader will be linked. On error, %NULL will be returned and @error will
@@ -243,6 +276,8 @@ _new_with_stages_va_list (GstGLContext * context, GError ** error,
  * Note: must be called in the GL thread
  *
  * Returns: (transfer full): a new @shader with the specified stages.
+ *
+ * Since: 1.8
  */
 GstGLShader *
 gst_gl_shader_new_link_with_stages (GstGLContext * context, GError ** error,
@@ -268,6 +303,7 @@ gst_gl_shader_new_link_with_stages (GstGLContext * context, GError ** error,
  * gst_gl_shader_new_with_stages:
  * @context: a #GstGLContext
  * @error: a #GError
+ * @...: a NULL terminated list of #GstGLSLStage's
  *
  * Each stage will attempt to be compiled and attached to @shader.  On error,
  * %NULL will be returned and @error will contain the details of the error.
@@ -275,6 +311,8 @@ gst_gl_shader_new_link_with_stages (GstGLContext * context, GError ** error,
  * Note: must be called in the GL thread
  *
  * Returns: (transfer full): a new @shader with the specified stages.
+ *
+ * Since: 1.8
  */
 GstGLShader *
 gst_gl_shader_new_with_stages (GstGLContext * context, GError ** error, ...)
@@ -306,10 +344,13 @@ gst_gl_shader_new (GstGLContext * context)
 /**
  * gst_gl_shader_new_default:
  * @context: a #GstGLContext
+ * @error: a #GError that is filled on failure
  *
  * Note: must be called in the GL thread
  *
- * Returns: (transfer full): a default @shader
+ * Returns: (transfer full): a default @shader or %NULL on failure
+ *
+ * Since: 1.8
  */
 GstGLShader *
 gst_gl_shader_new_default (GstGLContext * context, GError ** error)
@@ -326,6 +367,8 @@ gst_gl_shader_new_default (GstGLContext * context, GError ** error)
  * Note: must be called in the GL thread
  *
  * Returns: whether @shader has been successfully linked
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_shader_is_linked (GstGLShader * shader)
@@ -356,6 +399,8 @@ _ensure_program (GstGLShader * shader)
  * @shader: a #GstGLShader
  *
  * Returns: the GL program handle for this shader
+ *
+ * Since: 1.8
  */
 int
 gst_gl_shader_get_program_handle (GstGLShader * shader)
@@ -380,6 +425,8 @@ gst_gl_shader_get_program_handle (GstGLShader * shader)
  * to @shader with gst_gl_shader_attach() or gst_gl_shader_attach_unlocked().
  *
  * Note: must be called in the GL thread
+ *
+ * Since: 1.8
  */
 void
 gst_gl_shader_detach_unlocked (GstGLShader * shader, GstGLSLStage * stage)
@@ -411,9 +458,11 @@ gst_gl_shader_detach_unlocked (GstGLShader * shader, GstGLSLStage * stage)
     return;
   }
 
-  g_assert (shader->context->gl_vtable->IsProgram (shader->priv->
-          program_handle));
-  g_assert (shader->context->gl_vtable->IsShader (stage_handle));
+  if (shader->context->gl_vtable->IsProgram)
+    g_assert (shader->context->gl_vtable->IsProgram (shader->
+            priv->program_handle));
+  if (shader->context->gl_vtable->IsShader)
+    g_assert (shader->context->gl_vtable->IsShader (stage_handle));
 
   GST_LOG_OBJECT (shader, "detaching shader %i from program %i", stage_handle,
       (int) shader->priv->program_handle);
@@ -433,6 +482,8 @@ gst_gl_shader_detach_unlocked (GstGLShader * shader, GstGLSLStage * stage)
  * to @shader with gst_gl_shader_attach() or gst_gl_shader_attach_unlocked().
  *
  * Note: must be called in the GL thread
+ *
+ * Since: 1.8
  */
 void
 gst_gl_shader_detach (GstGLShader * shader, GstGLSLStage * stage)
@@ -456,6 +507,8 @@ gst_gl_shader_detach (GstGLShader * shader, GstGLSLStage * stage)
  * Note: must be called in the GL thread
  *
  * Returns: whether @stage could be attached to @shader
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_shader_attach_unlocked (GstGLShader * shader, GstGLSLStage * stage)
@@ -482,9 +535,11 @@ gst_gl_shader_attach_unlocked (GstGLShader * shader, GstGLSLStage * stage)
     return FALSE;
   }
 
-  g_assert (shader->context->gl_vtable->IsProgram (shader->priv->
-          program_handle));
-  g_assert (shader->context->gl_vtable->IsShader (stage_handle));
+  if (shader->context->gl_vtable->IsProgram)
+    g_assert (shader->context->gl_vtable->IsProgram (shader->
+            priv->program_handle));
+  if (shader->context->gl_vtable->IsShader)
+    g_assert (shader->context->gl_vtable->IsShader (stage_handle));
 
   shader->priv->stages =
       g_list_prepend (shader->priv->stages, gst_object_ref_sink (stage));
@@ -507,6 +562,8 @@ gst_gl_shader_attach_unlocked (GstGLShader * shader, GstGLSLStage * stage)
  * Note: must be called in the GL thread
  *
  * Returns: whether @stage could be attached to @shader
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_shader_attach (GstGLShader * shader, GstGLSLStage * stage)
@@ -534,6 +591,8 @@ gst_gl_shader_attach (GstGLShader * shader, GstGLSLStage * stage)
  * Note: must be called in the GL thread
  *
  * Returns: whether @stage could be compiled and attached to @shader
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_shader_compile_attach_stage (GstGLShader * shader, GstGLSLStage * stage,
@@ -564,6 +623,8 @@ gst_gl_shader_compile_attach_stage (GstGLShader * shader, GstGLSLStage * stage,
  * Note: must be called in the GL thread
  *
  * Returns: whether @shader could be linked together.
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_shader_link (GstGLShader * shader, GError ** error)
@@ -657,6 +718,8 @@ gst_gl_shader_link (GstGLShader * shader, GError ** error)
  * Releases the shader and stages.
  *
  * Note: must be called in the GL thread
+ *
+ * Since: 1.8
  */
 void
 gst_gl_shader_release_unlocked (GstGLShader * shader)
@@ -680,6 +743,7 @@ gst_gl_shader_release_unlocked (GstGLShader * shader)
   shader->priv->stages = NULL;
 
   priv->linked = FALSE;
+  g_hash_table_remove_all (priv->uniform_locations);
 
   g_object_notify (G_OBJECT (shader), "linked");
 }
@@ -691,6 +755,8 @@ gst_gl_shader_release_unlocked (GstGLShader * shader)
  * Releases the shader and stages.
  *
  * Note: must be called in the GL thread
+ *
+ * Since: 1.8
  */
 void
 gst_gl_shader_release (GstGLShader * shader)
@@ -728,7 +794,7 @@ gst_gl_shader_use (GstGLShader * shader)
 
 /**
  * gst_gl_context_clear_shader:
- * @shader: a #GstGLShader
+ * @context: a #GstGLContext
  *
  * Clear's the currently set shader from the GL state machine.
  *
@@ -763,7 +829,7 @@ gst_gl_shader_set_uniform_1f (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform1f (location, value);
 }
@@ -781,7 +847,7 @@ gst_gl_shader_set_uniform_1fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform1fv (location, count, value);
 }
@@ -799,7 +865,7 @@ gst_gl_shader_set_uniform_1i (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform1i (location, value);
 }
@@ -817,7 +883,7 @@ gst_gl_shader_set_uniform_1iv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform1iv (location, count, value);
 }
@@ -835,7 +901,7 @@ gst_gl_shader_set_uniform_2f (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform2f (location, value0, value1);
 }
@@ -853,7 +919,7 @@ gst_gl_shader_set_uniform_2fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform2fv (location, count, value);
 }
@@ -871,7 +937,7 @@ gst_gl_shader_set_uniform_2i (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform2i (location, v0, v1);
 }
@@ -889,7 +955,7 @@ gst_gl_shader_set_uniform_2iv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform2iv (location, count, value);
 }
@@ -907,7 +973,7 @@ gst_gl_shader_set_uniform_3f (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform3f (location, v0, v1, v2);
 }
@@ -925,7 +991,7 @@ gst_gl_shader_set_uniform_3fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform3fv (location, count, value);
 }
@@ -943,7 +1009,7 @@ gst_gl_shader_set_uniform_3i (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform3i (location, v0, v1, v2);
 }
@@ -961,7 +1027,7 @@ gst_gl_shader_set_uniform_3iv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform3iv (location, count, value);
 }
@@ -979,7 +1045,7 @@ gst_gl_shader_set_uniform_4f (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform4f (location, v0, v1, v2, v3);
 }
@@ -997,7 +1063,7 @@ gst_gl_shader_set_uniform_4fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform4fv (location, count, value);
 }
@@ -1015,7 +1081,7 @@ gst_gl_shader_set_uniform_4i (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform4i (location, v0, v1, v2, v3);
 }
@@ -1033,7 +1099,7 @@ gst_gl_shader_set_uniform_4iv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->Uniform4iv (location, count, value);
 }
@@ -1051,7 +1117,7 @@ gst_gl_shader_set_uniform_matrix_2fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix2fv (location, count, transpose, value);
 }
@@ -1069,7 +1135,7 @@ gst_gl_shader_set_uniform_matrix_3fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix3fv (location, count, transpose, value);
 }
@@ -1087,7 +1153,7 @@ gst_gl_shader_set_uniform_matrix_4fv (GstGLShader * shader, const gchar * name,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix4fv (location, count, transpose, value);
 }
@@ -1106,7 +1172,7 @@ gst_gl_shader_set_uniform_matrix_2x3fv (GstGLShader * shader,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix2x3fv (location, count, transpose, value);
 }
@@ -1124,7 +1190,7 @@ gst_gl_shader_set_uniform_matrix_2x4fv (GstGLShader * shader,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix2x4fv (location, count, transpose, value);
 }
@@ -1142,7 +1208,7 @@ gst_gl_shader_set_uniform_matrix_3x2fv (GstGLShader * shader,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix3x2fv (location, count, transpose, value);
 }
@@ -1160,7 +1226,7 @@ gst_gl_shader_set_uniform_matrix_3x4fv (GstGLShader * shader,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix3x4fv (location, count, transpose, value);
 }
@@ -1178,7 +1244,7 @@ gst_gl_shader_set_uniform_matrix_4x2fv (GstGLShader * shader,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix4x2fv (location, count, transpose, value);
 }
@@ -1196,7 +1262,7 @@ gst_gl_shader_set_uniform_matrix_4x3fv (GstGLShader * shader,
   g_return_if_fail (priv->program_handle != 0);
   gl = shader->context->gl_vtable;
 
-  location = gl->GetUniformLocation (priv->program_handle, name);
+  location = _get_uniform_location (shader, name);
 
   gl->UniformMatrix4x3fv (location, count, transpose, value);
 }

@@ -32,6 +32,10 @@
 
 #include <gst/video/videooverlay.h>
 
+#ifdef HAVE_X11
+#include <X11/Xlib.h>
+#endif
+
 
 static GstBusSyncReply
 create_window (GstBus * bus, GstMessage * message, GtkWidget * widget)
@@ -174,7 +178,7 @@ main (gint argc, gchar * argv[])
 {
   GstStateChangeReturn ret;
   GstElement *pipeline;
-  GstElement *filter, *sink;
+  GstElement *upload, *filter, *sink;
   GstElement *sourcebin;
   GstBus *bus;
   GError *error = NULL;
@@ -195,6 +199,10 @@ main (gint argc, gchar * argv[])
     ,
     {NULL}
   };
+
+#ifdef HAVE_X11
+  XInitThreads ();
+#endif
 
   context = g_option_context_new (NULL);
   g_option_context_add_main_entries (context, options, NULL);
@@ -234,12 +242,13 @@ main (gint argc, gchar * argv[])
 
   pipeline = gst_pipeline_new ("pipeline");
 
+  upload = gst_element_factory_make ("glupload", NULL);
   filter = gst_element_factory_make ("gleffects", "flt");
   sink = gst_element_factory_make ("glimagesink", "glsink");
 
-  gst_bin_add_many (GST_BIN (pipeline), sourcebin, filter, sink, NULL);
+  gst_bin_add_many (GST_BIN (pipeline), sourcebin, upload, filter, sink, NULL);
 
-  if (!gst_element_link_many (sourcebin, filter, sink, NULL)) {
+  if (!gst_element_link_many (sourcebin, upload, filter, sink, NULL)) {
     g_print ("Failed to link one or more elements!\n");
     return -1;
   }

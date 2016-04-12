@@ -48,6 +48,8 @@ struct _GstGLContextEGL {
 
   GstGLAPI gl_api;
 
+  const gchar *egl_exts;
+
   EGLImageKHR (*eglCreateImage) (EGLDisplay dpy, EGLContext ctx, EGLenum target,
       EGLClientBuffer buffer, const EGLint *attrib_list);
   EGLBoolean (*eglDestroyImage) (EGLDisplay dpy, EGLImageKHR image);
@@ -64,7 +66,7 @@ GstGLContextEGL *   gst_gl_context_egl_new                  (GstGLDisplay * disp
 guintptr            gst_gl_context_egl_get_current_context  (void);
 gpointer            gst_gl_context_egl_get_proc_address     (GstGLAPI gl_api, const gchar * name);
 
-const gchar * gst_gl_context_egl_get_error_string (void);
+const gchar * gst_gl_context_egl_get_error_string (EGLint err);
 
 
 /* TODO:

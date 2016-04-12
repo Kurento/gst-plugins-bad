@@ -493,8 +493,10 @@ retry:
   is_eos = ! !(buffer_info.flags & BUFFER_FLAG_END_OF_STREAM);
 
   buf = gst_amc_codec_get_output_buffer (self->codec, idx, &err);
-  if (!buf)
+  if (err)
     goto failed_to_get_output_buffer;
+  else if (!buf)
+    goto got_null_output_buffer;
 
   if (buffer_info.size > 0) {
     GstBuffer *outbuf;
@@ -699,6 +701,22 @@ failed_to_get_output_buffer:
     g_mutex_unlock (&self->drain_lock);
     return;
   }
+
+got_null_output_buffer:
+  {
+    GST_ELEMENT_ERROR (self, LIBRARY, SETTINGS, (NULL),
+        ("Got no output buffer"));
+    gst_pad_push_event (GST_AUDIO_DECODER_SRC_PAD (self), gst_event_new_eos ());
+    gst_pad_pause_task (GST_AUDIO_DECODER_SRC_PAD (self));
+    self->downstream_flow_ret = GST_FLOW_ERROR;
+    GST_AUDIO_DECODER_STREAM_UNLOCK (self);
+    g_mutex_lock (&self->drain_lock);
+    self->draining = FALSE;
+    g_cond_broadcast (&self->drain_cond);
+    g_mutex_unlock (&self->drain_lock);
+    return;
+  }
+
 invalid_buffer_size:
   {
     GST_ELEMENT_ERROR (self, LIBRARY, FAILED, (NULL),
@@ -1110,8 +1128,10 @@ gst_amc_audio_dec_handle_frame (GstAudioDecoder * decoder, GstBuffer * inbuf)
     /* Copy the buffer content in chunks of size as requested
      * by the port */
     buf = gst_amc_codec_get_input_buffer (self->codec, idx, &err);
-    if (!buf)
+    if (err)
       goto failed_to_get_input_buffer;
+    else if (!buf)
+      goto got_null_input_buffer;
 
     memset (&buffer_info, 0, sizeof (buffer_info));
     buffer_info.offset = 0;
@@ -1176,6 +1196,16 @@ downstream_error:
 failed_to_get_input_buffer:
   {
     GST_ELEMENT_ERROR_FROM_ERROR (self, err);
+    if (minfo.data)
+      gst_buffer_unmap (inbuf, &minfo);
+    if (inbuf)
+      gst_buffer_unref (inbuf);
+    return GST_FLOW_ERROR;
+  }
+got_null_input_buffer:
+  {
+    GST_ELEMENT_ERROR (self, LIBRARY, SETTINGS, (NULL),
+        ("Got no input buffer"));
     if (minfo.data)
       gst_buffer_unmap (inbuf, &minfo);
     if (inbuf)

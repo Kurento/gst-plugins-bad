@@ -56,6 +56,8 @@ CRUFT_FILES = \
 	$(top_builddir)/ext/hls/.libs/libgstfragmented* \
 	$(top_builddir)/ext/ivorbis/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/ext/jack/.libs/*.{so,dll,DLL,dylib} \
+	$(top_builddir)/gst/opus/.libs/libgstopus.{so,dll,DLL,dylib} \
+	$(top_builddir)/ext/mpg123/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/aacparse/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/amrparse/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/audioparsers/.libs/*.{so,dll,DLL,dylib} \
@@ -63,6 +65,7 @@ CRUFT_FILES = \
 	$(top_builddir)/gst/imagefreeze/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/mpeg4videoparse/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/qtmux/.libs/*.{so,dll,DLL,dylib} \
+	$(top_builddir)/gst/rtp/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/rtpmux/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/rtpvp8/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/scaletempo/.libs/*.{so,dll,DLL,dylib} \
@@ -102,6 +105,7 @@ CRUFT_DIRS = \
 	$(top_srcdir)/gst/qtmux \
 	$(top_srcdir)/gst/rtpmux \
 	$(top_srcdir)/gst/rtpvp8 \
+	$(top_srcdir)/gst/rtp \
 	$(top_srcdir)/gst/scaletempo \
 	$(top_srcdir)/gst/selector \
 	$(top_srcdir)/gst/shapewipe \
@@ -120,6 +124,7 @@ CRUFT_DIRS = \
 	$(top_srcdir)/ext/ivorbis \
 	$(top_srcdir)/ext/jack \
 	$(top_srcdir)/ext/metadata \
+	$(top_srcdir)/ext/mpg123 \
 	$(top_srcdir)/ext/swfdec \
 	$(top_srcdir)/ext/tarkin \
 	$(top_srcdir)/ext/theora \

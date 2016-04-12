@@ -48,6 +48,12 @@ struct _GstVideoParse
 {
   GstRawParse parent;
 
+  GstVideoInfo info;
+  gboolean do_copy;
+  gboolean need_videometa;
+  gboolean stride_set;
+  gboolean offset_set;
+
   /* properties */
   GstVideoFormat format;
   gint width;
@@ -55,6 +61,9 @@ struct _GstVideoParse
   gint par_n, par_d;
   gboolean interlaced;
   gboolean top_field_first;
+  gint stride[GST_VIDEO_MAX_PLANES];
+  gint offset[GST_VIDEO_MAX_PLANES];
+  guint framesize;
 };
 
 struct _GstVideoParseClass

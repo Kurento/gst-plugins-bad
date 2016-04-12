@@ -209,6 +209,8 @@ struct _TSDemuxStream
       "systemstream = (boolean) FALSE; " \
     "video/x-h264,stream-format=(string)byte-stream," \
       "alignment=(string)nal;" \
+    "video/x-h265,stream-format=(string)byte-stream," \
+      "alignment=(string)nal;" \
     "video/x-dirac;" \
     "video/x-cavs;" \
     "video/x-wmv," \
@@ -405,6 +407,11 @@ gst_ts_demux_reset (MpegTSBase * base)
   if (demux->global_tags) {
     gst_tag_list_unref (demux->global_tags);
     demux->global_tags = NULL;
+  }
+
+  if (demux->previous_program) {
+    mpegts_base_deactivate_and_free_program (base, demux->previous_program);
+    demux->previous_program = NULL;
   }
 
   demux->have_group_id = FALSE;
@@ -861,8 +868,8 @@ gst_ts_demux_do_seek (MpegTSBase * base, GstEvent * event)
 
   gst_segment_do_seek (&demux->segment, rate, format, flags, start_type,
       start, stop_type, stop, NULL);
-  if (!(flags & GST_SEEK_FLAG_ACCURATE))
-    demux->reset_segment = TRUE;
+  /* Reset segment if we're not doing an accurate seek */
+  demux->reset_segment = (!(flags & GST_SEEK_FLAG_ACCURATE));
 
   if (demux->segment_event) {
     gst_event_unref (demux->segment_event);
@@ -1618,7 +1625,8 @@ gst_ts_demux_stream_added (MpegTSBase * base, MpegTSBaseStream * bstream,
     stream->active = FALSE;
 
     stream->need_newsegment = TRUE;
-    demux->reset_segment = TRUE;
+    /* Reset segment if we're not doing an accurate seek */
+    demux->reset_segment = (!(demux->segment.flags & GST_SEEK_FLAG_ACCURATE));
     stream->needs_keyframe = FALSE;
     stream->discont = TRUE;
     stream->pts = GST_CLOCK_TIME_NONE;

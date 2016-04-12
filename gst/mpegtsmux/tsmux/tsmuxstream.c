@@ -138,6 +138,7 @@ tsmux_stream_new (guint16 pid, TsMuxStreamType stream_type)
     case TSMUX_ST_VIDEO_MPEG2:
     case TSMUX_ST_VIDEO_MPEG4:
     case TSMUX_ST_VIDEO_H264:
+    case TSMUX_ST_VIDEO_HEVC:
       /* FIXME: Assign sequential IDs? */
       stream->id = 0xE0;
       stream->pi.flags |= TSMUX_PACKET_FLAG_PES_FULL_HEADER;
@@ -315,8 +316,10 @@ tsmux_stream_consume (TsMuxStream * stream, guint len)
     /* FIXME: As a hack, for unbounded streams, start a new PES packet for each
      * incoming packet we receive. This assumes that incoming data is 
      * packetised sensibly - ie, every video frame */
-    if (stream->cur_pes_payload_size == 0)
+    if (stream->cur_pes_payload_size == 0) {
       stream->state = TSMUX_STREAM_STATE_HEADER;
+      stream->pes_bytes_written = 0;
+    }
   }
 }
 
@@ -408,11 +411,6 @@ tsmux_stream_initialize_pes_packet (TsMuxStream * stream)
     stream->cur_pes_payload_size = stream->pes_payload_size;
     tsmux_stream_find_pts_dts_within (stream, stream->cur_pes_payload_size,
         &stream->pts, &stream->dts);
-  } else if (stream->is_video_stream) {
-    /* Unbounded for video streams */
-    stream->cur_pes_payload_size = 0;
-    tsmux_stream_find_pts_dts_within (stream, stream->bytes_avail, &stream->pts,
-        &stream->dts);
   } else {
     /* Output a PES packet of all currently available bytes otherwise */
     stream->cur_pes_payload_size = stream->bytes_avail;
@@ -438,6 +436,16 @@ tsmux_stream_initialize_pes_packet (TsMuxStream * stream)
       stream->pi.flags |= TSMUX_PACKET_FLAG_RANDOM_ACCESS;
       stream->pi.flags |= TSMUX_PACKET_FLAG_ADAPTATION;
     }
+  }
+
+  if (stream->is_video_stream) {
+    guint8 hdr_len;
+
+    hdr_len = tsmux_stream_pes_header_length (stream);
+
+    /* Unbounded for video streams if pes packet length is over 16 bit */
+    if ((stream->cur_pes_payload_size + hdr_len - 6) > G_MAXUINT16)
+      stream->cur_pes_payload_size = 0;
   }
 
   return TRUE;

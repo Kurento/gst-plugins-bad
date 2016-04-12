@@ -721,8 +721,7 @@ static void
 gst_glimage_sink_key_event_cb (GstGLWindow * window, char *event_name, char
     *key_string, GstGLImageSink * gl_sink)
 {
-  GST_DEBUG_OBJECT (gl_sink, "glimagesink event %s key %s pressed", event_name,
-      key_string);
+  GST_DEBUG_OBJECT (gl_sink, "event %s key %s pressed", event_name, key_string);
   gst_navigation_send_key_event (GST_NAVIGATION (gl_sink),
       event_name, key_string);
 }
@@ -731,8 +730,7 @@ static void
 gst_glimage_sink_mouse_event_cb (GstGLWindow * window, char *event_name,
     int button, double posx, double posy, GstGLImageSink * gl_sink)
 {
-  GST_DEBUG_OBJECT (gl_sink, "glimagesink event %s at %g, %g", event_name, posx,
-      posy);
+  GST_DEBUG_OBJECT (gl_sink, "event %s at %g, %g", event_name, posx, posy);
   gst_navigation_send_mouse_event (GST_NAVIGATION (gl_sink),
       event_name, button, posx, posy);
 }
@@ -1476,6 +1474,15 @@ gst_glimage_sink_prepare (GstBaseSink * bsink, GstBuffer * buf)
     gst_gl_sync_meta_wait (sync_meta, glimage_sink->context);
 
   GST_GLIMAGE_SINK_LOCK (glimage_sink);
+  if (glimage_sink->window_resized) {
+    glimage_sink->window_resized = FALSE;
+    GST_GLIMAGE_SINK_UNLOCK (glimage_sink);
+    GST_DEBUG_OBJECT (glimage_sink, "Sending reconfigure event on sinkpad.");
+    gst_pad_push_event (GST_BASE_SINK (glimage_sink)->sinkpad,
+        gst_event_new_reconfigure ());
+    GST_GLIMAGE_SINK_LOCK (glimage_sink);
+  }
+
   target = &glimage_sink->input_buffer;
   if (GST_VIDEO_INFO_MULTIVIEW_MODE (&glimage_sink->in_info) ==
       GST_VIDEO_MULTIVIEW_MODE_FRAME_BY_FRAME &&
@@ -1873,7 +1880,6 @@ gst_glimage_sink_on_resize (GstGLImageSink * gl_sink, gint width, gint height)
    */
   const GstGLFuncs *gl;
   gboolean do_reshape;
-  gboolean reconfigure;
 
   GST_DEBUG_OBJECT (gl_sink, "GL Window resized to %ux%u", width, height);
 
@@ -1887,19 +1893,13 @@ gst_glimage_sink_on_resize (GstGLImageSink * gl_sink, gint width, gint height)
   height = MAX (1, height);
 
   /* Check if we would suggest a different width/height now */
-  reconfigure = ((gl_sink->window_width != width)
+  gl_sink->window_resized = ((gl_sink->window_width != width)
       || (gl_sink->window_height != height))
       && (gl_sink->window_width != 0)
       && (gl_sink->window_height != 0);
 
   gl_sink->window_width = width;
   gl_sink->window_height = height;
-
-  if (reconfigure) {
-    GST_DEBUG ("Sending reconfigure event on sinkpad.");
-    gst_pad_push_event (GST_BASE_SINK (gl_sink)->sinkpad,
-        gst_event_new_reconfigure ());
-  }
 
   gst_gl_insert_debug_marker (gl_sink->context, "%s window resize to %ix%i",
       GST_OBJECT_NAME (gl_sink), width, height);
@@ -2121,6 +2121,15 @@ gst_glimage_sink_redisplay (GstGLImageSink * gl_sink)
 
     /* Recreate the output texture if needed */
     GST_GLIMAGE_SINK_LOCK (gl_sink);
+    if (gl_sink->window_resized) {
+      gl_sink->window_resized = FALSE;
+      GST_GLIMAGE_SINK_UNLOCK (gl_sink);
+      GST_DEBUG_OBJECT (gl_sink, "Sending reconfigure event on sinkpad.");
+      gst_pad_push_event (GST_BASE_SINK (gl_sink)->sinkpad,
+          gst_event_new_reconfigure ());
+      GST_GLIMAGE_SINK_LOCK (gl_sink);
+    }
+
     if (gl_sink->output_mode_changed && gl_sink->input_buffer != NULL) {
       GST_DEBUG ("Recreating output after mode/size change");
       update_output_format (gl_sink);
@@ -2130,6 +2139,7 @@ gst_glimage_sink_redisplay (GstGLImageSink * gl_sink)
     if (gl_sink->next_buffer == NULL) {
       /* Nothing to display yet */
       GST_GLIMAGE_SINK_UNLOCK (gl_sink);
+      gst_object_unref (window);
       return TRUE;
     }
 

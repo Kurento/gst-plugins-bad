@@ -4,8 +4,6 @@ lib_LTLIBRARIES = libgstgl-@GST_API_VERSION@.la
 SUBDIRS = glprototypes
 DIST_SUBDIRS = glprototypes android x11 win32 cocoa wayland dispmanx egl eagl
 
-noinst_HEADERS =
-
 built_sys_header_configure = gstglconfig.h
 
 libgstgl_@GST_API_VERSION@_la_SOURCES = \
@@ -34,8 +32,8 @@ libgstgl_@GST_API_VERSION@_la_SOURCES = \
 	gstglsyncmeta.c \
 	gstglviewconvert.c \
 	gstgloverlaycompositor.c \
-	gstglsl_private.h \
-	utils/opengl_versions.h
+	gstglquery.c \
+	gstglcontrolbindingproxy.c
 
 libgstgl_@GST_API_VERSION@includedir = $(includedir)/gstreamer-@GST_API_VERSION@/gst/gl
 libgstgl_@GST_API_VERSION@include_HEADERS = \
@@ -64,9 +62,17 @@ libgstgl_@GST_API_VERSION@include_HEADERS = \
 	gstglsyncmeta.h \
 	gstglviewconvert.h \
 	gstgloverlaycompositor.h \
+	gstglquery.h \
+	gstglcontrolbindingproxy.h \
 	gstgl_fwd.h \
 	gstgl_enums.h \
 	gl.h
+
+noinst_HEADERS = \
+	gstglsl_private.h \
+	utils/opengl_versions.h \
+	utils/gles_versions.h
+
 
 libgstgl_@GST_API_VERSION@_la_LIBADD = \
 	$(GMODULE_NO_EXPORT_LIBS) \
@@ -166,7 +172,7 @@ GstGL-@GST_API_VERSION@.gir: $(INTROSPECTION_SCANNER) libgstgl-@GST_API_VERSION@
 		--pkg gstreamer-base-@GST_API_VERSION@ \
 		--pkg gstreamer-video-@GST_API_VERSION@ \
 		--pkg-export gstreamer-gl-@GST_API_VERSION@ \
-		--add-init-section="gst_init(NULL,NULL);" \
+		--add-init-section="$(INTROSPECTION_INIT)" \
 		-DGST_USE_UNSTABLE_API \
 		--output $@ \
 		$(gir_headers) \

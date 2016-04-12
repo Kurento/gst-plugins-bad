@@ -16,12 +16,6 @@ else
 APEXSINK_DIR =
 endif
 
-# if USE_AUDIOFILE
-# AUDIOFILE_DIR=audiofile
-# else
-AUDIOFILE_DIR=
-# endif
-
 if USE_BS2B
 BS2B_DIR=bs2b
 else
@@ -166,12 +160,6 @@ else
 LIBDE265_DIR =
 endif
 
-# if USE_LIBFAME
-# LIBFAME_DIR=libfame
-# else
-LIBFAME_DIR=
-# endif
-
 if USE_LIBMMS
 LIBMMS_DIR=libmms
 else
@@ -194,12 +182,6 @@ if USE_MPEG2ENC
 MPEG2ENC_DIR=mpeg2enc
 else
 MPEG2ENC_DIR=
-endif
-
-if USE_MPG123
-MPG123_DIR=mpg123
-else
-MPG123_DIR=
 endif
 
 if USE_MIMIC
@@ -382,12 +364,6 @@ else
 TELETEXTDEC_DIR=
 endif
 
-if USE_GSETTINGS
-GSETTINGS_DIR=gsettings
-else
-GSETTINGS_DIR=
-endif
-
 if USE_XVID
 XVID_DIR=xvid
 else
@@ -430,6 +406,12 @@ else
 DTLS_DIR=
 endif
 
+if USE_VULKAN
+VULKAN_DIR=vulkan
+else
+VULKAN_DIR=
+endif
+
 SUBDIRS=\
 	$(VOAACENC_DIR) \
 	$(ASSRENDER_DIR) \
@@ -454,19 +436,16 @@ SUBDIRS=\
 	$(FAAD_DIR) \
 	$(FLITE_DIR) \
 	$(FLUIDSYNTH_DIR) \
-	$(GSETTINGS_DIR) \
 	$(GSM_DIR) \
 	$(G729_DIR) \
 	$(KATE_DIR) \
 	$(LADSPA_DIR) \
 	$(LV2_DIR) \
 	$(LIBDE265_DIR) \
-	$(LIBFAME_DIR) \
 	$(LIBMMS_DIR) \
 	$(LIBVISUAL_DIR) \
 	$(MODPLUG_DIR) \
 	$(MPEG2ENC_DIR) \
-	$(MPG123_DIR) \
 	$(MIMIC_DIR) \
 	$(MPLEX_DIR) \
 	$(MUSEPACK_DIR) \
@@ -501,7 +480,8 @@ SUBDIRS=\
 	$(HLS_DIR) \
 	$(WEBP_DIR) \
 	$(X265_DIR) \
-	$(DTLS_DIR)
+	$(DTLS_DIR) \
+	$(VULKAN_DIR)
 
 DIST_SUBDIRS = \
 	assrender \
@@ -518,7 +498,6 @@ DIST_SUBDIRS = \
 	faad \
 	flite \
 	fluidsynth \
-	gsettings \
 	gsm \
 	hls \
 	ladspa \
@@ -535,7 +514,6 @@ DIST_SUBDIRS = \
 	modplug \
 	mimic \
 	mpeg2enc \
-	mpg123 \
 	mplex \
 	musepack \
 	nas \
@@ -570,6 +548,7 @@ DIST_SUBDIRS = \
 	rtmp \
 	webp \
 	x265 \
-	dtls
+	dtls \
+	vulkan
 
 include $(top_srcdir)/common/parallel-subdirs.mak

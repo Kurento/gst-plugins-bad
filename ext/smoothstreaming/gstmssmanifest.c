@@ -1089,17 +1089,23 @@ gst_mss_stream_type_name (GstMssStreamType streamtype)
 /**
  * Seeks all streams to the fragment that contains the set time
  *
+ * @forward: if this is forward playback
  * @time: time in nanoseconds
  */
 void
-gst_mss_manifest_seek (GstMssManifest * manifest, guint64 time)
+gst_mss_manifest_seek (GstMssManifest * manifest, gboolean forward,
+    guint64 time)
 {
   GSList *iter;
 
   for (iter = manifest->streams; iter; iter = g_slist_next (iter)) {
-    gst_mss_stream_seek (iter->data, time);
+    gst_mss_stream_seek (iter->data, forward, 0, time, NULL);
   }
 }
+
+#define SNAP_AFTER(forward,flags) \
+    ((forward && (flags & GST_SEEK_FLAG_SNAP_AFTER)) || \
+    (!forward && (flags & GST_SEEK_FLAG_SNAP_BEFORE)))
 
 /**
  * Seeks this stream to the fragment that contains the sample at time
@@ -1107,7 +1113,8 @@ gst_mss_manifest_seek (GstMssManifest * manifest, guint64 time)
  * @time: time in nanoseconds
  */
 void
-gst_mss_stream_seek (GstMssStream * stream, guint64 time)
+gst_mss_stream_seek (GstMssStream * stream, gboolean forward,
+    GstSeekFlags flags, guint64 time, guint64 * final_time)
 {
   GList *iter;
   guint64 timescale;
@@ -1117,37 +1124,60 @@ gst_mss_stream_seek (GstMssStream * stream, guint64 time)
   time = gst_util_uint64_scale_round (time, timescale, GST_SECOND);
 
   GST_DEBUG ("Stream %s seeking to %" G_GUINT64_FORMAT, stream->url, time);
-
   for (iter = stream->fragments; iter; iter = g_list_next (iter)) {
-    GList *next = g_list_next (iter);
-    if (next) {
-      fragment = next->data;
+    fragment = iter->data;
+    if (fragment->time + fragment->repetitions * fragment->duration > time) {
+      stream->current_fragment = iter;
+      stream->fragment_repetition_index =
+          (time - fragment->time) / fragment->duration;
+      if (((time - fragment->time) % fragment->duration) == 0) {
 
-      if (fragment->time > time) {
-        stream->current_fragment = iter;
-        break;
+        /* for reverse playback, start from the previous fragment when we are
+         * exactly at a limit */
+        if (!forward)
+          stream->fragment_repetition_index--;
+      } else if (SNAP_AFTER (forward, flags))
+        stream->fragment_repetition_index++;
+
+      if (stream->fragment_repetition_index == fragment->repetitions) {
+        /* move to the next one */
+        stream->fragment_repetition_index = 0;
+        stream->current_fragment = g_list_next (iter);
+        fragment =
+            stream->current_fragment ? stream->current_fragment->data : NULL;
+
+      } else if (stream->fragment_repetition_index == -1) {
+        if (g_list_previous (iter)) {
+          stream->current_fragment = g_list_previous (iter);
+          fragment = stream->current_fragment->data;
+          g_assert (fragment);
+          stream->fragment_repetition_index = fragment->repetitions - 1;
+        } else {
+          stream->fragment_repetition_index = 0;
+        }
       }
-    } else {
-      fragment = iter->data;
-      if (fragment->time + fragment->repetitions * fragment->duration > time) {
-        stream->current_fragment = iter;
-      } else {
-        stream->current_fragment = NULL;        /* EOS */
-      }
+
       break;
     }
-  }
 
-  /* position inside the repetitions */
-  if (stream->current_fragment) {
-    fragment = stream->current_fragment->data;
-    stream->fragment_repetition_index =
-        (time - fragment->time) / fragment->duration;
   }
 
   GST_DEBUG ("Stream %s seeked to fragment time %" G_GUINT64_FORMAT
-      " repetition %u", stream->url, fragment->time,
+      " repetition %u", stream->url,
+      fragment ? fragment->time : GST_CLOCK_TIME_NONE,
       stream->fragment_repetition_index);
+  if (final_time) {
+    if (fragment) {
+      *final_time = gst_util_uint64_scale_round (fragment->time +
+          stream->fragment_repetition_index * fragment->duration,
+          GST_SECOND, timescale);
+    } else {
+      GstMssStreamFragment *last_fragment = g_list_last (iter)->data;
+      *final_time = gst_util_uint64_scale_round (last_fragment->time +
+          last_fragment->repetitions * last_fragment->duration,
+          GST_SECOND, timescale);
+    }
+  }
 }
 
 guint64
@@ -1200,7 +1230,9 @@ gst_mss_stream_reload_fragments (GstMssStream * stream, xmlNodePtr streamIndex)
     g_list_free_full (stream->fragments, g_free);
     stream->fragments = g_list_reverse (builder.fragments);
     stream->current_fragment = stream->fragments;
-    gst_mss_stream_seek (stream, current_gst_time);
+    /* TODO Verify how repositioning here works for reverse
+     * playback - it might start from the wrong fragment */
+    gst_mss_stream_seek (stream, TRUE, 0, current_gst_time, NULL);
   }
 }
 
@@ -1229,8 +1261,6 @@ gst_mss_manifest_reload_fragments (GstMssManifest * manifest, GstBuffer * data)
   xmlDocPtr xml;
   xmlNodePtr root;
   GstMapInfo info;
-
-  g_return_if_fail (manifest->is_live);
 
   gst_buffer_map (data, &info, GST_MAP_READ);
 

@@ -19,20 +19,63 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include "corevideobuffer.h"
 #include "coremediabuffer.h"
+#include "corevideomemory.h"
+
+static const GstMetaInfo *gst_core_media_meta_get_info (void);
+
+static void
+gst_core_media_meta_add (GstBuffer * buffer, CMSampleBufferRef sample_buf,
+    CVImageBufferRef image_buf, CMBlockBufferRef block_buf)
+{
+  GstCoreMediaMeta *meta;
+
+  meta =
+      (GstCoreMediaMeta *) gst_buffer_add_meta (buffer,
+      gst_core_media_meta_get_info (), NULL);
+  CFRetain (sample_buf);
+  if (image_buf)
+    CVBufferRetain (image_buf);
+  if (block_buf)
+    CFRetain (block_buf);
+  meta->sample_buf = sample_buf;
+  meta->image_buf = image_buf;
+  meta->block_buf = block_buf;
+  if (image_buf != NULL && CFGetTypeID (image_buf) == CVPixelBufferGetTypeID ())
+    meta->pixel_buf = (CVPixelBufferRef) image_buf;
+  else
+    meta->pixel_buf = NULL;
+}
 
 static void
 gst_core_media_meta_free (GstCoreMediaMeta * meta, GstBuffer * buf)
 {
   if (meta->image_buf != NULL) {
-    CVPixelBufferUnlockBaseAddress (meta->image_buf, 0);
     CVBufferRelease (meta->image_buf);
   }
+
   if (meta->block_buf != NULL) {
     CFRelease (meta->block_buf);
   }
 
   CFRelease (meta->sample_buf);
+}
+
+static gboolean
+gst_core_media_meta_transform (GstBuffer * transbuf, GstCoreMediaMeta * meta,
+    GstBuffer * buffer, GQuark type, GstMetaTransformCopy * data)
+{
+  if (!data->region) {
+    /* only copy if the complete data is copied as well */
+    gst_core_media_meta_add (transbuf, meta->sample_buf, meta->image_buf,
+        meta->block_buf);
+  } else {
+    GST_WARNING_OBJECT (transbuf,
+        "dropping Core Media metadata due to partial buffer");
+  }
+
+  return TRUE;                  /* retval unused */
 }
 
 GType
@@ -58,7 +101,7 @@ gst_core_media_meta_get_info (void)
         "GstCoreMediaMeta", sizeof (GstCoreMediaMeta),
         (GstMetaInitFunction) NULL,
         (GstMetaFreeFunction) gst_core_media_meta_free,
-        (GstMetaTransformFunction) NULL);
+        (GstMetaTransformFunction) gst_core_media_meta_transform);
     g_once_init_leave (&core_media_meta_info, meta);
   }
   return core_media_meta_info;
@@ -82,68 +125,6 @@ gst_core_media_buffer_get_video_format (OSType format)
       GST_WARNING ("Unknown OSType format: %d", (gint) format);
       return GST_VIDEO_FORMAT_UNKNOWN;
   }
-}
-
-static gboolean
-gst_core_media_buffer_wrap_pixel_buffer (GstBuffer * buf, GstVideoInfo * info,
-    CVPixelBufferRef pixel_buf, gboolean * has_padding, gboolean map)
-{
-  guint n_planes;
-  gsize offset[GST_VIDEO_MAX_PLANES] = { 0 };
-  gint stride[GST_VIDEO_MAX_PLANES] = { 0 };
-  GstVideoMeta *video_meta;
-  UInt32 size;
-
-  if (map && CVPixelBufferLockBaseAddress (pixel_buf, 0) != kCVReturnSuccess) {
-    GST_ERROR ("Could not lock pixel buffer base address");
-    return FALSE;
-  }
-
-  *has_padding = FALSE;
-
-  if (CVPixelBufferIsPlanar (pixel_buf)) {
-    gint i, size = 0, plane_offset = 0;
-
-    n_planes = CVPixelBufferGetPlaneCount (pixel_buf);
-    for (i = 0; i < n_planes; i++) {
-      stride[i] = CVPixelBufferGetBytesPerRowOfPlane (pixel_buf, i);
-
-      if (stride[i] != GST_VIDEO_INFO_PLANE_STRIDE (info, i)) {
-        *has_padding = TRUE;
-      }
-
-      size = stride[i] * CVPixelBufferGetHeightOfPlane (pixel_buf, i);
-      offset[i] = plane_offset;
-      plane_offset += size;
-
-      if (map) {
-        gst_buffer_append_memory (buf,
-            gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
-                CVPixelBufferGetBaseAddressOfPlane (pixel_buf, i), size, 0,
-                size, NULL, NULL));
-      }
-    }
-  } else {
-
-    n_planes = 1;
-    stride[0] = CVPixelBufferGetBytesPerRow (pixel_buf);
-    offset[0] = 0;
-    size = stride[0] * CVPixelBufferGetHeight (pixel_buf);
-
-    if (map) {
-      gst_buffer_append_memory (buf,
-          gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
-              CVPixelBufferGetBaseAddress (pixel_buf), size, 0, size, NULL,
-              NULL));
-    }
-  }
-
-  video_meta =
-      gst_buffer_add_video_meta_full (buf, GST_VIDEO_FRAME_FLAG_NONE,
-      GST_VIDEO_INFO_FORMAT (info), info->width, info->height, n_planes, offset,
-      stride);
-
-  return TRUE;
 }
 
 static gboolean
@@ -247,11 +228,10 @@ gst_video_info_init_from_pixel_buffer (GstVideoInfo * info,
 
 GstBuffer *
 gst_core_media_buffer_new (CMSampleBufferRef sample_buf,
-    gboolean use_video_meta, gboolean map)
+    gboolean use_video_meta)
 {
   CVImageBufferRef image_buf;
   CMBlockBufferRef block_buf;
-  GstCoreMediaMeta *meta;
   GstBuffer *buf;
 
   image_buf = CMSampleBufferGetImageBuffer (sample_buf);
@@ -259,35 +239,22 @@ gst_core_media_buffer_new (CMSampleBufferRef sample_buf,
 
   buf = gst_buffer_new ();
 
-  meta = (GstCoreMediaMeta *) gst_buffer_add_meta (buf,
-      gst_core_media_meta_get_info (), NULL);
-  CFRetain (sample_buf);
-  if (image_buf)
-    CVBufferRetain (image_buf);
-  if (block_buf)
-    CFRetain (block_buf);
-  meta->sample_buf = sample_buf;
-  meta->image_buf = image_buf;
-  meta->pixel_buf = NULL;
-  meta->block_buf = block_buf;
+  gst_core_media_meta_add (buf, sample_buf, image_buf, block_buf);
 
   if (image_buf != NULL && CFGetTypeID (image_buf) == CVPixelBufferGetTypeID ()) {
     GstVideoInfo info;
     gboolean has_padding = FALSE;
+    CVPixelBufferRef pixel_buf = (CVPixelBufferRef) image_buf;
 
-    meta->pixel_buf = (CVPixelBufferRef) image_buf;
-    if (!gst_video_info_init_from_pixel_buffer (&info, meta->pixel_buf)) {
+    if (!gst_video_info_init_from_pixel_buffer (&info, pixel_buf)) {
       goto error;
     }
 
-    if (!gst_core_media_buffer_wrap_pixel_buffer (buf, &info, meta->pixel_buf,
-            &has_padding, map)) {
-      goto error;
-    }
+    gst_core_video_wrap_pixel_buffer (buf, &info, pixel_buf, &has_padding);
 
     /* If the video meta API is not supported, remove padding by
      * copying the core media buffer to a system memory buffer */
-    if (map && has_padding && !use_video_meta) {
+    if (has_padding && !use_video_meta) {
       GstBuffer *copy_buf;
       copy_buf = gst_core_media_buffer_new_from_buffer (buf, &info);
       if (!copy_buf) {
@@ -299,7 +266,7 @@ gst_core_media_buffer_new (CMSampleBufferRef sample_buf,
     }
 
   } else if (block_buf != NULL) {
-    if (map && !gst_core_media_buffer_wrap_block_buffer (buf, block_buf)) {
+    if (!gst_core_media_buffer_wrap_block_buffer (buf, block_buf)) {
       goto error;
     }
   } else {

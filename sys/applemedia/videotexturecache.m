@@ -53,8 +53,6 @@ gst_video_texture_cache_new (GstGLContext * ctx)
   CFMutableDictionaryRef cache_attrs =
       CFDictionaryCreateMutable (NULL, 0, &kCFTypeDictionaryKeyCallBacks,
       &kCFTypeDictionaryValueCallBacks);
-  gst_vtutil_dict_set_i32 (cache_attrs,
-      kCVOpenGLESTextureCacheMaximumTextureAgeKey, 0);
   CVOpenGLESTextureCacheCreate (kCFAllocatorDefault, (CFDictionaryRef) cache_attrs,
       (CVEAGLContext) gst_gl_context_get_gl_context (ctx), NULL, &cache->cache);
 #else
@@ -145,22 +143,20 @@ cv_pixel_buffer_from_gst_buffer (GstBuffer * buffer)
 }
 
 #if HAVE_IOS
-static gboolean
-gl_mem_from_buffer (GstVideoTextureCache * cache,
-        GstBuffer * buffer, GstMemory **mem1, GstMemory **mem2)
+static void
+_do_get_gl_buffer (GstGLContext * context, ContextThreadData * data)
 {
   CVOpenGLESTextureRef texture = NULL;
-  CVPixelBufferRef pixel_buf = cv_pixel_buffer_from_gst_buffer (buffer);
+  GstVideoTextureCache *cache = data->cache;
+  CVPixelBufferRef pixel_buf = cv_pixel_buffer_from_gst_buffer (data->input_buffer);
   GstGLTextureTarget gl_target;
   GstGLBaseMemoryAllocator *base_mem_alloc;
   GstGLVideoAllocationParams *params;
+  GstBuffer *output_buffer;
 
   base_mem_alloc = GST_GL_BASE_MEMORY_ALLOCATOR (gst_gl_memory_allocator_get_default (cache->ctx));
-
-  *mem1 = NULL;
-  *mem2 = NULL;
-
-  CVOpenGLESTextureCacheFlush (cache->cache, 0);
+  output_buffer = gst_buffer_new ();
+  gst_buffer_copy_into (output_buffer, data->input_buffer, GST_BUFFER_COPY_ALL, 0, -1);
 
   switch (GST_VIDEO_INFO_FORMAT (&cache->input_info)) {
       case GST_VIDEO_FORMAT_BGRA:
@@ -178,8 +174,9 @@ gl_mem_from_buffer (GstVideoTextureCache * cache,
             CVOpenGLESTextureGetName (texture), texture,
             (GDestroyNotify) CFRelease);
 
-        *mem1 = (GstMemory *) gst_gl_base_memory_alloc (base_mem_alloc,
-            (GstGLAllocationParams *) params);
+        gst_buffer_replace_memory (output_buffer, 0,
+                (GstMemory *) gst_gl_base_memory_alloc (base_mem_alloc,
+                    (GstGLAllocationParams *) params));
         gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
         break;
       case GST_VIDEO_FORMAT_NV12: {
@@ -204,8 +201,9 @@ gl_mem_from_buffer (GstVideoTextureCache * cache,
             CVOpenGLESTextureGetName (texture), texture,
             (GDestroyNotify) CFRelease);
 
-        *mem1 = (GstMemory *) gst_gl_base_memory_alloc (base_mem_alloc,
-            (GstGLAllocationParams *) params);
+        gst_buffer_replace_memory (output_buffer, 0,
+                (GstMemory *) gst_gl_base_memory_alloc (base_mem_alloc,
+                    (GstGLAllocationParams *) params));
         gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
 
         textype = gst_gl_texture_type_from_format (cache->ctx, GST_VIDEO_FORMAT_NV12, 1);
@@ -225,8 +223,9 @@ gl_mem_from_buffer (GstVideoTextureCache * cache,
             CVOpenGLESTextureGetName (texture), texture,
             (GDestroyNotify) CFRelease);
 
-        *mem2 = (GstMemory *) gst_gl_base_memory_alloc (base_mem_alloc,
-            (GstGLAllocationParams *) params);
+        gst_buffer_replace_memory (output_buffer, 1,
+                (GstMemory *) gst_gl_base_memory_alloc (base_mem_alloc,
+                    (GstGLAllocationParams *) params));
         gst_gl_allocation_params_free ((GstGLAllocationParams *) params);
         break;
       }
@@ -237,21 +236,23 @@ gl_mem_from_buffer (GstVideoTextureCache * cache,
 
   gst_object_unref (base_mem_alloc);
 
-  return TRUE;
+  data->output_buffer = output_buffer;
+
+  return;
 
 error:
-  return FALSE;
+  data->output_buffer = NULL;
 }
 #else /* !HAVE_IOS */
-
-static gboolean
-gl_mem_from_buffer (GstVideoTextureCache * cache,
-        GstBuffer * buffer, GstMemory **mem1, GstMemory **mem2)
+static void
+_do_get_gl_buffer (GstGLContext * context, ContextThreadData * data)
 {
-  CVPixelBufferRef pixel_buf = cv_pixel_buffer_from_gst_buffer (buffer);
-  IOSurfaceRef surface = CVPixelBufferGetIOSurface(pixel_buf);
+  GstVideoTextureCache *cache = data->cache;
+  CVPixelBufferRef pixel_buf = cv_pixel_buffer_from_gst_buffer (data->input_buffer);
+  IOSurfaceRef surface = CVPixelBufferGetIOSurface (pixel_buf);
 
-  *mem1 = *mem2 = NULL;
+  data->output_buffer = gst_buffer_new ();
+  gst_buffer_copy_into (data->output_buffer, data->input_buffer, GST_BUFFER_COPY_ALL, 0, -1);
   for (int i = 0; i < GST_VIDEO_INFO_N_PLANES (&cache->input_info); i++) {
     GstIOSurfaceMemory *mem;
 
@@ -260,41 +261,21 @@ gl_mem_from_buffer (GstVideoTextureCache * cache,
             surface, GST_GL_TEXTURE_TARGET_RECTANGLE, &cache->input_info,
             i, NULL, pixel_buf, (GDestroyNotify) CFRelease);
 
-    if (i == 0)
-        *mem1 = (GstMemory *) mem;
-    else
-        *mem2 = (GstMemory *) mem;
+    gst_buffer_replace_memory (data->output_buffer, i, (GstMemory *) mem);
   }
-
-  return TRUE;
 }
 #endif
-
-static void
-_do_get_gl_buffer (GstGLContext * context, ContextThreadData * data)
-{
-  GstMemory *mem1 = NULL, *mem2 = NULL;
-  GstVideoTextureCache *cache = data->cache;
-  GstBuffer *buffer = data->input_buffer;
-
-  if (!gl_mem_from_buffer (cache, buffer, &mem1, &mem2)) {
-    gst_buffer_unref (buffer);
-    return;
-  }
-
-  gst_buffer_append_memory (buffer, mem1);
-  if (mem2)
-    gst_buffer_append_memory (buffer, mem2);
-
-  data->output_buffer = buffer;
-}
 
 GstBuffer *
 gst_video_texture_cache_get_gl_buffer (GstVideoTextureCache * cache,
         GstBuffer * cv_buffer)
 {
   ContextThreadData data = {cache, cv_buffer, NULL};
+
   gst_gl_context_thread_add (cache->ctx,
       (GstGLContextThreadFunc) _do_get_gl_buffer, &data);
+
+  gst_buffer_unref (cv_buffer);
+
   return data.output_buffer;
 }

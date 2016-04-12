@@ -485,6 +485,21 @@ gst_amc_video_dec_close (GstVideoDecoder * decoder)
     self->surface = NULL;
   }
 
+  if (self->listener) {
+    JNIEnv *env = gst_amc_jni_get_env ();
+    GError *err = NULL;
+
+    if (!gst_amc_jni_call_void_method (env, &err, self->listener,
+            self->set_context_id, GST_AMC_VIDEO_DEC_TO_JLONG (NULL))) {
+      GST_ERROR_OBJECT (self, "Failed to unset back pointer on the listener. "
+          "crashes/hangs may ensue: %s", err ? err->message : "Unknown");
+      GST_ELEMENT_ERROR_FROM_ERROR (self, err);
+    }
+
+    gst_amc_jni_object_unref (env, self->listener);
+  }
+  self->listener = NULL;
+
   if (self->codec) {
     GError *err = NULL;
 
@@ -790,12 +805,12 @@ gst_amc_video_dec_set_src_caps (GstAmcVideoDec * self, GstAmcFormat * format)
     return FALSE;
   }
 
-  gst_format =
-      gst_amc_color_format_to_video_format (klass->codec_info, mime,
-      color_format);
-
   if (self->codec_config == AMC_CODEC_CONFIG_WITH_SURFACE) {
     gst_format = GST_VIDEO_FORMAT_RGBA;
+  } else {
+    gst_format =
+        gst_amc_color_format_to_video_format (klass->codec_info, mime,
+        color_format);
   }
 
   if (gst_format == GST_VIDEO_FORMAT_UNKNOWN) {
@@ -812,6 +827,7 @@ gst_amc_video_dec_set_src_caps (GstAmcVideoDec * self, GstAmcFormat * format)
         GST_VIDEO_MULTIVIEW_MODE_TOP_BOTTOM, GST_VIDEO_MULTIVIEW_FLAGS_NONE);
   }
 
+  memset (&self->color_format_info, 0, sizeof (self->color_format_info));
   if (self->codec_config == AMC_CODEC_CONFIG_WITH_SURFACE) {
     if (output_state->caps)
       gst_caps_unref (output_state->caps);
@@ -820,6 +836,21 @@ gst_amc_video_dec_set_src_caps (GstAmcVideoDec * self, GstAmcFormat * format)
         gst_caps_features_new (GST_CAPS_FEATURE_MEMORY_GL_MEMORY, NULL));
     gst_caps_set_simple (output_state->caps, "texture-target", G_TYPE_STRING,
         "external-oes", NULL);
+    GST_DEBUG_OBJECT (self, "Configuring for Surface output");
+
+    /* The width/height values are used in other places for
+     * checking if the resolution changed. Set everything
+     * that makes sense here
+     */
+    self->color_format_info.color_format = COLOR_FormatAndroidOpaque;
+    self->color_format_info.width = width;
+    self->color_format_info.height = height;
+    self->color_format_info.crop_left = crop_left;
+    self->color_format_info.crop_right = crop_right;
+    self->color_format_info.crop_top = crop_top;
+    self->color_format_info.crop_bottom = crop_bottom;
+
+    goto out;
   }
 
   self->format = gst_format;
@@ -843,6 +874,7 @@ gst_amc_video_dec_set_src_caps (GstAmcVideoDec * self, GstAmcFormat * format)
       self->color_format_info.crop_top, self->color_format_info.crop_right,
       self->color_format_info.crop_bottom, self->color_format_info.frame_size);
 
+out:
   ret = gst_video_decoder_negotiate (GST_VIDEO_DECODER (self));
 
   gst_video_codec_state_unref (output_state);
@@ -859,6 +891,9 @@ gst_amc_video_dec_fill_buffer (GstAmcVideoDec * self, GstAmcBuffer * buf,
       gst_video_decoder_get_output_state (GST_VIDEO_DECODER (self));
   GstVideoInfo *info = &state->info;
   gboolean ret = FALSE;
+
+  if (self->color_format_info.color_format == COLOR_FormatAndroidOpaque)
+    return FALSE;
 
   ret =
       gst_amc_color_format_copy (&self->color_format_info, buf, buffer_info,
@@ -899,11 +934,17 @@ _gl_sync_release_buffer (struct gl_sync *sync, gboolean render)
           "frames for frame %u", sync, diff, sync->gl_frame_no);
     }
 
-    GST_TRACE ("gl_sync %p release_output_buffer idx %u frame %u", sync,
-        sync->buffer_idx, sync->gl_frame_no);
+    GST_TRACE ("gl_sync %p release_output_buffer idx %u frame %u render %s",
+        sync, sync->buffer_idx, sync->gl_frame_no, render ? "TRUE" : "FALSE");
 
     /* Release the frame into the surface */
     sync->sink->gl_released_frame_count++;
+    if (!render) {
+      /* Advance the ready counter ourselves if we aren't going to render
+       * and therefore receive a listener callback */
+      sync->sink->gl_ready_frame_count++;
+    }
+
     if (!gst_amc_codec_release_output_buffer (sync->sink->codec,
             sync->buffer_idx, render, &error)) {
       GST_ERROR_OBJECT (sync->sink,
@@ -989,8 +1030,8 @@ _gl_sync_render_unlocked (struct gl_sync *sync)
   if (!af_meta) {
     GST_WARNING ("Failed to retreive the transformation meta from the "
         "gl_sync %p buffer %p", sync, sync->buffer);
-  } else if (gst_amc_surface_texture_get_transform_matrix (sync->surface->
-          texture, matrix, &error)) {
+  } else if (gst_amc_surface_texture_get_transform_matrix (sync->
+          surface->texture, matrix, &error)) {
 
     gst_video_affine_transformation_meta_apply_matrix (af_meta, matrix);
     gst_video_affine_transformation_meta_apply_matrix (af_meta, yflip_matrix);
@@ -1080,7 +1121,7 @@ _amc_gl_iterate_queue_unlocked (GstGLSyncMeta * sync_meta, gboolean wait)
     /* Frames are currently pushed in order and waits need to be performed
      * in the same order */
 
-    end_time = 30 * G_TIME_SPAN_MILLISECOND + tmp->released_ts;
+    end_time = wait ? 30 * G_TIME_SPAN_MILLISECOND + tmp->released_ts : -1;
     if (!_amc_gl_possibly_wait_for_gl_sync (tmp, end_time))
       ret = FALSE;
 
@@ -1271,8 +1312,11 @@ retry:
   is_eos = ! !(buffer_info.flags & BUFFER_FLAG_END_OF_STREAM);
 
   buf = gst_amc_codec_get_output_buffer (self->codec, idx, &err);
-  if (!buf)
+  if (err)
     goto failed_to_get_output_buffer;
+
+  if (self->codec_config != AMC_CODEC_CONFIG_WITH_SURFACE && !buf)
+    goto got_null_output_buffer;
 
   if (frame
       && (deadline =
@@ -1282,7 +1326,7 @@ retry:
         "Frame is too late, dropping (deadline %" GST_STIME_FORMAT ")",
         GST_STIME_ARGS (deadline));
     flow_ret = gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
-  } else if (self->codec_config == AMC_CODEC_CONFIG_WITH_SURFACE) {
+  } else if (frame && self->codec_config == AMC_CODEC_CONFIG_WITH_SURFACE) {
     GstBuffer *outbuf;
     GstGLSyncMeta *sync_meta;
     GstVideoCodecState *state;
@@ -1346,6 +1390,7 @@ retry:
         sync);
     sync_meta->set_sync = _amc_gl_set_sync;
     sync_meta->wait = _amc_gl_wait;
+    sync_meta->wait_cpu = _amc_gl_wait;
     sync_meta->copy = _amc_gl_copy;
     sync_meta->free = _amc_gl_free;
 
@@ -1442,8 +1487,10 @@ retry:
     flow_ret = gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
   }
 
-  gst_amc_buffer_free (buf);
-  buf = NULL;
+  if (buf) {
+    gst_amc_buffer_free (buf);
+    buf = NULL;
+  }
 
   if (release_buffer) {
     if (!gst_amc_codec_release_output_buffer (self->codec, idx, FALSE, &err)) {
@@ -1574,6 +1621,21 @@ failed_to_get_output_buffer:
     return;
   }
 
+got_null_output_buffer:
+  {
+    GST_ELEMENT_ERROR (self, LIBRARY, SETTINGS, (NULL),
+        ("Got no output buffer"));
+    gst_pad_push_event (GST_VIDEO_DECODER_SRC_PAD (self), gst_event_new_eos ());
+    gst_pad_pause_task (GST_VIDEO_DECODER_SRC_PAD (self));
+    self->downstream_flow_ret = GST_FLOW_ERROR;
+    GST_VIDEO_DECODER_STREAM_UNLOCK (self);
+    g_mutex_lock (&self->drain_lock);
+    self->draining = FALSE;
+    g_cond_broadcast (&self->drain_cond);
+    g_mutex_unlock (&self->drain_lock);
+    return;
+  }
+
 invalid_buffer:
   {
     GST_ELEMENT_ERROR (self, LIBRARY, SETTINGS, (NULL),
@@ -1590,6 +1652,10 @@ invalid_buffer:
   }
 gl_output_error:
   {
+    if (buf) {
+      gst_amc_buffer_free (buf);
+      buf = NULL;
+    }
     gst_pad_push_event (GST_VIDEO_DECODER_SRC_PAD (self), gst_event_new_eos ());
     gst_pad_pause_task (GST_VIDEO_DECODER_SRC_PAD (self));
     self->downstream_flow_ret = GST_FLOW_NOT_NEGOTIATED;
@@ -1659,7 +1725,6 @@ gst_amc_video_dec_new_on_frame_available_listener (GstAmcVideoDec * decoder,
   jobject listener = NULL;
   jclass listener_cls = NULL;
   jmethodID constructor_id = 0;
-  jmethodID set_context_id = 0;
 
   JNINativeMethod amcOnFrameAvailableListener = {
     "native_onFrameAvailable",
@@ -1687,9 +1752,9 @@ gst_amc_video_dec_new_on_frame_available_listener (GstAmcVideoDec * decoder,
     goto done;
   }
 
-  set_context_id =
+  decoder->set_context_id =
       gst_amc_jni_get_method_id (env, err, listener_cls, "setContext", "(J)V");
-  if (!set_context_id) {
+  if (!decoder->set_context_id) {
     goto done;
   }
 
@@ -1700,7 +1765,7 @@ gst_amc_video_dec_new_on_frame_available_listener (GstAmcVideoDec * decoder,
   }
 
   if (!gst_amc_jni_call_void_method (env, err, listener,
-          set_context_id, GST_AMC_VIDEO_DEC_TO_JLONG (decoder))) {
+          decoder->set_context_id, GST_AMC_VIDEO_DEC_TO_JLONG (decoder))) {
     gst_amc_jni_object_unref (env, listener);
     listener = NULL;
   }
@@ -1919,7 +1984,6 @@ gst_amc_video_dec_set_format (GstVideoDecoder * decoder,
   } else if (self->downstream_supports_gl && !self->surface) {
     int ret = TRUE;
     JNIEnv *env = NULL;
-    jobject listener = NULL;
     GstAmcSurfaceTexture *surface_texture = NULL;
 
     env = gst_amc_jni_get_env ();
@@ -1929,15 +1993,24 @@ gst_amc_video_dec_set_format (GstVideoDecoder * decoder,
       return FALSE;
     }
 
-    listener =
+    if (self->listener) {
+      if (!gst_amc_jni_call_void_method (env, &err, self->listener,
+              self->set_context_id, GST_AMC_VIDEO_DEC_TO_JLONG (NULL))) {
+        ret = FALSE;
+        goto done;
+      }
+
+      gst_amc_jni_object_unref (env, self->listener);
+    }
+    self->listener =
         gst_amc_video_dec_new_on_frame_available_listener (self, env, &err);
-    if (!listener) {
+    if (!self->listener) {
       ret = FALSE;
       goto done;
     }
 
     if (!gst_amc_surface_texture_set_on_frame_available_listener
-        (surface_texture, listener, &err)) {
+        (surface_texture, self->listener, &err)) {
       ret = FALSE;
       goto done;
     }
@@ -1947,7 +2020,6 @@ gst_amc_video_dec_set_format (GstVideoDecoder * decoder,
 
   done:
     g_object_unref (surface_texture);
-    gst_amc_jni_object_unref (env, listener);
     if (!ret) {
       GST_ELEMENT_ERROR_FROM_ERROR (self, err);
       return FALSE;
@@ -2121,8 +2193,10 @@ gst_amc_video_dec_handle_frame (GstVideoDecoder * decoder,
     /* Copy the buffer content in chunks of size as requested
      * by the port */
     buf = gst_amc_codec_get_input_buffer (self->codec, idx, &err);
-    if (!buf)
+    if (err)
       goto failed_to_get_input_buffer;
+    else if (!buf)
+      goto got_null_input_buffer;
 
     memset (&buffer_info, 0, sizeof (buffer_info));
     buffer_info.offset = 0;
@@ -2191,6 +2265,15 @@ downstream_error:
 failed_to_get_input_buffer:
   {
     GST_ELEMENT_ERROR_FROM_ERROR (self, err);
+    if (minfo.data)
+      gst_buffer_unmap (frame->input_buffer, &minfo);
+    gst_video_codec_frame_unref (frame);
+    return GST_FLOW_ERROR;
+  }
+got_null_input_buffer:
+  {
+    GST_ELEMENT_ERROR (self, LIBRARY, SETTINGS, (NULL),
+        ("Got no input buffer"));
     if (minfo.data)
       gst_buffer_unmap (frame->input_buffer, &minfo);
     gst_video_codec_frame_unref (frame);
@@ -2486,6 +2569,10 @@ gst_amc_video_dec_on_frame_available (JNIEnv * env, jobject thiz,
     long long context, jobject surfaceTexture)
 {
   GstAmcVideoDec *self = JLONG_TO_GST_AMC_VIDEO_DEC (context);
+
+  /* apparently we can be called after the decoder has been closed */
+  if (!self)
+    return;
 
   g_mutex_lock (&self->gl_lock);
   self->gl_ready_frame_count++;

@@ -33,25 +33,22 @@ GstFaac GstPreset
 GstFaceOverlay GstChildProxy
 GstFreeverb GstPreset
 GstGLBaseMixer GstChildProxy
+GstGLColorBalance GstColorBalance
 GstGLFilterBin GstChildProxy
 GstGLImageSink GstVideoOverlay
 GstGLImageSink GstVideoOverlay GstNavigation
 GstGLImageSinkBin GstChildProxy GstVideoOverlay GstNavigation
+GstGLImageSinkBin GstChildProxy GstVideoOverlay GstNavigation GstColorBalance
 GstGLMixer GstChildProxy
 GstGLMixerBin GstChildProxy
 GstGLMosaic GstChildProxy
 GstGLSinkBin GstChildProxy GstVideoOverlay GstNavigation
+GstGLSinkBin GstChildProxy GstVideoOverlay GstNavigation GstColorBalance
 GstGLSrcBin GstChildProxy
 GstGLStereoMix GstChildProxy
 GstGLVideoMixer GstChildProxy
 GstGLVideoMixerBin GstChildProxy
 GstGSMEnc GstPreset
-GstGSettingsAudioSink GstChildProxy
-GstGSettingsAudioSrc GstChildProxy
-GstGSettingsSwitchSink GstChildProxy
-GstGSettingsSwitchSrc GstChildProxy
-GstGSettingsVideoSink GstChildProxy
-GstGSettingsVideoSrc GstChildProxy
 GstGtkBaseSink GstNavigation
 GstGtkGLSink GstNavigation
 GstGtkSink GstNavigation

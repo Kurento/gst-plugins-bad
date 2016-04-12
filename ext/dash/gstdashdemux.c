@@ -233,19 +233,20 @@ static gboolean gst_dash_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek);
 static GstFlowReturn
 gst_dash_demux_stream_update_fragment_info (GstAdaptiveDemuxStream * stream);
 static GstFlowReturn gst_dash_demux_stream_seek (GstAdaptiveDemuxStream *
-    stream, GstClockTime ts);
-static gboolean
-gst_dash_demux_stream_has_next_fragment (GstAdaptiveDemuxStream * stream);
+    stream, gboolean forward, GstSeekFlags flags, GstClockTime ts,
+    GstClockTime * final_ts);
+static gboolean gst_dash_demux_stream_has_next_fragment (GstAdaptiveDemuxStream
+    * stream);
 static GstFlowReturn
 gst_dash_demux_stream_advance_fragment (GstAdaptiveDemuxStream * stream);
 static gboolean
 gst_dash_demux_stream_advance_subfragment (GstAdaptiveDemuxStream * stream);
 static gboolean gst_dash_demux_stream_select_bitrate (GstAdaptiveDemuxStream *
     stream, guint64 bitrate);
-static gint64
-gst_dash_demux_get_manifest_update_interval (GstAdaptiveDemux * demux);
-static GstFlowReturn
-gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux, GstBuffer * buf);
+static gint64 gst_dash_demux_get_manifest_update_interval (GstAdaptiveDemux *
+    demux);
+static GstFlowReturn gst_dash_demux_update_manifest_data (GstAdaptiveDemux *
+    demux, GstBuffer * buf);
 static gint64
 gst_dash_demux_stream_get_fragment_waiting_time (GstAdaptiveDemuxStream *
     stream);
@@ -309,18 +310,33 @@ gst_dash_demux_get_live_seek_range (GstAdaptiveDemux * demux, gint64 * start,
     gint64 * stop)
 {
   GstDashDemux *self = GST_DASH_DEMUX (demux);
-  GDateTime *now = gst_dash_demux_get_server_now_utc (self);
-  GDateTime *mstart =
-      gst_date_time_to_g_date_time (self->client->mpd_node->
-      availabilityStartTime);
+  GDateTime *now;
+  GDateTime *mstart;
   GTimeSpan stream_now;
 
+  if (self->client->mpd_node->availabilityStartTime == NULL)
+    return FALSE;
+
+  now = gst_dash_demux_get_server_now_utc (self);
+  mstart =
+      gst_date_time_to_g_date_time (self->client->
+      mpd_node->availabilityStartTime);
   stream_now = g_date_time_difference (now, mstart);
   g_date_time_unref (now);
   g_date_time_unref (mstart);
-  *stop = stream_now * GST_USECOND;
 
-  *start = *stop - (self->client->mpd_node->timeShiftBufferDepth * GST_MSECOND);
+  if (stream_now <= 0)
+    return FALSE;
+
+  *stop = stream_now * GST_USECOND;
+  if (self->client->mpd_node->timeShiftBufferDepth == GST_MPD_DURATION_NONE) {
+    *start = 0;
+  } else {
+    *start =
+        *stop - (self->client->mpd_node->timeShiftBufferDepth * GST_MSECOND);
+    if (*start < 0)
+      *start = 0;
+  }
   return TRUE;
 }
 
@@ -684,6 +700,11 @@ gst_dash_demux_setup_streams (GstAdaptiveDemux * demux)
   period_idx = 0;
   if (gst_mpd_client_is_live (dashdemux->client)) {
     GDateTime *g_now;
+    if (dashdemux->client->mpd_node->availabilityStartTime == NULL) {
+      ret = FALSE;
+      GST_ERROR_OBJECT (demux, "MPD does not have availabilityStartTime");
+      goto done;
+    }
     if (dashdemux->clock_drift == NULL) {
       gchar **urls;
       urls =
@@ -827,7 +848,7 @@ gst_dash_demux_create_pad (GstDashDemux * demux, GstActiveStream * stream)
   }
 
   /* Create and activate new pads */
-  pad = gst_ghost_pad_new_no_target_from_template (name, tmpl);
+  pad = gst_pad_new_from_template (tmpl, name);
   g_free (name);
   gst_object_unref (tmpl);
 
@@ -1061,7 +1082,8 @@ gst_dash_demux_index_entry_search (GstSidxBoxEntry * entry, GstClockTime * ts,
 
 static void
 gst_dash_demux_stream_sidx_seek (GstDashDemuxStream * dashstream,
-    GstClockTime ts)
+    gboolean forward, GstSeekFlags flags, GstClockTime ts,
+    GstClockTime * final_ts)
 {
   GstSidxBox *sidx = SIDX (dashstream);
   GstSidxBoxEntry *entry;
@@ -1071,36 +1093,68 @@ gst_dash_demux_stream_sidx_seek (GstDashDemuxStream * dashstream,
   if (sidx->entries[idx - 1].pts + sidx->entries[idx - 1].duration < ts) {
     dashstream->sidx_current_remaining = 0;
   } else {
+    GstSearchMode mode = GST_SEARCH_MODE_BEFORE;
+
+    if ((flags & GST_SEEK_FLAG_SNAP_NEAREST) == GST_SEEK_FLAG_SNAP_NEAREST) {
+      mode = GST_SEARCH_MODE_BEFORE;
+    } else if ((forward && (flags & GST_SEEK_FLAG_SNAP_AFTER)) ||
+        (!forward && (flags & GST_SEEK_FLAG_SNAP_BEFORE))) {
+      mode = GST_SEARCH_MODE_AFTER;
+    } else {
+      mode = GST_SEARCH_MODE_BEFORE;
+    }
+
     entry =
         gst_util_array_binary_search (sidx->entries, sidx->entries_count,
         sizeof (GstSidxBoxEntry),
-        (GCompareDataFunc) gst_dash_demux_index_entry_search,
-        GST_SEARCH_MODE_BEFORE, &ts, NULL);
+        (GCompareDataFunc) gst_dash_demux_index_entry_search, mode, &ts, NULL);
 
     idx = entry - sidx->entries;
+
+    /* FIXME in reverse mode, if we are exactly at a fragment start it makes more
+     * sense to start from the end of the previous fragment */
+    /* FIXME we should have a GST_SEARCH_MODE_NEAREST */
+    if ((flags & GST_SEEK_FLAG_SNAP_NEAREST) == GST_SEEK_FLAG_SNAP_NEAREST &&
+        idx + 1 < sidx->entries_count) {
+      if (ABS (sidx->entries[idx + 1].pts - ts) <
+          ABS (sidx->entries[idx].pts - ts))
+        idx += 1;
+    }
+
     dashstream->sidx_current_remaining = sidx->entries[idx].size;
   }
 
   sidx->entry_index = idx;
   dashstream->sidx_index = idx;
+
+  if (final_ts) {
+    if (idx == sidx->entries_count)
+      *final_ts = sidx->entries[idx].pts + sidx->entries[idx].duration;
+    else
+      *final_ts = sidx->entries[idx].pts;
+  }
 }
 
 static GstFlowReturn
-gst_dash_demux_stream_seek (GstAdaptiveDemuxStream * stream, GstClockTime ts)
+gst_dash_demux_stream_seek (GstAdaptiveDemuxStream * stream, gboolean forward,
+    GstSeekFlags flags, GstClockTime ts, GstClockTime * final_ts)
 {
   GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
   GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (stream->demux);
 
   if (gst_mpd_client_has_isoff_ondemand_profile (dashdemux->client)) {
     if (dashstream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED) {
-      gst_dash_demux_stream_sidx_seek (dashstream, ts);
+      gst_dash_demux_stream_sidx_seek (dashstream, forward, flags, ts,
+          final_ts);
     } else {
       /* no index yet, seek when we have it */
+      /* FIXME - the final_ts won't be correct here */
       dashstream->pending_seek_ts = ts;
     }
   }
 
-  gst_mpd_client_stream_seek (dashdemux->client, dashstream->active_stream, ts);
+  gst_mpd_client_stream_seek (dashdemux->client, dashstream->active_stream,
+      forward, flags, ts, final_ts);
   return GST_FLOW_OK;
 }
 
@@ -1254,6 +1308,10 @@ end:
   return ret;
 }
 
+#define SEEK_UPDATES_PLAY_POSITION(r, start_type, stop_type) \
+  ((r >= 0 && start_type != GST_SEEK_TYPE_NONE) || \
+   (r < 0 && stop_type != GST_SEEK_TYPE_NONE))
+
 static gboolean
 gst_dash_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
 {
@@ -1273,11 +1331,16 @@ gst_dash_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
   gst_event_parse_seek (seek, &rate, &format, &flags, &start_type, &start,
       &stop_type, &stop);
 
-  /* TODO check if start-type/stop-type is SET */
-  if (demux->segment.rate > 0.0)
-    target_pos = (GstClockTime) demux->segment.start;
-  else
-    target_pos = (GstClockTime) demux->segment.stop;
+  if (!SEEK_UPDATES_PLAY_POSITION (rate, start_type, stop_type)) {
+    /* nothing to do if we don't have to update the current position */
+    return TRUE;
+  }
+
+  if (demux->segment.rate > 0.0) {
+    target_pos = (GstClockTime) start;
+  } else {
+    target_pos = (GstClockTime) stop;
+  }
 
   /* select the requested Period in the Media Presentation */
   if (!gst_mpd_client_setup_media_presentation (dashdemux->client, target_pos,
@@ -1326,7 +1389,7 @@ gst_dash_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
       gst_isoff_sidx_parser_clear (&dashstream->sidx_parser);
       gst_isoff_sidx_parser_init (&dashstream->sidx_parser);
     }
-    gst_dash_demux_stream_seek (iter->data, target_pos);
+    gst_dash_demux_stream_seek (iter->data, rate >= 0, 0, target_pos, NULL);
   }
   return TRUE;
 }
@@ -1379,17 +1442,23 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
     if (period_id) {
       if (!gst_mpd_client_set_period_id (new_client, period_id)) {
         GST_DEBUG_OBJECT (demux, "Error setting up the updated manifest file");
+        gst_mpd_client_free (new_client);
+        gst_buffer_unmap (buffer, &mapinfo);
         return GST_FLOW_EOS;
       }
     } else {
       if (!gst_mpd_client_set_period_index (new_client, period_idx)) {
         GST_DEBUG_OBJECT (demux, "Error setting up the updated manifest file");
+        gst_mpd_client_free (new_client);
+        gst_buffer_unmap (buffer, &mapinfo);
         return GST_FLOW_EOS;
       }
     }
 
     if (!gst_dash_demux_setup_mpdparser_streams (dashdemux, new_client)) {
       GST_ERROR_OBJECT (demux, "Failed to setup streams on manifest " "update");
+      gst_mpd_client_free (new_client);
+      gst_buffer_unmap (buffer, &mapinfo);
       return GST_FLOW_ERROR;
     }
 
@@ -1405,6 +1474,8 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
         GST_DEBUG_OBJECT (demux,
             "Stream of index %d is missing from manifest update",
             demux_stream->index);
+        gst_mpd_client_free (new_client);
+        gst_buffer_unmap (buffer, &mapinfo);
         return GST_FLOW_EOS;
       }
 
@@ -1424,7 +1495,8 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
             GST_TIME_FORMAT, GST_TIME_ARGS (ts),
             GST_TIME_ARGS (ts + (10 * GST_USECOND)));
         ts += 10 * GST_USECOND;
-        gst_mpd_client_stream_seek (new_client, new_stream, ts);
+        gst_mpd_client_stream_seek (new_client, new_stream,
+            demux->segment.rate >= 0, 0, ts, NULL);
       }
 
       demux_stream->active_stream = new_stream;
@@ -1442,6 +1514,7 @@ gst_dash_demux_update_manifest_data (GstAdaptiveDemux * demux,
      * source element and we have received the 404 HTML response instead of
      * the manifest */
     GST_WARNING_OBJECT (demux, "Error parsing the manifest.");
+    gst_mpd_client_free (new_client);
     gst_buffer_unmap (buffer, &mapinfo);
     return GST_FLOW_ERROR;
   }
@@ -1457,20 +1530,21 @@ gst_dash_demux_stream_get_fragment_waiting_time (GstAdaptiveDemuxStream *
 {
   GstDashDemux *dashdemux = GST_DASH_DEMUX_CAST (stream->demux);
   GstDashDemuxStream *dashstream = (GstDashDemuxStream *) stream;
-  GstDateTime *seg_end_time;
+  GstDateTime *segmentAvailability;
   GstActiveStream *active_stream = dashstream->active_stream;
 
-  seg_end_time =
-      gst_mpd_client_get_next_segment_availability_end_time (dashdemux->client,
-      active_stream);
+  segmentAvailability =
+      gst_mpd_client_get_next_segment_availability_start_time
+      (dashdemux->client, active_stream);
 
-  if (seg_end_time) {
+  if (segmentAvailability) {
     gint64 diff;
     GstDateTime *cur_time;
 
     cur_time = gst_date_time_new_now_utc ();
-    diff = gst_mpd_client_calculate_time_difference (cur_time, seg_end_time);
-    gst_date_time_unref (seg_end_time);
+    diff = gst_mpd_client_calculate_time_difference (cur_time,
+        segmentAvailability);
+    gst_date_time_unref (segmentAvailability);
     gst_date_time_unref (cur_time);
     /* subtract the server's clock drift, so that if the server's
        time is behind our idea of UTC, we need to sleep for longer
@@ -1584,8 +1658,10 @@ gst_dash_demux_data_received (GstAdaptiveDemux * demux,
         /* when finished, prepare for real data streaming */
         if (dash_stream->sidx_parser.status == GST_ISOFF_SIDX_PARSER_FINISHED) {
           if (GST_CLOCK_TIME_IS_VALID (dash_stream->pending_seek_ts)) {
+            /* FIXME, preserve seek flags */
             gst_dash_demux_stream_sidx_seek (dash_stream,
-                dash_stream->pending_seek_ts);
+                demux->segment.rate >= 0, 0, dash_stream->pending_seek_ts,
+                NULL);
             dash_stream->pending_seek_ts = GST_CLOCK_TIME_NONE;
           } else {
             SIDX (dash_stream)->entry_index = dash_stream->sidx_index;
@@ -1916,15 +1992,17 @@ static GstDateTime *
 gst_dash_demux_parse_http_xsdate (GstDashDemuxClockDrift * clock_drift,
     GstBuffer * buffer)
 {
-  GstDateTime *value;
+  GstDateTime *value = NULL;
   GstMapInfo mapinfo;
 
   /* the string from the server might not be zero terminated */
-  gst_buffer_resize (buffer, 0, gst_buffer_get_size (buffer) + 1);
-  gst_buffer_map (buffer, &mapinfo, GST_MAP_READ | GST_MAP_WRITE);
-  mapinfo.data[mapinfo.size - 1] = '\0';
-  value = gst_date_time_new_from_iso8601_string ((const gchar *) mapinfo.data);
-  gst_buffer_unmap (buffer, &mapinfo);
+  if (gst_buffer_map (buffer, &mapinfo, GST_MAP_READ)) {
+    gchar *str;
+    str = g_strndup ((const gchar *) mapinfo.data, mapinfo.size);
+    gst_buffer_unmap (buffer, &mapinfo);
+    value = gst_date_time_new_from_iso8601_string (str);
+    g_free (str);
+  }
   return value;
 }
 

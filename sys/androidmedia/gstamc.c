@@ -29,6 +29,8 @@
 #define orc_memcpy memcpy
 #endif
 
+#include "gstahcsrc.h"
+
 #include "gstamc.h"
 #include "gstamc-constants.h"
 
@@ -360,28 +362,33 @@ gst_amc_codec_get_output_buffer (GstAmcCodec * codec, gint index, GError ** err)
 
   if (!media_codec.get_output_buffer) {
     g_return_val_if_fail (index < codec->n_output_buffers && index >= 0, NULL);
-    return gst_amc_buffer_copy (&codec->output_buffers[index]);
+    if (codec->output_buffers[index].object)
+      return gst_amc_buffer_copy (&codec->output_buffers[index]);
+    else
+      return NULL;
   }
 
   if (!gst_amc_jni_call_object_method (env, err, codec->object,
           media_codec.get_output_buffer, &buffer, index))
     goto done;
 
-  ret = g_new0 (GstAmcBuffer, 1);
-  ret->object = gst_amc_jni_object_make_global (env, buffer);
-  if (!ret->object) {
-    gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
-        GST_LIBRARY_ERROR_FAILED, "Failed to create global buffer reference");
-    goto error;
-  }
+  if (buffer != NULL) {
+    ret = g_new0 (GstAmcBuffer, 1);
+    ret->object = gst_amc_jni_object_make_global (env, buffer);
+    if (!ret->object) {
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
+          GST_LIBRARY_ERROR_FAILED, "Failed to create global buffer reference");
+      goto error;
+    }
 
-  ret->data = (*env)->GetDirectBufferAddress (env, ret->object);
-  if (!ret->data) {
-    gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
-        GST_LIBRARY_ERROR_FAILED, "Failed to get buffer address");
-    goto error;
+    ret->data = (*env)->GetDirectBufferAddress (env, ret->object);
+    if (!ret->data) {
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
+          GST_LIBRARY_ERROR_FAILED, "Failed to get buffer address");
+      goto error;
+    }
+    ret->size = (*env)->GetDirectBufferCapacity (env, ret->object);
   }
-  ret->size = (*env)->GetDirectBufferCapacity (env, ret->object);
 
 done:
 
@@ -436,28 +443,33 @@ gst_amc_codec_get_input_buffer (GstAmcCodec * codec, gint index, GError ** err)
 
   if (!media_codec.get_input_buffer) {
     g_return_val_if_fail (index < codec->n_input_buffers && index >= 0, NULL);
-    return gst_amc_buffer_copy (&codec->input_buffers[index]);
+    if (codec->input_buffers[index].object)
+      return gst_amc_buffer_copy (&codec->input_buffers[index]);
+    else
+      return NULL;
   }
 
   if (!gst_amc_jni_call_object_method (env, err, codec->object,
           media_codec.get_input_buffer, &buffer, index))
     goto done;
 
-  ret = g_new0 (GstAmcBuffer, 1);
-  ret->object = gst_amc_jni_object_make_global (env, buffer);
-  if (!ret->object) {
-    gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
-        GST_LIBRARY_ERROR_FAILED, "Failed to create global buffer reference");
-    goto error;
-  }
+  if (buffer != NULL) {
+    ret = g_new0 (GstAmcBuffer, 1);
+    ret->object = gst_amc_jni_object_make_global (env, buffer);
+    if (!ret->object) {
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
+          GST_LIBRARY_ERROR_FAILED, "Failed to create global buffer reference");
+      goto error;
+    }
 
-  ret->data = (*env)->GetDirectBufferAddress (env, ret->object);
-  if (!ret->data) {
-    gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
-        GST_LIBRARY_ERROR_FAILED, "Failed to get buffer address");
-    goto error;
+    ret->data = (*env)->GetDirectBufferAddress (env, ret->object);
+    if (!ret->data) {
+      gst_amc_jni_set_error (env, err, GST_LIBRARY_ERROR,
+          GST_LIBRARY_ERROR_FAILED, "Failed to get buffer address");
+      goto error;
+    }
+    ret->size = (*env)->GetDirectBufferCapacity (env, ret->object);
   }
-  ret->size = (*env)->GetDirectBufferCapacity (env, ret->object);
 
 done:
 
@@ -3316,7 +3328,34 @@ plugin_init (GstPlugin * plugin)
   if (!register_codecs (plugin))
     return FALSE;
 
+  if (!gst_android_graphics_surfacetexture_init ()) {
+    GST_ERROR ("Failed to init android surface texture");
+    return FALSE;
+  }
+
+  if (!gst_android_graphics_imageformat_init ()) {
+    GST_ERROR ("Failed to init android image format");
+    goto failed_surfacetexture;
+  }
+
+  if (!gst_android_hardware_camera_init ()) {
+    goto failed_graphics_imageformat;
+  }
+
+  if (!gst_element_register (plugin, "ahcsrc", GST_RANK_NONE, GST_TYPE_AHC_SRC)) {
+    GST_ERROR ("Failed to register android camera source");
+    goto failed_hardware_camera;
+  }
+
   return TRUE;
+
+failed_hardware_camera:
+  gst_android_hardware_camera_deinit ();
+failed_graphics_imageformat:
+  gst_android_graphics_imageformat_deinit ();
+failed_surfacetexture:
+  gst_android_graphics_surfacetexture_deinit ();
+  return FALSE;
 }
 
 void

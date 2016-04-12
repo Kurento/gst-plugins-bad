@@ -122,9 +122,10 @@ static gboolean gst_mss_demux_process_manifest (GstAdaptiveDemux * demux,
 static GstClockTime gst_mss_demux_get_duration (GstAdaptiveDemux * demux);
 static void gst_mss_demux_reset (GstAdaptiveDemux * demux);
 static GstFlowReturn gst_mss_demux_stream_seek (GstAdaptiveDemuxStream * stream,
-    GstClockTime ts);
-static gboolean
-gst_mss_demux_stream_has_next_fragment (GstAdaptiveDemuxStream * stream);
+    gboolean forward, GstSeekFlags flags, GstClockTime ts,
+    GstClockTime * final_ts);
+static gboolean gst_mss_demux_stream_has_next_fragment (GstAdaptiveDemuxStream *
+    stream);
 static GstFlowReturn
 gst_mss_demux_stream_advance_fragment (GstAdaptiveDemuxStream * stream);
 static gboolean gst_mss_demux_stream_select_bitrate (GstAdaptiveDemuxStream *
@@ -304,11 +305,13 @@ gst_mss_demux_stream_update_fragment_info (GstAdaptiveDemuxStream * stream)
 }
 
 static GstFlowReturn
-gst_mss_demux_stream_seek (GstAdaptiveDemuxStream * stream, GstClockTime ts)
+gst_mss_demux_stream_seek (GstAdaptiveDemuxStream * stream, gboolean forward,
+    GstSeekFlags flags, GstClockTime ts, GstClockTime * final_ts)
 {
   GstMssDemuxStream *mssstream = (GstMssDemuxStream *) stream;
 
-  gst_mss_stream_seek (mssstream->manifest_stream, ts);
+  gst_mss_stream_seek (mssstream->manifest_stream, forward, flags, ts,
+      final_ts);
   return GST_FLOW_OK;
 }
 
@@ -354,8 +357,7 @@ _create_pad (GstMssDemux * mssdemux, GstMssStream * manifeststream)
   }
 
   if (tmpl != NULL) {
-    srcpad =
-        GST_PAD_CAST (gst_ghost_pad_new_no_target_from_template (name, tmpl));
+    srcpad = GST_PAD_CAST (gst_pad_new_from_template (tmpl, name));
     g_free (name);
     gst_object_unref (tmpl);
   }
@@ -585,6 +587,10 @@ gst_mss_demux_stream_select_bitrate (GstAdaptiveDemuxStream * stream,
   return ret;
 }
 
+#define SEEK_UPDATES_PLAY_POSITION(r, start_type, stop_type) \
+  ((r >= 0 && start_type != GST_SEEK_TYPE_NONE) || \
+   (r < 0 && stop_type != GST_SEEK_TYPE_NONE))
+
 static gboolean
 gst_mss_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
 {
@@ -602,7 +608,12 @@ gst_mss_demux_seek (GstAdaptiveDemux * demux, GstEvent * seek)
       "seek event, rate: %f start: %" GST_TIME_FORMAT " stop: %"
       GST_TIME_FORMAT, rate, GST_TIME_ARGS (start), GST_TIME_ARGS (stop));
 
-  gst_mss_manifest_seek (mssdemux->manifest, start);
+  if (SEEK_UPDATES_PLAY_POSITION (rate, start_type, stop_type)) {
+    if (rate >= 0)
+      gst_mss_manifest_seek (mssdemux->manifest, rate >= 0, start);
+    else
+      gst_mss_manifest_seek (mssdemux->manifest, rate >= 0, stop);
+  }
 
   return TRUE;
 }

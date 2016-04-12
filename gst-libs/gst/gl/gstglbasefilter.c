@@ -26,6 +26,18 @@
 
 #include <gst/gl/gl.h>
 
+/**
+ * SECTION:gstglbasefilter
+ * @short_description: #GstBaseTransform subclass for transformin OpenGL resources
+ * @title: GstGLBaseFilter
+ * @see_also: #GstBaseTransform
+ *
+ * #GstGLBaseFilter handles the nitty gritty details of retrieving an OpenGL
+ * context.  It also provided some wrappers around #GstBaseTransform's
+ * start(), stop() and set_caps() virtual methods that ensure an OpenGL context
+ * is available and current in the calling thread.
+ */
+
 #define GST_CAT_DEFAULT gst_gl_base_filter_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
@@ -53,6 +65,7 @@ G_DEFINE_TYPE_WITH_CODE (GstGLBaseFilter, gst_gl_base_filter,
         "glbasefilter", 0, "glbasefilter element");
     );
 
+static void gst_gl_base_filter_finalize (GObject * object);
 static void gst_gl_base_filter_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_gl_base_filter_get_property (GObject * object, guint prop_id,
@@ -67,6 +80,8 @@ static gboolean gst_gl_base_filter_query (GstBaseTransform * trans,
 static void gst_gl_base_filter_reset (GstGLBaseFilter * filter);
 static gboolean gst_gl_base_filter_start (GstBaseTransform * bt);
 static gboolean gst_gl_base_filter_stop (GstBaseTransform * bt);
+static gboolean gst_gl_base_filter_set_caps (GstBaseTransform * bt,
+    GstCaps * incaps, GstCaps * outcaps);
 static gboolean gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
     GstQuery * query);
 
@@ -85,10 +100,12 @@ gst_gl_base_filter_class_init (GstGLBaseFilterClass * klass)
   gobject_class = (GObjectClass *) klass;
   element_class = GST_ELEMENT_CLASS (klass);
 
+  gobject_class->finalize = gst_gl_base_filter_finalize;
   gobject_class->set_property = gst_gl_base_filter_set_property;
   gobject_class->get_property = gst_gl_base_filter_get_property;
 
   GST_BASE_TRANSFORM_CLASS (klass)->query = gst_gl_base_filter_query;
+  GST_BASE_TRANSFORM_CLASS (klass)->set_caps = gst_gl_base_filter_set_caps;
   GST_BASE_TRANSFORM_CLASS (klass)->start = gst_gl_base_filter_start;
   GST_BASE_TRANSFORM_CLASS (klass)->stop = gst_gl_base_filter_stop;
   GST_BASE_TRANSFORM_CLASS (klass)->decide_allocation =
@@ -109,7 +126,20 @@ gst_gl_base_filter_class_init (GstGLBaseFilterClass * klass)
 static void
 gst_gl_base_filter_init (GstGLBaseFilter * filter)
 {
+  gst_base_transform_set_qos_enabled (GST_BASE_TRANSFORM (filter), TRUE);
+
   filter->priv = GST_GL_BASE_FILTER_GET_PRIVATE (filter);
+}
+
+static void
+gst_gl_base_filter_finalize (GObject * object)
+{
+  GstGLBaseFilter *filter = GST_GL_BASE_FILTER (object);
+
+  gst_caps_replace (&filter->in_caps, NULL);
+  gst_caps_replace (&filter->out_caps, NULL);
+
+  G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
 static void
@@ -325,11 +355,22 @@ gst_gl_base_filter_gl_stop (GstGLContext * context, gpointer data)
   filter->priv->gl_started = FALSE;
 }
 
+static void
+_gl_set_caps (GstGLContext * context, GstGLBaseFilter * filter)
+{
+  GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
+
+  if (filter_class->gl_set_caps)
+    filter->priv->gl_result =
+        filter_class->gl_set_caps (filter, filter->in_caps, filter->out_caps);
+}
+
 static gboolean
 gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
     GstQuery * query)
 {
   GstGLBaseFilter *filter = GST_GL_BASE_FILTER (trans);
+  GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
   GError *error = NULL;
   gboolean new_context = FALSE;
 
@@ -357,10 +398,16 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
     GST_OBJECT_UNLOCK (filter->display);
   }
 
-  if (new_context) {
+  if (new_context || !filter->priv->gl_started) {
     if (filter->priv->gl_started)
       gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_stop,
           filter);
+
+    {
+      GstGLAPI current_gl_api = gst_gl_context_get_gl_api (filter->context);
+      if ((current_gl_api & filter_class->supported_gl_api) == 0)
+        goto unsupported_gl_api;
+    }
 
     gst_gl_context_thread_add (filter->context, gst_gl_base_filter_gl_start,
         filter);
@@ -369,9 +416,29 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
       goto error;
   }
 
+  gst_gl_context_thread_add (filter->context,
+      (GstGLContextThreadFunc) _gl_set_caps, filter);
+  if (!filter->priv->gl_result)
+    goto error;
+
   return GST_BASE_TRANSFORM_CLASS (parent_class)->decide_allocation (trans,
       query);
 
+
+unsupported_gl_api:
+  {
+    GstGLAPI gl_api = gst_gl_context_get_gl_api (filter->context);
+    gchar *gl_api_str = gst_gl_api_to_string (gl_api);
+    gchar *supported_gl_api_str =
+        gst_gl_api_to_string (filter_class->supported_gl_api);
+    GST_ELEMENT_ERROR (filter, RESOURCE, BUSY,
+        ("GL API's not compatible context: %s supported: %s", gl_api_str,
+            supported_gl_api_str), (NULL));
+
+    g_free (supported_gl_api_str);
+    g_free (gl_api_str);
+    return FALSE;
+  }
 context_error:
   {
     GST_ELEMENT_ERROR (trans, RESOURCE, NOT_FOUND, ("%s", error->message),
@@ -385,6 +452,18 @@ error:
         ("Subclass failed to initialize."), (NULL));
     return FALSE;
   }
+}
+
+static gboolean
+gst_gl_base_filter_set_caps (GstBaseTransform * bt, GstCaps * incaps,
+    GstCaps * outcaps)
+{
+  GstGLBaseFilter *filter = GST_GL_BASE_FILTER (bt);
+
+  gst_caps_replace (&filter->in_caps, incaps);
+  gst_caps_replace (&filter->out_caps, outcaps);
+
+  return TRUE;
 }
 
 static GstStateChangeReturn

@@ -34,8 +34,8 @@
  * @short_description: memory subclass for GL textures
  * @see_also: #GstMemory, #GstAllocator, #GstGLBufferPool
  *
- * GstGLMemoryPBO is a #GstGLMemory subclass providing support for the mapping of
- * GL textures.  
+ * #GstGLMemoryPBO is created or wrapped through gst_gl_base_memory_alloc()
+ * with #GstGLVideoAllocationParams.
  *
  * #GstGLMemoryPBO is created through gst_gl_memory_pbo_alloc() or system memory can
  * be wrapped through gst_gl_memory_pbo_wrapped().
@@ -136,9 +136,7 @@ _upload_pbo_memory (GstGLMemoryPBO * gl_mem, GstMapInfo * info,
 {
   GstGLContext *context = gl_mem->mem.mem.context;
   const GstGLFuncs *gl;
-  guint gl_format, gl_type, gl_target;
   guint pbo_id;
-  gsize plane_start;
 
   if (!GST_MEMORY_FLAG_IS_SET (gl_mem, GST_GL_BASE_MEMORY_TRANSFER_NEED_UPLOAD))
     return;
@@ -148,42 +146,13 @@ _upload_pbo_memory (GstGLMemoryPBO * gl_mem, GstMapInfo * info,
   gl = context->gl_vtable;
   pbo_id = *(guint *) pbo_info->data;
 
-  gl_type = GL_UNSIGNED_BYTE;
-  if (gl_mem->mem.tex_type == GST_VIDEO_GL_TEXTURE_TYPE_RGB16)
-    gl_type = GL_UNSIGNED_SHORT_5_6_5;
-
-  gl_format = gst_gl_format_from_gl_texture_type (gl_mem->mem.tex_type);
-  gl_target = gst_gl_texture_target_to_gl (gl_mem->mem.tex_target);
-
-  if (USING_OPENGL (context) || USING_GLES3 (context)
-      || USING_OPENGL3 (context)) {
-    gl->PixelStorei (GL_UNPACK_ROW_LENGTH, gl_mem->mem.unpack_length);
-  } else if (USING_GLES2 (context)) {
-    gl->PixelStorei (GL_UNPACK_ALIGNMENT, gl_mem->mem.unpack_length);
-  }
-
   GST_CAT_LOG (GST_CAT_GL_MEMORY, "upload for texture id:%u, with pbo %u %ux%u",
       gl_mem->mem.tex_id, pbo_id, gl_mem->mem.tex_width,
       GL_MEM_HEIGHT (gl_mem));
 
-  /* find the start of the plane data including padding */
-  plane_start =
-      gst_gl_get_plane_start (&gl_mem->mem.info, &gl_mem->mem.valign,
-      gl_mem->mem.plane) + GST_MEMORY_CAST (gl_mem)->offset;
-
   gl->BindBuffer (GL_PIXEL_UNPACK_BUFFER, pbo_id);
-  gl->BindTexture (gl_target, gl_mem->mem.tex_id);
-  gl->TexSubImage2D (gl_target, 0, 0, 0, gl_mem->mem.tex_width,
-      GL_MEM_HEIGHT (gl_mem), gl_format, gl_type, (void *) plane_start);
+  gst_gl_memory_texsubimage (GST_GL_MEMORY_CAST (gl_mem), NULL);
   gl->BindBuffer (GL_PIXEL_UNPACK_BUFFER, 0);
-  gl->BindTexture (gl_target, 0);
-
-  /* Reset to default values */
-  if (USING_OPENGL (context) || USING_GLES3 (context)) {
-    gl->PixelStorei (GL_UNPACK_ROW_LENGTH, 0);
-  } else if (USING_GLES2 (context)) {
-    gl->PixelStorei (GL_UNPACK_ALIGNMENT, 4);
-  }
 }
 
 static guint
@@ -267,7 +236,7 @@ _gl_mem_new (GstAllocator * allocator, GstMemory * parent,
     GDestroyNotify notify)
 {
   GstGLMemoryPBO *mem;
-  mem = g_slice_new0 (GstGLMemoryPBO);
+  mem = g_new0 (GstGLMemoryPBO, 1);
   mem->mem.texture_wrapped = FALSE;
 
   _gl_mem_init (mem, allocator, parent, context, target, params, info, plane,
@@ -336,8 +305,10 @@ _pbo_download_transfer (GstGLMemoryPBO * gl_mem, GstMapInfo * info, gsize size)
       return NULL;
     }
 
-    if (!_read_pixels_to_pbo (gl_mem))
+    if (!_read_pixels_to_pbo (gl_mem)) {
+      gst_memory_unmap (GST_MEMORY_CAST (gl_mem->pbo), &info);
       return NULL;
+    }
 
     gst_memory_unmap (GST_MEMORY_CAST (gl_mem->pbo), &info);
   }
@@ -688,12 +659,6 @@ _gl_mem_destroy (GstGLMemoryPBO * gl_mem)
           *) gl_mem);
 }
 
-static void
-_gl_mem_free (GstAllocator * allocator, GstMemory * mem)
-{
-  GST_ALLOCATOR_CLASS (parent_class)->free (allocator, mem);
-}
-
 static GstGLMemoryPBO *
 _gl_mem_pbo_alloc (GstGLBaseMemoryAllocator * allocator,
     GstGLVideoAllocationParams * params)
@@ -753,7 +718,6 @@ gst_gl_memory_pbo_allocator_class_init (GstGLMemoryPBOAllocatorClass * klass)
   gl_base->destroy = (GstGLBaseMemoryAllocatorDestroyFunction) _gl_mem_destroy;
 
   allocator_class->alloc = _gl_mem_alloc;
-  allocator_class->free = _gl_mem_free;
 }
 
 static void
@@ -769,8 +733,9 @@ gst_gl_memory_pbo_allocator_init (GstGLMemoryPBOAllocator * allocator)
 /**
  * gst_gl_memory_pbo_copy_into_texture:
  * @gl_mem:a #GstGLMemoryPBO
- * @tex_id:OpenGL texture id
- * @tex_type: a #GstVideoGLTextureType
+ * @tex_id: the destination texture id
+ * @target: the destination #GstGLTextureTarget
+ * @tex_type: the destination #GstVideoGLTextureType
  * @width: width of @tex_id
  * @height: height of @tex_id
  * @stride: stride of the backing texture data
@@ -791,6 +756,8 @@ gst_gl_memory_pbo_allocator_init (GstGLMemoryPBOAllocator * allocator)
  * mappings between texture formats.
  *
  * Returns: Whether the copy suceeded
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_memory_pbo_copy_into_texture (GstGLMemoryPBO * gl_mem, guint tex_id,
@@ -820,12 +787,22 @@ _download_transfer (GstGLContext * context, GstGLMemoryPBO * gl_mem)
   GstGLBaseMemory *mem = (GstGLBaseMemory *) gl_mem;
 
   g_mutex_lock (&mem->lock);
-  if (_read_pixels_to_pbo (gl_mem))
+  if (_read_pixels_to_pbo (gl_mem)) {
     GST_CAT_TRACE (GST_CAT_GL_MEMORY, "optimistic download of texture %u "
         "using pbo %u", gl_mem->mem.tex_id, gl_mem->pbo->id);
+    GST_MEMORY_FLAG_UNSET (gl_mem, GST_GL_BASE_MEMORY_TRANSFER_NEED_DOWNLOAD);
+  }
   g_mutex_unlock (&mem->lock);
 }
 
+/**
+ * gst_gl_memory_pbo_download_transfer:
+ * @gl_mem: a #GstGLMemoryPBO
+ *
+ * Transfer the texture data from the texture into the PBO if necessary.
+ *
+ * Since: 1.8
+ */
 void
 gst_gl_memory_pbo_download_transfer (GstGLMemoryPBO * gl_mem)
 {
@@ -852,6 +829,14 @@ _upload_transfer (GstGLContext * context, GstGLMemoryPBO * gl_mem)
   g_mutex_unlock (&mem->lock);
 }
 
+/**
+ * gst_gl_memory_pbo_download_transfer:
+ * @gl_mem: a #GstGLMemoryPBO
+ *
+ * Transfer the texture data from the PBO into the texture if necessary.
+ *
+ * Since: 1.8
+ */
 void
 gst_gl_memory_pbo_upload_transfer (GstGLMemoryPBO * gl_mem)
 {
@@ -887,10 +872,12 @@ gst_gl_memory_pbo_init_once (void)
 }
 
 /**
- * gst_is_gl_memory:
+ * gst_is_gl_memory_pbo:
  * @mem:a #GstMemory
  * 
  * Returns: whether the memory at @mem is a #GstGLMemoryPBO
+ *
+ * Since: 1.8
  */
 gboolean
 gst_is_gl_memory_pbo (GstMemory * mem)

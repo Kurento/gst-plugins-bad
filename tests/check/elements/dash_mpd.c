@@ -3888,7 +3888,7 @@ GST_START_TEST (dash_mpdparser_segments)
   gboolean hasNextSegment;
   GstActiveStream *activeStream;
   GstFlowReturn flow;
-  GstDateTime *segmentEndTime;
+  GstDateTime *segmentAvailability;
   GstDateTime *gst_time;
   GDateTime *g_time;
 
@@ -3985,19 +3985,22 @@ GST_START_TEST (dash_mpdparser_segments)
 
   /* each segment has a duration of 0 hours, 0 min 45 seconds
    * segment index is 1.
-   * End time is at the end of segment 1, so 2 * segment_duration = 2 * 45s
+   * Start time is at the beginning of segment 1, so 1 * segment_duration = 1 * 45s
+   * Availability start time is at the end of the segment, so we add duration (45s)
    * We also add period start time (10s)
+   * So, availability start time for segment 1 is: 10 (period start) +
+   * 45 (segment start) + 45 (duration) = 1'40s
    */
-  segmentEndTime =
-      gst_mpd_client_get_next_segment_availability_end_time (mpdclient,
+  segmentAvailability =
+      gst_mpd_client_get_next_segment_availability_start_time (mpdclient,
       activeStream);
-  assert_equals_int (gst_date_time_get_year (segmentEndTime), 2015);
-  assert_equals_int (gst_date_time_get_month (segmentEndTime), 3);
-  assert_equals_int (gst_date_time_get_day (segmentEndTime), 24);
-  assert_equals_int (gst_date_time_get_hour (segmentEndTime), 0);
-  assert_equals_int (gst_date_time_get_minute (segmentEndTime), 1);
-  assert_equals_int (gst_date_time_get_second (segmentEndTime), 40);
-  gst_date_time_unref (segmentEndTime);
+  assert_equals_int (gst_date_time_get_year (segmentAvailability), 2015);
+  assert_equals_int (gst_date_time_get_month (segmentAvailability), 3);
+  assert_equals_int (gst_date_time_get_day (segmentAvailability), 24);
+  assert_equals_int (gst_date_time_get_hour (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_minute (segmentAvailability), 1);
+  assert_equals_int (gst_date_time_get_second (segmentAvailability), 40);
+  gst_date_time_unref (segmentAvailability);
 
   /* seek to time */
   gst_time = gst_date_time_new_from_iso8601_string ("2015-03-24T0:0:20Z");
@@ -4043,6 +4046,8 @@ GST_START_TEST (dash_mpdparser_headers)
       "          <Initialization sourceURL=\"TestSourceUrl\""
       "                          range=\"100-200\">"
       "          </Initialization>"
+      "          <RepresentationIndex sourceURL=\"TestSourceIndex\">"
+      "          </RepresentationIndex>"
       "        </SegmentBase>"
       "      </Representation></AdaptationSet></Period></MPD>";
 
@@ -4083,7 +4088,7 @@ GST_START_TEST (dash_mpdparser_headers)
       gst_mpd_client_get_next_header_index (mpdclient, &uri, 0, &range_start,
       &range_end);
   assert_equals_int (ret, TRUE);
-  assert_equals_string (uri, "TestSourceUrl");
+  assert_equals_string (uri, "TestSourceIndex");
   assert_equals_int64 (range_start, 10);
   assert_equals_int64 (range_end, 20);
   g_free (uri);
@@ -4526,6 +4531,7 @@ GST_START_TEST (dash_mpdparser_segment_timeline)
   GstClockTime expectedDuration;
   GstClockTime expectedTimestamp;
   GstFlowReturn flow;
+  GstDateTime *segmentAvailability;
 
   const gchar *xml =
       "<?xml version=\"1.0\"?>"
@@ -4592,6 +4598,22 @@ GST_START_TEST (dash_mpdparser_segment_timeline)
   assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
   gst_media_fragment_info_clear (&fragment);
 
+  /* first segment starts at 3s and has a duration of 2s.
+   * We also add period start time (10s) so we expect a segment availability
+   * start time of 15s
+   */
+  segmentAvailability =
+      gst_mpd_client_get_next_segment_availability_start_time (mpdclient,
+      activeStream);
+  fail_unless (segmentAvailability != NULL);
+  assert_equals_int (gst_date_time_get_year (segmentAvailability), 2015);
+  assert_equals_int (gst_date_time_get_month (segmentAvailability), 3);
+  assert_equals_int (gst_date_time_get_day (segmentAvailability), 24);
+  assert_equals_int (gst_date_time_get_hour (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_minute (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_second (segmentAvailability), 15);
+  gst_date_time_unref (segmentAvailability);
+
   /* advance to next segment */
   flow = gst_mpd_client_advance_segment (mpdclient, activeStream, TRUE);
   assert_equals_int (flow, GST_FLOW_OK);
@@ -4610,6 +4632,24 @@ GST_START_TEST (dash_mpdparser_segment_timeline)
   assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
   gst_media_fragment_info_clear (&fragment);
 
+  /* first segment starts at 3s and has a duration of 2s.
+   * Second segment starts when the first ends (5s) and has a duration of 2s,
+   * so it ends at 7s.
+   * We also add period start time (10s) so we expect a segment availability
+   * start time of 17s
+   */
+  segmentAvailability =
+      gst_mpd_client_get_next_segment_availability_start_time (mpdclient,
+      activeStream);
+  fail_unless (segmentAvailability != NULL);
+  assert_equals_int (gst_date_time_get_year (segmentAvailability), 2015);
+  assert_equals_int (gst_date_time_get_month (segmentAvailability), 3);
+  assert_equals_int (gst_date_time_get_day (segmentAvailability), 24);
+  assert_equals_int (gst_date_time_get_hour (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_minute (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_second (segmentAvailability), 17);
+  gst_date_time_unref (segmentAvailability);
+
   /* advance to next segment */
   flow = gst_mpd_client_advance_segment (mpdclient, activeStream, TRUE);
   assert_equals_int (flow, GST_FLOW_OK);
@@ -4626,6 +4666,22 @@ GST_START_TEST (dash_mpdparser_segment_timeline)
   assert_equals_uint64 (fragment.duration, expectedDuration * GST_MSECOND);
   assert_equals_uint64 (fragment.timestamp, expectedTimestamp * GST_MSECOND);
   gst_media_fragment_info_clear (&fragment);
+
+  /* Third segment starts at 10s and has a duration of 3s so it ends at 13s.
+   * We also add period start time (10s) so we expect a segment availability
+   * start time of 23s
+   */
+  segmentAvailability =
+      gst_mpd_client_get_next_segment_availability_start_time (mpdclient,
+      activeStream);
+  fail_unless (segmentAvailability != NULL);
+  assert_equals_int (gst_date_time_get_year (segmentAvailability), 2015);
+  assert_equals_int (gst_date_time_get_month (segmentAvailability), 3);
+  assert_equals_int (gst_date_time_get_day (segmentAvailability), 24);
+  assert_equals_int (gst_date_time_get_hour (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_minute (segmentAvailability), 0);
+  assert_equals_int (gst_date_time_get_second (segmentAvailability), 23);
+  gst_date_time_unref (segmentAvailability);
 
   gst_mpd_client_free (mpdclient);
 }

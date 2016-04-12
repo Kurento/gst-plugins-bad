@@ -34,20 +34,13 @@
  * @short_description: memory subclass for GL textures
  * @see_also: #GstMemory, #GstAllocator, #GstGLBufferPool
  *
- * GstGLMemory is a #GstGLBaseBuffer subclass providing support for the mapping of
- * GL textures.  
+ * GstGLMemory is a #GstGLBaseMemory subclass providing support for the mapping of
+ * OpenGL textures.  
  *
- * #GstGLMemory is created through gst_gl_memory_alloc() or system memory can
- * be wrapped through gst_gl_memory_wrapped().
+ * #GstGLMemory is created or wrapped through gst_gl_base_memory_alloc()
+ * with #GstGLVideoAllocationParams.
  *
  * Data is uploaded or downloaded from the GPU as is necessary.
- */
-
-/* Implementation notes
- *
- * PBO transfer's are implemented using GstGLBaseBuffer.  We just need to
- * ensure that the texture data is written/read to/from before/after calling
- * the parent class which performs the pbo buffer transfer.
  */
 
 #define USING_OPENGL(context) (gst_gl_context_check_gl_version (context, GST_GL_API_OPENGL, 1, 0))
@@ -266,12 +259,18 @@ _gl_tex_create (GstGLMemory * gl_mem, GError ** error)
  * @allocator: the #GstAllocator to initialize with
  * @parent: (allow-none): the parent #GstMemory to initialize with
  * @context: the #GstGLContext to initialize with
+ * @target: the #GstGLTextureTarget for this #GstGLMemory
  * @params: (allow-none): the @GstAllocationParams to initialize with
- * @size: the number of bytes to be allocated
+ * @info: the #GstVideoInfo for this #GstGLMemory
+ * @plane: the plane number (starting from 0) for this #GstGLMemory
+ * @valign: (allow-none): optional #GstVideoAlignment parameters
  * @notify: (allow-none): a #GDestroyNotify
  * @user_data: (allow-none): user data to call @notify with
  *
- * Initializes @mem with the required parameters
+ * Initializes @mem with the required parameters.  @info is assumed to have
+ * already have been modified with gst_video_info_align().
+ *
+ * Since: 1.8
  */
 void
 gst_gl_memory_init (GstGLMemory * mem, GstAllocator * allocator,
@@ -326,6 +325,21 @@ gst_gl_memory_init (GstGLMemory * mem, GstAllocator * allocator,
       mem->mem.mem.size);
 }
 
+/**
+ * gst_gl_memory_read_pixels:
+ * @gl_mem: a #GstGLMemory
+ * @read_pointer: the data pointer to pass to glReadPixels
+ *
+ * Reads the texture in #GstGLMemory into @read_pointer if no buffer is bound
+ * to %GL_PIXEL_PACK_BUFFER.  Otherwise @read_pointer is the byte offset into
+ * the currently bound %GL_PIXEL_PACK_BUFFER buffer to store the result of
+ * glReadPixels.  See the OpenGL specification for glReadPixels for more
+ * details.
+ *
+ * Returns: whether theread operation succeeded
+ *
+ * Since: 1.8
+ */
 gboolean
 gst_gl_memory_read_pixels (GstGLMemory * gl_mem, gpointer read_pointer)
 {
@@ -353,8 +367,11 @@ gst_gl_memory_read_pixels (GstGLMemory * gl_mem, gpointer read_pointer)
     return FALSE;
   }
 
+  gst_gl_query_start_log (GST_GL_BASE_MEMORY_CAST (gl_mem)->query,
+      GST_CAT_GL_MEMORY, GST_LEVEL_LOG, NULL, "%s", "glReadPixels took");
   gl->ReadPixels (0, 0, gl_mem->tex_width, GL_MEM_HEIGHT (gl_mem), format,
       type, read_pointer);
+  gst_gl_query_end (GST_GL_BASE_MEMORY_CAST (gl_mem)->query);
 
   gl->BindFramebuffer (GL_FRAMEBUFFER, 0);
 
@@ -397,7 +414,10 @@ _gl_tex_download_get_tex_image (GstGLMemory * gl_mem, GstMapInfo * info,
 
     target = gst_gl_texture_target_to_gl (gl_mem->tex_target);
     gl->BindTexture (target, gl_mem->tex_id);
+    gst_gl_query_start_log (GST_GL_BASE_MEMORY_CAST (gl_mem)->query,
+        GST_CAT_GL_MEMORY, GST_LEVEL_LOG, NULL, "%s", "glGetTexImage took");
     gl->GetTexImage (target, 0, format, type, gl_mem->mem.data);
+    gst_gl_query_end (GST_GL_BASE_MEMORY_CAST (gl_mem)->query);
     gl->BindTexture (target, 0);
   }
 
@@ -444,6 +464,21 @@ _gl_tex_map_cpu_access (GstGLMemory * gl_mem, GstMapInfo * info, gsize size)
 static void
 _upload_cpu_write (GstGLMemory * gl_mem, GstMapInfo * info, gsize maxsize)
 {
+  gst_gl_memory_texsubimage (gl_mem, gl_mem->mem.data);
+}
+
+/**
+ * gst_gl_memory_texsubimage:
+ * @gl_mem: a #GstGLMemory
+ * @read_pointer: the data pointer to pass to glTexSubImage
+ *
+ * See gst_gl_memory_read_pixels() for what @read_pointer signifies.
+ *
+ * Since: 1.8
+ */
+void
+gst_gl_memory_texsubimage (GstGLMemory * gl_mem, gpointer read_pointer)
+{
   GstGLContext *context = gl_mem->mem.context;
   const GstGLFuncs *gl;
   GLenum gl_format, gl_type, gl_target;
@@ -477,14 +512,18 @@ _upload_cpu_write (GstGLMemory * gl_mem, GstMapInfo * info, gsize maxsize)
       gst_gl_get_plane_start (&gl_mem->info, &gl_mem->valign,
       gl_mem->plane) + gl_mem->mem.mem.offset;
 
-  data = (gpointer) ((gintptr) plane_start + (gintptr) gl_mem->mem.data);
+  data = (gpointer) ((gintptr) plane_start + (gintptr) read_pointer);
 
   gl->BindTexture (gl_target, gl_mem->tex_id);
+  gst_gl_query_start_log (GST_GL_BASE_MEMORY_CAST (gl_mem)->query,
+      GST_CAT_GL_MEMORY, GST_LEVEL_LOG, NULL, "%s", "glTexSubImage took");
   gl->TexSubImage2D (gl_target, 0, 0, 0, gl_mem->tex_width,
       GL_MEM_HEIGHT (gl_mem), gl_format, gl_type, data);
+  gst_gl_query_end (GST_GL_BASE_MEMORY_CAST (gl_mem)->query);
 
   /* Reset to default values */
-  if (USING_OPENGL (context) || USING_GLES3 (context)) {
+  if (USING_OPENGL (context) || USING_GLES3 (context)
+      || USING_OPENGL3 (context)) {
     gl->PixelStorei (GL_UNPACK_ROW_LENGTH, 0);
   } else if (USING_GLES2 (context)) {
     gl->PixelStorei (GL_UNPACK_ALIGNMENT, 4);
@@ -544,6 +583,22 @@ _gl_tex_unmap (GstGLMemory * gl_mem, GstMapInfo * info)
   alloc_class->unmap (GST_GL_BASE_MEMORY_CAST (gl_mem), info);
 }
 
+/**
+ * gst_gl_memory_copy_texiamge:
+ * @gl_mem: the source #GstGLMemory
+ * @tex_id: the destination texture id
+ * @out_target: the destination #GstGLTextureTarget
+ * @out_tex_type: the destination #GstVideoGLTextureType
+ * @out_width: the destination width
+ * @out_height: the destination height
+ *
+ * Copies the texture in #GstGLMemory into the texture specified by @tex_id,
+ * @out_target, @out_tex_type, @out_width and @out_height.
+ *
+ * Returns: whether the copy succeeded.
+ *
+ * Since: 1.8
+ */
 gboolean
 gst_gl_memory_copy_teximage (GstGLMemory * src, guint tex_id,
     GstGLTextureTarget out_target, GstVideoGLTextureType out_tex_type,
@@ -587,8 +642,11 @@ gst_gl_memory_copy_teximage (GstGLMemory * src, guint tex_id,
 //    goto fbo_error;
 
   gl->BindTexture (out_tex_target, tex_id);
+  gst_gl_query_start_log (GST_GL_BASE_MEMORY_CAST (src)->query,
+      GST_CAT_GL_MEMORY, GST_LEVEL_LOG, NULL, "%s", "CopyTexImage2D took");
   gl->CopyTexImage2D (out_tex_target, 0, out_gl_format, 0, 0, out_width,
       out_height, 0);
+  gst_gl_query_end (GST_GL_BASE_MEMORY_CAST (src)->query);
 
   gl->BindTexture (out_tex_target, 0);
   gl->BindFramebuffer (GL_FRAMEBUFFER, 0);
@@ -802,7 +860,7 @@ gst_gl_memory_allocator_init (GstGLMemoryAllocator * allocator)
  * gst_gl_memory_copy_into:
  * @gl_mem:a #GstGLMemory
  * @tex_id:OpenGL texture id
- * @taget: the #GstGLTextureTarget
+ * @target: the #GstGLTextureTarget
  * @tex_type: the #GstVideoGLTextureType
  * @width: width of @tex_id
  * @height: height of @tex_id
@@ -810,18 +868,9 @@ gst_gl_memory_allocator_init (GstGLMemoryAllocator * allocator)
  * Copies @gl_mem into the texture specfified by @tex_id.  The format of @tex_id
  * is specified by @tex_type, @width and @height.
  *
- * If @respecify is %TRUE, then the copy is performed in terms of the texture
- * data.  This is useful for splitting RGBA textures into RG or R textures or
- * vice versa. The requirement for this to succeed is that the backing texture
- * data must be the same size, i.e. say a RGBA8 texture is converted into a RG8
- * texture, then the RG texture must have twice as many pixels available for
- * output as the RGBA texture.
- *
- * Otherwise, if @respecify is %FALSE, then the copy is performed per texel
- * using glCopyTexImage.  See the OpenGL specification for details on the
- * mappings between texture formats.
- *
  * Returns: Whether the copy suceeded
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_memory_copy_into (GstGLMemory * gl_mem, guint tex_id,
@@ -843,6 +892,14 @@ gst_gl_memory_copy_into (GstGLMemory * gl_mem, guint tex_id,
   return copy_params.result;
 }
 
+/**
+ * gst_gl_memory_get_texture_width:
+ * @gl_mem: a #GstGLMemory
+ *
+ * Returns: the texture width of @gl_mem
+ *
+ * Since: 1.8
+ */
 gint
 gst_gl_memory_get_texture_width (GstGLMemory * gl_mem)
 {
@@ -851,6 +908,14 @@ gst_gl_memory_get_texture_width (GstGLMemory * gl_mem)
   return gl_mem->tex_width;
 }
 
+/**
+ * gst_gl_memory_get_texture_height:
+ * @gl_mem: a #GstGLMemory
+ *
+ * Returns: the texture height of @gl_mem
+ *
+ * Since: 1.8
+ */
 gint
 gst_gl_memory_get_texture_height (GstGLMemory * gl_mem)
 {
@@ -859,6 +924,14 @@ gst_gl_memory_get_texture_height (GstGLMemory * gl_mem)
   return _get_plane_height (&gl_mem->info, gl_mem->plane);
 }
 
+/**
+ * gst_gl_memory_get_texture_type:
+ * @gl_mem: a #GstGLMemory
+ *
+ * Returns: the #GstVideoGLTextureType of @gl_mem
+ *
+ * Since: 1.8
+ */
 GstVideoGLTextureType
 gst_gl_memory_get_texture_type (GstGLMemory * gl_mem)
 {
@@ -867,6 +940,14 @@ gst_gl_memory_get_texture_type (GstGLMemory * gl_mem)
   return gl_mem->tex_type;
 }
 
+/**
+ * gst_gl_memory_get_texture_target:
+ * @gl_mem: a #GstGLMemory
+ *
+ * Returns: the #GstGLTextureTarget of @gl_mem
+ *
+ * Since: 1.8
+ */
 GstGLTextureTarget
 gst_gl_memory_get_texture_target (GstGLMemory * gl_mem)
 {
@@ -875,6 +956,14 @@ gst_gl_memory_get_texture_target (GstGLMemory * gl_mem)
   return gl_mem->tex_target;
 }
 
+/**
+ * gst_gl_memory_get_texture_id:
+ * @gl_mem: a #GstGLMemory
+ *
+ * Returns: the OpenGL texture handle of @gl_mem
+ *
+ * Since: 1.8
+ */
 guint
 gst_gl_memory_get_texture_id (GstGLMemory * gl_mem)
 {
@@ -888,6 +977,8 @@ gst_gl_memory_get_texture_id (GstGLMemory * gl_mem)
  *
  * Initializes the GL Base Texture allocator. It is safe to call this function
  * multiple times.  This must be called before any other GstGLMemory operation.
+ *
+ * Since: 1.4
  */
 void
 gst_gl_memory_init_once (void)
@@ -913,6 +1004,8 @@ gst_gl_memory_init_once (void)
  * @mem:a #GstMemory
  * 
  * Returns: whether the memory at @mem is a #GstGLMemory
+ *
+ * Since: 1.4
  */
 gboolean
 gst_is_gl_memory (GstMemory * mem)
@@ -938,6 +1031,30 @@ _gst_gl_video_allocation_params_set_video_alignment (GstGLVideoAllocationParams
   }
 }
 
+/**
+ * gst_gl_video_allocation_params_init_full:
+ * @params: a #GstGLVideoAllocationParams to initialize
+ * @struct_size: the size of the struct in @params
+ * @alloc_flags: some allocation flags
+ * @copy: a copy function
+ * @free: a free function
+ * @context: a #GstGLContext
+ * @alloc_params: (allow-none): the #GstAllocationParams for @wrapped_data
+ * @v_info: the #GstVideoInfo for @wrapped_data
+ * @plane: the video plane @wrapped_data represents
+ * @valign: (allow-none): any #GstVideoAlignment applied to symem mappings of @wrapped_data
+ * @target: the #GstGLTextureTarget
+ * @wrapped_data: (allow-none): the optional data pointer to wrap
+ * @gl_handle: the optional OpenGL handle to wrap or 0
+ * @user_data: (allow-none): user data to call @notify with
+ * @notify: (allow-none): a #GDestroyNotify
+ *
+ * Intended for subclass usage
+ *
+ * Returns: initializes @params with the parameters specified
+ *
+ * Since: 1.8
+ */
 gboolean
 gst_gl_video_allocation_params_init_full (GstGLVideoAllocationParams * params,
     gsize struct_size, guint alloc_flags, GstGLAllocationParamsCopyFunc copy,
@@ -985,6 +1102,8 @@ gst_gl_video_allocation_params_init_full (GstGLVideoAllocationParams * params,
  * @target: the #GstGLTextureTarget for @wrapped_data
  *
  * Returns: a new #GstGLVideoAllocationParams for allocating #GstGLMemory's
+ *
+ * Since: 1.8
  */
 GstGLVideoAllocationParams *
 gst_gl_video_allocation_params_new (GstGLContext * context,
@@ -1022,6 +1141,8 @@ gst_gl_video_allocation_params_new (GstGLContext * context,
  * @notify: (allow-none): a #GDestroyNotify
  *
  * Returns: a new #GstGLVideoAllocationParams for wrapping @wrapped_data
+ *
+ * Since: 1.8
  */
 GstGLVideoAllocationParams *
 gst_gl_video_allocation_params_new_wrapped_data (GstGLContext * context,
@@ -1060,6 +1181,8 @@ gst_gl_video_allocation_params_new_wrapped_data (GstGLContext * context,
  * @notify: (allow-none): a #GDestroyNotify
  *
  * Returns: a new #GstGLVideoAllocationParams for wrapping @tex_id
+ *
+ * Since: 1.8
  */
 GstGLVideoAllocationParams *
 gst_gl_video_allocation_params_new_wrapped_texture (GstGLContext * context,
@@ -1085,6 +1208,15 @@ gst_gl_video_allocation_params_new_wrapped_texture (GstGLContext * context,
   return params;
 }
 
+/**
+ * gst_gl_video_allocation_params_free_data:
+ * @params: a #GstGLVideoAllocationParams
+ *
+ * Unset and free any dynamically allocated resources.  Intended for subclass
+ * usage only to chain up at the end of a subclass free function.
+ *
+ * Since: 1.8
+ */
 void
 gst_gl_video_allocation_params_free_data (GstGLVideoAllocationParams * params)
 {
@@ -1094,6 +1226,16 @@ gst_gl_video_allocation_params_free_data (GstGLVideoAllocationParams * params)
   gst_gl_allocation_params_free_data (&params->parent);
 }
 
+/**
+ * gst_gl_video_allocation_params_copy_data:
+ * @src_vid: source #GstGLVideoAllocationParams to copy from
+ * @dest_vid: destination #GstGLVideoAllocationParams to copy into
+ *
+ * Copy and set any dynamically allocated resources in @dest_vid.  Intended
+ * for subclass usage only to chain up at the end of a subclass copy function.
+ *
+ * Since: 1.8
+ */
 void
 gst_gl_video_allocation_params_copy_data (GstGLVideoAllocationParams * src_vid,
     GstGLVideoAllocationParams * dest_vid)
@@ -1123,6 +1265,8 @@ gst_gl_video_allocation_params_copy_data (GstGLVideoAllocationParams * src_vid,
  * @params: the #GstGLVideoAllocationParams to allocate with
  *
  * Returns: whether the buffer was correctly setup
+ *
+ * Since: 1.8
  */
 gboolean
 gst_gl_memory_setup_buffer (GstGLMemoryAllocator * allocator,
@@ -1130,15 +1274,16 @@ gst_gl_memory_setup_buffer (GstGLMemoryAllocator * allocator,
 {
   GstGLBaseMemoryAllocator *base_allocator;
   guint n_mem, i, v, views;
+  guint alloc_flags = params->parent.alloc_flags;
 
   g_return_val_if_fail (params != NULL, FALSE);
-  g_return_val_if_fail ((params->
-          parent.alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_SYSMEM)
+  g_return_val_if_fail ((alloc_flags &
+          GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_SYSMEM)
       == 0, FALSE);
   g_return_val_if_fail ((params->parent.alloc_flags &
           GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_WRAP_GPU_HANDLE) == 0, FALSE);
-  g_return_val_if_fail (params->
-      parent.alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_VIDEO, FALSE);
+  g_return_val_if_fail (alloc_flags & GST_GL_ALLOCATION_PARAMS_ALLOC_FLAG_VIDEO,
+      FALSE);
 
   base_allocator = GST_GL_BASE_MEMORY_ALLOCATOR (allocator);
   n_mem = GST_VIDEO_INFO_N_PLANES (params->v_info);
@@ -1172,6 +1317,14 @@ gst_gl_memory_setup_buffer (GstGLMemoryAllocator * allocator,
   return TRUE;
 }
 
+/**
+ * gst_gl_memory_allocator_get_default:
+ * @context: a #GstGLContext
+ *
+ * Returns: the default #GstGLMemoryAllocator supported by @context
+ *
+ * Since: 1.8
+ */
 GstGLMemoryAllocator *
 gst_gl_memory_allocator_get_default (GstGLContext * context)
 {

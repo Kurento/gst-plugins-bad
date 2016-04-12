@@ -13,6 +13,7 @@ libgstopengl_la_SOURCES = \
 	gstglimagesink.c \
 	gstglfiltercube.c \
 	gstgleffects.c \
+	effects/gstgleffectscurves.c \
 	effects/gstgleffectssources.c \
 	effects/gstgleffectidentity.c \
 	effects/gstgleffectmirror.c \
@@ -32,6 +33,7 @@ libgstopengl_la_SOURCES = \
 	effects/gstgleffectsobel.c \
 	effects/gstgleffectlaplacian.c \
 	gstglcolorscale.c \
+	gstglcolorbalance.c \
 	gstglmixer.c \
 	gstglvideomixer.c \
 	gstglfiltershader.c \
@@ -54,6 +56,7 @@ noinst_HEADERS = \
 	gstgleffects.h \
 	effects/gstgleffectssources.h \
 	gstglcolorscale.h \
+	gstglcolorbalance.h \
 	gstglmixer.h \
 	gstglvideomixer.h \
 	gstglfiltershader.h \
@@ -92,7 +95,11 @@ endif
 if HAVE_GRAPHENE
 libgstopengl_la_SOURCES += \
 	gstgltransformation.c \
-	gstgltransformation.h
+	gstglvideoflip.c
+
+noinst_HEADERS += \
+	gstgltransformation.h \
+	gstglvideoflip.h
 endif
 
 if HAVE_JPEG

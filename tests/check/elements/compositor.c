@@ -45,6 +45,24 @@
 
 static GMainLoop *main_loop;
 
+static GstCaps *
+_compositor_get_all_supported_caps (void)
+{
+  return gst_caps_from_string (GST_VIDEO_CAPS_MAKE
+      (" { AYUV, BGRA, ARGB, RGBA, ABGR, Y444, Y42B, YUY2, UYVY, "
+          "   YVYU, I420, YV12, NV12, NV21, Y41B, RGB, BGR, xRGB, xBGR, "
+          "   RGBx, BGRx } "));
+}
+
+static GstCaps *
+_compositor_get_non_alpha_supported_caps (void)
+{
+  return gst_caps_from_string (GST_VIDEO_CAPS_MAKE
+      (" { Y444, Y42B, YUY2, UYVY, "
+          "   YVYU, I420, YV12, NV12, NV21, Y41B, RGB, BGR, xRGB, xBGR, "
+          "   RGBx, BGRx } "));
+}
+
 /* make sure downstream gets a CAPS event before buffers are sent */
 GST_START_TEST (test_caps)
 {
@@ -241,6 +259,208 @@ GST_START_TEST (test_event)
   gst_bus_remove_signal_watch (bus);
   gst_object_unref (bus);
   gst_object_unref (bin);
+}
+
+GST_END_TEST;
+
+static GstBuffer *
+create_video_buffer (GstCaps * caps, gint ts_in_seconds)
+{
+  GstVideoInfo info;
+  guint size;
+  GstBuffer *buf;
+  GstMapInfo mapinfo;
+
+  fail_unless (gst_video_info_from_caps (&info, caps));
+
+  size = GST_VIDEO_INFO_WIDTH (&info) * GST_VIDEO_INFO_HEIGHT (&info);
+
+  switch (GST_VIDEO_INFO_FORMAT (&info)) {
+    case GST_VIDEO_FORMAT_RGB:
+      size *= 3;
+      break;
+    case GST_VIDEO_FORMAT_RGBA:
+    case GST_VIDEO_FORMAT_ARGB:
+      size *= 4;
+      break;
+    case GST_VIDEO_FORMAT_I420:
+      size *= 2;
+      break;
+    default:
+      fail ("Unsupported test format");
+  }
+
+  buf = gst_buffer_new_and_alloc (size);
+  /* write something to avoid uninitialized error issues (valgrind) */
+  gst_buffer_map (buf, &mapinfo, GST_MAP_WRITE);
+  memset (mapinfo.data, 0, mapinfo.size);
+  gst_buffer_unmap (buf, &mapinfo);
+
+  GST_BUFFER_PTS (buf) = ts_in_seconds * GST_SECOND;
+  GST_BUFFER_DURATION (buf) = GST_SECOND;
+  return buf;
+}
+
+
+GST_START_TEST (test_caps_query)
+{
+  GstElement *compositor, *capsfilter, *sink;
+  GstElement *pipeline;
+  gboolean res;
+  GstStateChangeReturn state_res;
+  GstPad *sinkpad;
+  GstCaps *caps, *restriction_caps;
+  GstCaps *all_caps, *non_alpha_caps;
+
+  /* initial setup */
+  all_caps = _compositor_get_all_supported_caps ();
+  non_alpha_caps = _compositor_get_non_alpha_supported_caps ();
+
+  compositor = gst_element_factory_make ("compositor", "compositor");
+  capsfilter = gst_element_factory_make ("capsfilter", "out-cf");
+  sink = gst_element_factory_make ("fakesink", "sink");
+  pipeline = gst_pipeline_new ("test-pipeline");
+
+  gst_bin_add_many (GST_BIN (pipeline), compositor, capsfilter, sink, NULL);
+  res = gst_element_link (compositor, capsfilter);
+  fail_unless (res == TRUE, NULL);
+  res = gst_element_link (capsfilter, sink);
+  fail_unless (res == TRUE, NULL);
+
+  sinkpad = gst_element_get_request_pad (compositor, "sink_%u");
+
+  state_res = gst_element_set_state (pipeline, GST_STATE_PLAYING);
+  fail_if (state_res == GST_STATE_CHANGE_FAILURE);
+
+  /* try an unrestricted caps query, should return all formats */
+  caps = gst_pad_query_caps (sinkpad, NULL);
+  fail_unless (gst_caps_is_equal (caps, all_caps));
+  gst_caps_unref (caps);
+
+  /* now restrict downstream to a single alpha format, it should still
+   * be able to convert anything else to it */
+  restriction_caps = gst_caps_from_string ("video/x-raw, format=(string)AYUV");
+  g_object_set (capsfilter, "caps", restriction_caps, NULL);
+  caps = gst_pad_query_caps (sinkpad, NULL);
+  fail_unless (gst_caps_is_equal (caps, all_caps));
+  gst_caps_unref (caps);
+  gst_caps_unref (restriction_caps);
+
+  /* now restrict downstream to a non-alpha format, it should
+   * be able to accept non-alpha formats */
+  restriction_caps = gst_caps_from_string ("video/x-raw, format=(string)I420");
+  g_object_set (capsfilter, "caps", restriction_caps, NULL);
+  caps = gst_pad_query_caps (sinkpad, NULL);
+  fail_unless (gst_caps_is_equal (caps, non_alpha_caps));
+  gst_caps_unref (caps);
+  gst_caps_unref (restriction_caps);
+
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+  gst_element_release_request_pad (compositor, sinkpad);
+  gst_object_unref (sinkpad);
+  gst_object_unref (pipeline);
+  gst_caps_unref (all_caps);
+  gst_caps_unref (non_alpha_caps);
+}
+
+GST_END_TEST;
+
+#define MODE_ALL 1
+#define MODE_NON_ALPHA 2
+
+static void
+run_late_caps_query_test (GstCaps * input_caps, GstCaps * output_allowed_caps,
+    gint expected_caps_mode)
+{
+  GstElement *compositor, *capsfilter, *sink;
+  GstElement *pipeline;
+  gboolean res;
+  GstStateChangeReturn state_res;
+  GstPad *srcpad1, *srcpad2;
+  GstPad *sinkpad1, *sinkpad2;
+  GstSegment segment;
+  GstCaps *caps, *all_caps, *non_alpha_caps;
+
+  all_caps = _compositor_get_all_supported_caps ();
+  non_alpha_caps = _compositor_get_non_alpha_supported_caps ();
+
+  compositor = gst_element_factory_make ("compositor", "compositor");
+  capsfilter = gst_element_factory_make ("capsfilter", "out-cf");
+  sink = gst_element_factory_make ("fakesink", "sink");
+  pipeline = gst_pipeline_new ("test-pipeline");
+
+  gst_bin_add_many (GST_BIN (pipeline), compositor, capsfilter, sink, NULL);
+  res = gst_element_link (compositor, capsfilter);
+  fail_unless (res == TRUE, NULL);
+  res = gst_element_link (capsfilter, sink);
+  fail_unless (res == TRUE, NULL);
+
+  sinkpad1 = gst_element_get_request_pad (compositor, "sink_%u");
+  srcpad1 = gst_pad_new ("src1", GST_PAD_SRC);
+  fail_unless (gst_pad_link (srcpad1, sinkpad1) == GST_PAD_LINK_OK);
+  gst_pad_set_active (srcpad1, TRUE);
+
+  state_res = gst_element_set_state (pipeline, GST_STATE_PLAYING);
+  fail_if (state_res == GST_STATE_CHANGE_FAILURE);
+
+  if (output_allowed_caps)
+    g_object_set (capsfilter, "caps", output_allowed_caps, NULL);
+
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  fail_unless (gst_pad_push_event (srcpad1,
+          gst_event_new_stream_start ("test-1")));
+  fail_unless (gst_pad_push_event (srcpad1, gst_event_new_caps (input_caps)));
+  fail_unless (gst_pad_push_event (srcpad1, gst_event_new_segment (&segment)));
+  fail_unless (gst_pad_push (srcpad1,
+          create_video_buffer (input_caps, 0)) == GST_FLOW_OK);
+  fail_unless (gst_pad_push (srcpad1,
+          create_video_buffer (input_caps, 1)) == GST_FLOW_OK);
+
+  /* now comes the second pad */
+  sinkpad2 = gst_element_get_request_pad (compositor, "sink_%u");
+  srcpad2 = gst_pad_new ("src2", GST_PAD_SRC);
+  fail_unless (gst_pad_link (srcpad2, sinkpad2) == GST_PAD_LINK_OK);
+  gst_pad_set_active (srcpad2, TRUE);
+  fail_unless (gst_pad_push_event (srcpad2,
+          gst_event_new_stream_start ("test-2")));
+
+  caps = gst_pad_peer_query_caps (srcpad2, NULL);
+  fail_unless (gst_caps_is_equal (caps,
+          expected_caps_mode == MODE_ALL ? all_caps : non_alpha_caps));
+  gst_caps_unref (caps);
+
+  gst_pad_set_active (srcpad1, FALSE);
+  gst_pad_set_active (srcpad2, FALSE);
+  gst_element_set_state (pipeline, GST_STATE_NULL);
+  gst_element_release_request_pad (compositor, sinkpad1);
+  gst_element_release_request_pad (compositor, sinkpad2);
+  gst_object_unref (sinkpad1);
+  gst_object_unref (sinkpad2);
+  gst_object_unref (pipeline);
+  gst_object_unref (srcpad1);
+  gst_object_unref (srcpad2);
+  gst_caps_unref (all_caps);
+  gst_caps_unref (non_alpha_caps);
+}
+
+GST_START_TEST (test_late_caps_query)
+{
+  GstCaps *rgb_caps;
+  GstCaps *non_alpha_caps;
+
+  rgb_caps = gst_caps_from_string ("video/x-raw, format=(string)RGB, "
+      "width=(int)100, height=(int)100, framerate=(fraction)1/1");
+
+  non_alpha_caps = gst_caps_from_string ("video/x-raw, format=(string)RGB");
+
+  /* check that a 2nd pad that is added late to compositor will be able to
+   * negotiate to formats that depend only on downstream caps and not on what
+   * the other pads have already negotiated */
+  run_late_caps_query_test (rgb_caps, NULL, MODE_ALL);
+  run_late_caps_query_test (rgb_caps, non_alpha_caps, MODE_NON_ALPHA);
+
+  gst_caps_unref (non_alpha_caps);
+  gst_caps_unref (rgb_caps);
 }
 
 GST_END_TEST;
@@ -1660,6 +1880,8 @@ compositor_suite (void)
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_caps);
   tcase_add_test (tc_chain, test_event);
+  tcase_add_test (tc_chain, test_caps_query);
+  tcase_add_test (tc_chain, test_late_caps_query);
   tcase_add_test (tc_chain, test_play_twice);
   tcase_add_test (tc_chain, test_play_twice_then_add_and_play_again);
   tcase_add_test (tc_chain, test_add_pad);
@@ -1679,17 +1901,6 @@ compositor_suite (void)
   tcase_add_test (tc_chain, test_start_time_first_live_drop_0);
   tcase_add_test (tc_chain, test_start_time_first_live_drop_3);
   tcase_add_test (tc_chain, test_start_time_first_live_drop_3_unlinked_1);
-
-  /* Use a longer timeout */
-#ifdef HAVE_VALGRIND
-  if (RUNNING_ON_VALGRIND) {
-    tcase_set_timeout (tc_chain, 5 * 60);
-  } else
-#endif
-  {
-    /* this is shorter than the default 60 seconds?! (tpm) */
-    /* tcase_set_timeout (tc_chain, 6); */
-  }
 
   return s;
 }

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2010 Ole André Vadla Ravnås <oleavr@soundrop.com>
+ * Copyright (C) 2016 Alessandro Decina <twi@centricular.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -22,6 +23,7 @@
 #endif
 
 #include "avfvideosrc.h"
+#include "glcontexthelper.h"
 
 #import <AVFoundation/AVFoundation.h>
 #if !HAVE_IOS
@@ -114,6 +116,7 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
   BOOL captureScreenMouseClicks;
 
   BOOL useVideoMeta;
+  GstGLContextHelper *ctxh;
   GstVideoTextureCache *textureCache;
 }
 
@@ -147,9 +150,11 @@ G_DEFINE_TYPE (GstAVFVideoSrc, gst_avf_video_src, GST_TYPE_PUSH_SRC);
 - (BOOL)unlock;
 - (BOOL)unlockStop;
 - (BOOL)query:(GstQuery *)query;
+- (void)setContext:(GstContext *)context;
 - (GstStateChangeReturn)changeState:(GstStateChange)transition;
 - (GstFlowReturn)create:(GstBuffer **)buf;
 - (GstCaps *)fixate:(GstCaps *)caps;
+- (BOOL)decideAllocation:(GstQuery *)query;
 - (void)updateStatistics;
 - (void)captureOutput:(AVCaptureOutput *)captureOutput
 didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
@@ -180,7 +185,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     captureScreenMouseClicks = NO;
     useVideoMeta = NO;
     textureCache = NULL;
-
+    ctxh = gst_gl_context_helper_new (element);
     mainQueue =
         dispatch_queue_create ("org.freedesktop.gstreamer.avfvideosrc.main", NULL);
     workerQueue =
@@ -521,16 +526,22 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
           [[rate valueForKey:@"maxFrameRate"] getValue:&max_frame_rate];
           if ((framerate >= min_frame_rate - 0.00001) &&
               (framerate <= max_frame_rate + 0.00001)) {
-            NSValue *min_frame_duration, *max_frame_duration;
-
+            NSValue *frame_duration_value;
             found_framerate = TRUE;
-            min_frame_duration = [rate valueForKey:@"minFrameDuration"];
-            max_frame_duration = [rate valueForKey:@"maxFrameDuration"];
-            [device setValue:min_frame_duration forKey:@"activeVideoMinFrameDuration"];
+            if (min_frame_rate == max_frame_rate) {
+              /* on mac we get tight ranges and an exception is raised if the
+               * frame duration doesn't match the one reported in the range to
+               * the last decimal point
+               */
+              frame_duration_value = [rate valueForKey:@"minFrameDuration"];
+            } else {
+              // Invert fps_n and fps_d to get frame duration value and timescale (or numerator and denominator)
+              frame_duration_value = [NSValue valueWithCMTime:CMTimeMake (info->fps_d, info->fps_n)];
+            }
+            [device setValue:frame_duration_value forKey:@"activeVideoMinFrameDuration"];
             @try {
               /* Only available on OSX >= 10.8 and iOS >= 7.0 */
-              // Restrict activeVideoMaxFrameDuration to the minimum value so we get a better capture frame rate
-              [device setValue:min_frame_duration forKey:@"activeVideoMaxFrameDuration"];
+              [device setValue:frame_duration_value forKey:@"activeVideoMaxFrameDuration"];
             } @catch (NSException *exception) {
               if (![[exception name] isEqualToString:NSUndefinedKeyException]) {
                 GST_WARNING ("An unexcepted error occured: %s",
@@ -743,24 +754,8 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         dictionaryWithObject:[NSNumber numberWithInt:newformat]
         forKey:(NSString*)kCVPixelBufferPixelFormatTypeKey];
 
-    if (caps)
-      gst_caps_unref (caps);
-    caps = gst_caps_copy (new_caps);
-
-    if (textureCache)
-      gst_video_texture_cache_free (textureCache);
-    textureCache = NULL;
-
-    GstCapsFeatures *features = gst_caps_get_features (caps, 0);
-    if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
-      GstGLContext *context = query_gl_context (GST_BASE_SRC_PAD (baseSrc));
-      textureCache = gst_video_texture_cache_new (context);
-      gst_video_texture_cache_set_format (textureCache, format, caps);
-      gst_object_unref (context);
-    }
-
-    GST_INFO_OBJECT (element, "configured caps %"GST_PTR_FORMAT
-        ", pushing textures %d", caps, textureCache != NULL);
+    gst_caps_replace (&caps, new_caps);
+    GST_INFO_OBJECT (element, "configured caps %"GST_PTR_FORMAT, caps);
 
     if (![session isRunning])
       [session startRunning];
@@ -800,8 +795,12 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   bufQueue = nil;
 
   if (textureCache)
-      gst_video_texture_cache_free (textureCache);
+    gst_video_texture_cache_free (textureCache);
   textureCache = NULL;
+
+  if (ctxh)
+    gst_gl_context_helper_free (ctxh);
+  ctxh = NULL;
 
   return YES;
 }
@@ -939,7 +938,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     }
   }
 
-  *buf = gst_core_media_buffer_new (sbuf, useVideoMeta, textureCache == NULL);
+  *buf = gst_core_media_buffer_new (sbuf, useVideoMeta);
   if (*buf == NULL) {
     CFRelease (sbuf);
     return GST_FLOW_ERROR;
@@ -963,55 +962,11 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
   return GST_FLOW_OK;
 }
 
-static GstGLContext *
-query_gl_context (GstPad *srcpad)
-{
-  GstGLContext *gl_context = NULL;
-  GstContext *context = NULL;
-  GstQuery *query;
-
-  query = gst_query_new_context ("gst.gl.local_context");
-  if (gst_pad_peer_query (srcpad, query)) {
-    gst_query_parse_context (query, &context);
-    if (context) {
-      const GstStructure *s = gst_context_get_structure (context);
-      gst_structure_get (s, "context", GST_GL_TYPE_CONTEXT, &gl_context, NULL);
-    }
-  }
-  gst_query_unref (query);
-
-  return gl_context;
-}
-
-static gboolean
-caps_filter_out_gl_memory (GstCapsFeatures * features, GstStructure * structure,
-    gpointer user_data)
-{
-  return !gst_caps_features_contains (features,
-      GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
-}
-
-
 - (GstCaps *)fixate:(GstCaps *)new_caps
 {
-  GstGLContext *context;
   GstStructure *structure;
 
   new_caps = gst_caps_make_writable (new_caps);
-
-  context = query_gl_context (GST_BASE_SRC_PAD (baseSrc));
-  if (!context)
-    gst_caps_filter_and_map_in_place (new_caps, caps_filter_out_gl_memory, NULL);
-  else
-    gst_object_unref (context);
-
-  /* this can happen if video/x-raw(memory:GLMemory) is forced but a context is
-   * not available */
-  if (gst_caps_is_empty (new_caps)) {
-    GST_WARNING_OBJECT (element, "GLMemory requested but no context available");
-    return new_caps;
-  }
-
   new_caps = gst_caps_truncate (new_caps);
   structure = gst_caps_get_structure (new_caps, 0);
   /* crank up to 11. This is what the presets do, but we don't use the presets
@@ -1020,6 +975,42 @@ caps_filter_out_gl_memory (GstCapsFeatures * features, GstStructure * structure,
   gst_structure_fixate_field_nearest_fraction (structure, "framerate", G_MAXINT, 1);
 
   return gst_caps_fixate (new_caps);
+}
+
+- (BOOL)decideAllocation:(GstQuery *)query
+{
+  GstCaps *alloc_caps;
+  GstCapsFeatures *features;
+  gboolean ret;
+
+  ret = GST_BASE_SRC_CLASS (parent_class)->decide_allocation (baseSrc, query);
+  if (!ret)
+    return ret;
+
+  gst_query_parse_allocation (query, &alloc_caps, NULL);
+  features = gst_caps_get_features (alloc_caps, 0);
+  if (gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
+    gst_gl_context_helper_ensure_context (ctxh);
+    GST_INFO_OBJECT (element, "pushing textures, context %p old context %p",
+        ctxh->context, textureCache ? textureCache->ctx : NULL);
+    if (textureCache && textureCache->ctx != ctxh->context) {
+      gst_video_texture_cache_free (textureCache);
+      textureCache = NULL;
+    }
+    textureCache = gst_video_texture_cache_new (ctxh->context);
+    gst_video_texture_cache_set_format (textureCache, format, alloc_caps);
+  }
+
+  return TRUE;
+}
+
+- (void)setContext:(GstContext *)context
+{
+  GST_INFO_OBJECT (element, "setting context %s",
+          gst_context_get_context_type (context));
+  gst_gl_handle_set_context (element, context,
+          &ctxh->display, &ctxh->other_context);
+  GST_ELEMENT_CLASS (parent_class)->set_context (element, context);
 }
 
 - (void)getSampleBuffer:(CMSampleBufferRef)sbuf
@@ -1152,6 +1143,10 @@ static GstFlowReturn gst_avf_video_src_create (GstPushSrc * pushsrc,
     GstBuffer ** buf);
 static GstCaps * gst_avf_video_src_fixate (GstBaseSrc * bsrc,
     GstCaps * caps);
+static gboolean gst_avf_video_src_decide_allocation (GstBaseSrc * bsrc,
+    GstQuery * query);
+static void gst_avf_video_src_set_context (GstElement * element,
+        GstContext * context);
 
 static void
 gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
@@ -1166,6 +1161,7 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
   gobject_class->set_property = gst_avf_video_src_set_property;
 
   gstelement_class->change_state = gst_avf_video_src_change_state;
+  gstelement_class->set_context = gst_avf_video_src_set_context;
 
   gstbasesrc_class->get_caps = gst_avf_video_src_get_caps;
   gstbasesrc_class->set_caps = gst_avf_video_src_set_caps;
@@ -1175,6 +1171,7 @@ gst_avf_video_src_class_init (GstAVFVideoSrcClass * klass)
   gstbasesrc_class->unlock = gst_avf_video_src_unlock;
   gstbasesrc_class->unlock_stop = gst_avf_video_src_unlock_stop;
   gstbasesrc_class->fixate = gst_avf_video_src_fixate;
+  gstbasesrc_class->decide_allocation = gst_avf_video_src_decide_allocation;
 
   gstpushsrc_class->create = gst_avf_video_src_create;
 
@@ -1428,4 +1425,25 @@ gst_avf_video_src_fixate (GstBaseSrc * bsrc, GstCaps * caps)
   OBJC_CALLOUT_END ();
 
   return ret;
+}
+
+static gboolean
+gst_avf_video_src_decide_allocation (GstBaseSrc * bsrc,
+    GstQuery * query)
+{
+  gboolean ret;
+
+  OBJC_CALLOUT_BEGIN ();
+  ret = [GST_AVF_VIDEO_SRC_IMPL (bsrc) decideAllocation:query];
+  OBJC_CALLOUT_END ();
+
+  return ret;
+}
+
+static void
+gst_avf_video_src_set_context (GstElement * element, GstContext * context)
+{
+  OBJC_CALLOUT_BEGIN ();
+  [GST_AVF_VIDEO_SRC_IMPL (element) setContext:context];
+  OBJC_CALLOUT_END ();
 }

@@ -47,6 +47,7 @@
 #include "gstgluploadelement.h"
 #include "gstgldownloadelement.h"
 #include "gstglcolorconvertelement.h"
+#include "gstglcolorbalance.h"
 #include "gstglfilterbin.h"
 #include "gstglsinkbin.h"
 #include "gstglsrcbin.h"
@@ -64,6 +65,7 @@
 
 #if HAVE_GRAPHENE
 #include "gstgltransformation.h"
+#include "gstglvideoflip.h"
 #endif
 #if HAVE_JPEG
 #if HAVE_PNG
@@ -140,6 +142,11 @@ plugin_init (GstPlugin * plugin)
     return FALSE;
   }
 
+  if (!gst_element_register (plugin, "glcolorbalance",
+          GST_RANK_NONE, GST_TYPE_GL_COLOR_BALANCE)) {
+    return FALSE;
+  }
+
   if (!gst_element_register (plugin, "glfilterbin",
           GST_RANK_NONE, GST_TYPE_GL_FILTER_BIN)) {
     return FALSE;
@@ -167,6 +174,11 @@ plugin_init (GstPlugin * plugin)
 #if HAVE_GRAPHENE
   if (!gst_element_register (plugin, "gltransformation",
           GST_RANK_NONE, GST_TYPE_GL_TRANSFORMATION)) {
+    return FALSE;
+  }
+
+  if (!gst_element_register (plugin, "glvideoflip",
+          GST_RANK_NONE, GST_TYPE_GL_VIDEO_FLIP)) {
     return FALSE;
   }
 #endif

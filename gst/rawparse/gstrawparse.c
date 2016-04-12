@@ -222,6 +222,22 @@ gst_raw_parse_set_src_caps (GstRawParse * rp)
   }
 
   rp->negotiated = gst_pad_set_caps (rp->srcpad, caps);
+
+  /* if subclass inplement decide_allocation, send an allocation
+   * query, pass result to subclass and let it handle allocation if needed. */
+  if (rp_class->decide_allocation) {
+    GstQuery *query;
+
+    query = gst_query_new_allocation (caps, TRUE);
+    if (!gst_pad_peer_query (rp->srcpad, query)) {
+      /* not a problem, just debug a little */
+      GST_DEBUG_OBJECT (rp, "peer ALLOCATION query failed");
+    }
+
+    rp_class->decide_allocation (rp, query);
+    gst_query_unref (query);
+  }
+
   gst_caps_unref (caps);
 
   return rp->negotiated;
@@ -233,10 +249,12 @@ gst_raw_parse_push_buffer (GstRawParse * rp, GstBuffer * buffer)
   GstFlowReturn ret;
   gint nframes;
   GstRawParseClass *rpclass;
+  gsize size;
 
   rpclass = GST_RAW_PARSE_GET_CLASS (rp);
 
-  nframes = gst_buffer_get_size (buffer) / rp->framesize;
+  size = gst_buffer_get_size (buffer);
+  nframes = size / rp->framesize;
 
   if (rp->segment.rate < 0) {
     rp->n_frames -= nframes;
@@ -257,8 +275,8 @@ gst_raw_parse_push_buffer (GstRawParse * rp, GstBuffer * buffer)
     GST_BUFFER_DURATION (buffer) = GST_CLOCK_TIME_NONE;
   }
 
-  if (rpclass->set_buffer_flags) {
-    rpclass->set_buffer_flags (rp, buffer);
+  if (rpclass->pre_push_buffer) {
+    rpclass->pre_push_buffer (rp, buffer);
   }
 
   if (rp->discont) {
@@ -267,7 +285,7 @@ gst_raw_parse_push_buffer (GstRawParse * rp, GstBuffer * buffer)
   }
 
   if (rp->segment.rate >= 0) {
-    rp->offset += gst_buffer_get_size (buffer);
+    rp->offset += size;
     rp->n_frames += nframes;
   }
 

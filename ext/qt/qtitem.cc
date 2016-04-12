@@ -28,6 +28,7 @@
 #include "qtitem.h"
 #include "gstqsgtexture.h"
 
+#include <QtCore/QRunnable>
 #include <QtGui/QGuiApplication>
 #include <QtQuick/QQuickWindow>
 #include <QtQuick/QSGSimpleTextureNode>
@@ -99,9 +100,29 @@ struct _QtGLVideoItemPrivate
   GstGLContext *context;
 };
 
+class InitializeSceneGraph : public QRunnable
+{
+public:
+  InitializeSceneGraph(QtGLVideoItem *item);
+  void run();
+
+private:
+  QtGLVideoItem *item_;
+};
+
+InitializeSceneGraph::InitializeSceneGraph(QtGLVideoItem *item) :
+  item_(item)
+{
+}
+
+void InitializeSceneGraph::run()
+{
+  item_->onSceneGraphInitialized();
+}
+
 QtGLVideoItem::QtGLVideoItem()
 {
-  QGuiApplication *app = dynamic_cast<QGuiApplication *> (QCoreApplication::instance ());
+  QGuiApplication *app = static_cast<QGuiApplication *> (QCoreApplication::instance ());
   static volatile gsize _debug;
 
   g_assert (app != NULL);
@@ -110,7 +131,7 @@ QtGLVideoItem::QtGLVideoItem()
     GST_DEBUG_CATEGORY_INIT (GST_CAT_DEFAULT, "qtglwidget", 0, "Qt GL Widget");
     g_once_init_leave (&_debug, 1);
   }
-
+  this->m_openGlContextInitialized = false;
   this->setFlag (QQuickItem::ItemHasContents, true);
 
   this->priv = g_new0 (QtGLVideoItemPrivate, 1);
@@ -151,7 +172,10 @@ QtGLVideoItem::QtGLVideoItem()
 QtGLVideoItem::~QtGLVideoItem()
 {
   g_mutex_clear (&this->priv->lock);
-
+  if (this->priv->context)
+    gst_object_unref(this->priv->context);
+  if (this->priv->other_context)
+    gst_object_unref(this->priv->other_context);
   g_free (this->priv);
   this->priv = NULL;
 }
@@ -188,6 +212,10 @@ QSGNode *
 QtGLVideoItem::updatePaintNode(QSGNode * oldNode,
     UpdatePaintNodeData * updatePaintNodeData)
 {
+  if (!m_openGlContextInitialized) {
+    return oldNode;
+  }
+
   QSGSimpleTextureNode *texNode = static_cast<QSGSimpleTextureNode *> (oldNode);
   GstVideoRectangle src, dst, result;
   GstQSGTexture *tex;
@@ -211,6 +239,7 @@ QtGLVideoItem::updatePaintNode(QSGNode * oldNode,
   tex = static_cast<GstQSGTexture *> (texNode->texture());
   tex->setCaps (this->priv->caps);
   tex->setBuffer (this->priv->buffer);
+  texNode->markDirty(QSGNode::DirtyMaterial);
 
   if (this->priv->force_aspect_ratio) {
     src.w = this->priv->display_width;
@@ -353,6 +382,7 @@ QtGLVideoItem::onSceneGraphInitialized ()
     } else {
       gst_gl_display_filter_gl_api (this->priv->display, gst_gl_context_get_gl_api (this->priv->other_context));
       gst_gl_context_activate (this->priv->other_context, FALSE);
+      m_openGlContextInitialized = true;
     }
   }
 
@@ -413,9 +443,9 @@ QtGLVideoItem::handleWindowChanged(QQuickWindow *win)
 {
   if (win) {
     if (win->isSceneGraphInitialized())
-      onSceneGraphInitialized();
+      win->scheduleRenderJob(new InitializeSceneGraph(this), QQuickWindow::BeforeSynchronizingStage);
     else
-	  connect(win, SIGNAL(sceneGraphInitialized()), this, SLOT(onSceneGraphInitialized()), Qt::DirectConnection);
+      connect(win, SIGNAL(sceneGraphInitialized()), this, SLOT(onSceneGraphInitialized()), Qt::DirectConnection);
 
     connect(win, SIGNAL(sceneGraphInvalidated()), this, SLOT(onSceneGraphInvalidated()), Qt::DirectConnection);
   } else {

@@ -48,6 +48,7 @@ static const struct { int major, minor; } opengl_versions[] = {
 
    {0, 0} /* end of list */
 };
+
 /* *INDENT-ON* */
 
 #endif /* _OPENGL_VERSIONS_H_ */

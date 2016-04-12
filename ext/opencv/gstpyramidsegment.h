@@ -48,10 +48,7 @@
 
 #include <gstopencvvideofilter.h>
 #include <opencv2/core/version.hpp>
-
-#if CV_MAJOR_VERSION * 100 + CV_MINOR_VERSION >= 204
 #include <opencv2/legacy/legacy.hpp>
-#endif
 
 G_BEGIN_DECLS
 /* #defines don't like whitespacey bits */
@@ -76,8 +73,6 @@ struct _GstPyramidSegment
   GstPad *sinkpad, *srcpad;
 
   gboolean silent;
-
-  IplImage *cvSegmentedImage;
 
   CvMemStorage *storage;
 

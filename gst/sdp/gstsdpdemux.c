@@ -393,9 +393,14 @@ gst_sdp_demux_create_stream (GstSDPDemux * demux, GstSDPMessage * sdp, gint idx)
   /* we must have a payload. No payload means we cannot create caps */
   /* FIXME, handle multiple formats. */
   if ((payload = gst_sdp_media_get_format (media, 0))) {
+    GstStructure *s;
+
     stream->pt = atoi (payload);
     /* convert caps */
     stream->caps = gst_sdp_media_get_caps_from_media (media, stream->pt);
+
+    s = gst_caps_get_structure (stream->caps, 0);
+    gst_structure_set_name (s, "application/x-rtp");
 
     if (stream->pt >= 96) {
       /* If we have a dynamic payload type, see if we have a stream with the
@@ -484,7 +489,7 @@ gst_sdp_demux_cleanup (GstSDPDemux * demux)
 static void
 new_session_pad (GstElement * session, GstPad * pad, GstSDPDemux * demux)
 {
-  gchar *name;
+  gchar *name, *pad_name;
   GstPadTemplate *template;
   gint id, ssrc, pt;
   GList *lstream;
@@ -509,11 +514,13 @@ new_session_pad (GstElement * session, GstPad * pad, GstSDPDemux * demux)
   /* no need for a timeout anymore now */
   g_object_set (G_OBJECT (stream->udpsrc[0]), "timeout", (guint64) 0, NULL);
 
+  pad_name = g_strdup_printf ("stream_%u", stream->id);
   /* create a new pad we will use to stream to */
   template = gst_static_pad_template_get (&rtptemplate);
-  stream->srcpad = gst_ghost_pad_new_from_template (name, pad, template);
+  stream->srcpad = gst_ghost_pad_new_from_template (pad_name, pad, template);
   gst_object_unref (template);
   g_free (name);
+  g_free (pad_name);
 
   stream->added = TRUE;
   gst_pad_set_active (stream->srcpad, TRUE);

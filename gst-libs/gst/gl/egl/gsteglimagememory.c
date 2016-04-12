@@ -44,6 +44,26 @@
 #endif
 #endif
 
+#ifndef EGL_LINUX_DMA_BUF_EXT
+#define EGL_LINUX_DMA_BUF_EXT 0x3270
+#endif
+
+#ifndef EGL_LINUX_DRM_FOURCC_EXT
+#define EGL_LINUX_DRM_FOURCC_EXT 0x3271
+#endif
+
+#ifndef EGL_DMA_BUF_PLANE0_FD_EXT
+#define EGL_DMA_BUF_PLANE0_FD_EXT 0x3272
+#endif
+
+#ifndef EGL_DMA_BUF_PLANE0_OFFSET_EXT
+#define EGL_DMA_BUF_PLANE0_OFFSET_EXT 0x3273
+#endif
+
+#ifndef EGL_DMA_BUF_PLANE0_PITCH_EXT
+#define EGL_DMA_BUF_PLANE0_PITCH_EXT 0x3274
+#endif
+
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_EGL_IMAGE_MEMORY);
 #define GST_CAT_DEFAULT GST_CAT_EGL_IMAGE_MEMORY
 
@@ -450,7 +470,7 @@ gst_egl_image_memory_from_dmabuf (GstGLContext * context,
 
   if (!img) {
     GST_WARNING_OBJECT (allocator, "eglCreateImage failed: %s",
-        gst_gl_context_egl_get_error_string ());
+        gst_gl_context_egl_get_error_string (eglGetError ()));
     return NULL;
   }
 

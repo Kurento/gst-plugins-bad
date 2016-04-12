@@ -135,6 +135,7 @@ GST_DEBUG_CATEGORY (adaptivedemux_debug);
 #define DEFAULT_CONNECTION_SPEED 0
 #define DEFAULT_BITRATE_LIMIT 0.8
 #define SRC_QUEUE_MAX_BYTES 20 * 1024 * 1024    /* For safety. Large enough to hold a segment. */
+#define NUM_LOOKBACK_FRAGMENTS 3
 
 #define GST_MANIFEST_GET_LOCK(d) (&(GST_ADAPTIVE_DEMUX_CAST(d)->priv->manifest_lock))
 #define GST_MANIFEST_LOCK(d) g_rec_mutex_lock (GST_MANIFEST_GET_LOCK (d));
@@ -230,7 +231,8 @@ static gboolean gst_adaptive_demux_expose_streams (GstAdaptiveDemux * demux,
     gboolean first_and_live);
 static gboolean gst_adaptive_demux_is_live (GstAdaptiveDemux * demux);
 static GstFlowReturn gst_adaptive_demux_stream_seek (GstAdaptiveDemux * demux,
-    GstAdaptiveDemuxStream * stream, GstClockTime ts);
+    GstAdaptiveDemuxStream * stream, gboolean forward, GstSeekFlags flags,
+    GstClockTime ts, GstClockTime * final_ts);
 static gboolean gst_adaptive_demux_stream_has_next_fragment (GstAdaptiveDemux *
     demux, GstAdaptiveDemuxStream * stream);
 static gboolean gst_adaptive_demux_stream_select_bitrate (GstAdaptiveDemux *
@@ -1060,6 +1062,8 @@ gst_adaptive_demux_stream_new (GstAdaptiveDemux * demux, GstPad * pad)
 
   stream->pad = pad;
   stream->demux = demux;
+  stream->fragment_bitrates =
+      g_malloc0 (sizeof (guint64) * NUM_LOOKBACK_FRAGMENTS);
   gst_pad_set_element_private (pad, stream);
 
   gst_pad_set_query_function (pad,
@@ -1075,6 +1079,20 @@ gst_adaptive_demux_stream_new (GstAdaptiveDemux * demux, GstPad * pad)
   demux->next_streams = g_list_append (demux->next_streams, stream);
 
   return stream;
+}
+
+GstAdaptiveDemuxStream *
+gst_adaptive_demux_find_stream_for_pad (GstAdaptiveDemux * demux, GstPad * pad)
+{
+  GList *iter;
+
+  for (iter = demux->streams; iter; iter = g_list_next (iter)) {
+    GstAdaptiveDemuxStream *stream = iter->data;
+    if (stream->pad == pad) {
+      return stream;
+    }
+  }
+  return NULL;
 }
 
 /* must be called with manifest_lock taken.
@@ -1132,6 +1150,10 @@ gst_adaptive_demux_stream_free (GstAdaptiveDemuxStream * stream)
     stream->pending_events = NULL;
   }
 
+  if (stream->internal_pad) {
+    gst_object_unparent (GST_OBJECT_CAST (stream->internal_pad));
+  }
+
   if (stream->src_srcpad) {
     gst_object_unref (stream->src_srcpad);
     stream->src_srcpad = NULL;
@@ -1145,6 +1167,7 @@ gst_adaptive_demux_stream_free (GstAdaptiveDemuxStream * stream)
 
   g_cond_clear (&stream->fragment_download_cond);
   g_mutex_clear (&stream->fragment_download_lock);
+  g_free (stream->fragment_bitrates);
 
   if (stream->pad) {
     gst_object_unref (stream->pad);
@@ -1186,6 +1209,13 @@ gst_adaptive_demux_can_seek (GstAdaptiveDemux * demux)
   return klass->seek != NULL;
 }
 
+#define IS_SNAP_SEEK(f) (f & (GST_SEEK_FLAG_SNAP_BEFORE | \
+                              GST_SEEK_FLAG_SNAP_AFTER | \
+                              GST_SEEK_FLAG_SNAP_NEAREST))
+#define REMOVE_SNAP_FLAGS(f) (f & ~(GST_SEEK_FLAG_SNAP_BEFORE | \
+                              GST_SEEK_FLAG_SNAP_AFTER | \
+                              GST_SEEK_FLAG_SNAP_NEAREST))
+
 static gboolean
 gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
     GstEvent * event)
@@ -1195,6 +1225,8 @@ gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
 
   demux = GST_ADAPTIVE_DEMUX_CAST (parent);
   demux_class = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
+
+  /* FIXME handle events received on pads that are to be removed */
 
   switch (event->type) {
     case GST_EVENT_SEEK:
@@ -1208,6 +1240,7 @@ gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
       gboolean update;
       gboolean ret = TRUE;
       GstSegment oldsegment;
+      GstAdaptiveDemuxStream *stream = NULL;
 
       GST_INFO_OBJECT (demux, "Received seek event");
 
@@ -1251,10 +1284,7 @@ gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
 
       seqnum = gst_event_get_seqnum (event);
 
-      GST_DEBUG_OBJECT (demux,
-          "seek event, rate: %f type: %d start: %" GST_TIME_FORMAT " stop: %"
-          GST_TIME_FORMAT, rate, start_type, GST_TIME_ARGS (start),
-          GST_TIME_ARGS (stop));
+      GST_DEBUG_OBJECT (demux, "seek event, %" GST_PTR_FORMAT, event);
 
       /* have a backup in case seek fails */
       gst_segment_copy_into (&demux->segment, &oldsegment);
@@ -1275,6 +1305,61 @@ gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
       }
 
       GST_ADAPTIVE_DEMUX_SEGMENT_LOCK (demux);
+
+      /*
+       * Handle snap seeks as follows:
+       * 1) do the snap seeking on the stream that received
+       *    the event
+       * 2) use the final position on this stream to seek
+       *    on the other streams to the same position
+       *
+       * We can't snap at all streams at the same time as
+       * they might end in different positions, so just
+       * use the one that received the event as the 'leading'
+       * one to do the snap seek.
+       */
+      if (IS_SNAP_SEEK (flags) && demux_class->stream_seek && (stream =
+              gst_adaptive_demux_find_stream_for_pad (demux, pad))) {
+        GstClockTime ts;
+        GstSeekFlags stream_seek_flags = flags;
+
+        /* snap-seek on the stream that received the event and then
+         * use the resulting position to seek on all streams */
+
+        if (rate >= 0) {
+          if (start_type != GST_SEEK_TYPE_NONE)
+            ts = start;
+          else {
+            ts = stream->segment.position;
+            start_type = GST_SEEK_TYPE_SET;
+          }
+        } else {
+          if (stop_type != GST_SEEK_TYPE_NONE)
+            ts = stop;
+          else {
+            stop_type = GST_SEEK_TYPE_SET;
+            ts = stream->segment.position;
+          }
+        }
+
+        demux_class->stream_seek (stream, rate >= 0, stream_seek_flags, ts,
+            &ts);
+
+        /* replace event with a new one without snaping to seek on all streams */
+        gst_event_unref (event);
+        if (rate >= 0) {
+          start = ts;
+        } else {
+          stop = ts;
+        }
+        event =
+            gst_event_new_seek (rate, format, REMOVE_SNAP_FLAGS (flags),
+            start_type, start, stop_type, stop);
+        GST_DEBUG_OBJECT (demux, "Adapted snap seek to %" GST_PTR_FORMAT,
+            event);
+      }
+      stream = NULL;
+
       gst_segment_do_seek (&demux->segment, rate, format, flags, start_type,
           start, stop_type, stop, &update);
 
@@ -1287,8 +1372,8 @@ gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
         demux->segment.base = oldsegment.base;
       }
 
-      GST_DEBUG_OBJECT (demux, "Seeking to segment %" GST_SEGMENT_FORMAT,
-          &demux->segment);
+      GST_DEBUG_OBJECT (demux, "Calling subclass seek: %" GST_PTR_FORMAT,
+          event);
 
       ret = demux_class->seek (demux, event);
 
@@ -1350,26 +1435,23 @@ gst_adaptive_demux_src_event (GstPad * pad, GstObject * parent,
       return ret;
     }
     case GST_EVENT_RECONFIGURE:{
-      GList *iter;
+      GstAdaptiveDemuxStream *stream;
 
       GST_MANIFEST_LOCK (demux);
+      stream = gst_adaptive_demux_find_stream_for_pad (demux, pad);
 
-      for (iter = demux->streams; iter; iter = g_list_next (iter)) {
-        GstAdaptiveDemuxStream *stream = iter->data;
-
-        if (stream->pad == pad) {
-          if (stream->last_ret == GST_FLOW_NOT_LINKED) {
-            stream->last_ret = GST_FLOW_OK;
-            stream->restart_download = TRUE;
-            stream->need_header = TRUE;
-            stream->discont = TRUE;
-            GST_DEBUG_OBJECT (stream->pad, "Restarting download loop");
-            gst_task_start (stream->download_task);
-          }
-          gst_event_unref (event);
-          GST_MANIFEST_UNLOCK (demux);
-          return TRUE;
+      if (stream) {
+        if (stream->last_ret == GST_FLOW_NOT_LINKED) {
+          stream->last_ret = GST_FLOW_OK;
+          stream->restart_download = TRUE;
+          stream->need_header = TRUE;
+          stream->discont = TRUE;
+          GST_DEBUG_OBJECT (stream->pad, "Restarting download loop");
+          gst_task_start (stream->download_task);
         }
+        gst_event_unref (event);
+        GST_MANIFEST_UNLOCK (demux);
+        return TRUE;
       }
       GST_MANIFEST_UNLOCK (demux);
     }
@@ -1456,6 +1538,11 @@ gst_adaptive_demux_src_query (GstPad * pad, GstObject * parent,
         if (can_seek) {
           if (gst_adaptive_demux_is_live (demux)) {
             ret = gst_adaptive_demux_get_live_seek_range (demux, &start, &stop);
+            if (!ret) {
+              GST_MANIFEST_UNLOCK (demux);
+              GST_INFO_OBJECT (demux, "can't answer seeking query");
+              return FALSE;
+            }
           } else {
             duration = demux_class->get_duration (demux);
             if (GST_CLOCK_TIME_IS_VALID (duration) && duration > 0)
@@ -1639,10 +1726,29 @@ gst_adaptive_demux_stream_queue_event (GstAdaptiveDemuxStream * stream,
 
 /* must be called with manifest_lock taken */
 static guint64
+_update_average_bitrate (GstAdaptiveDemux * demux,
+    GstAdaptiveDemuxStream * stream, guint64 new_bitrate)
+{
+  gint index = stream->moving_index % NUM_LOOKBACK_FRAGMENTS;
+
+  stream->moving_bitrate -= stream->fragment_bitrates[index];
+  stream->fragment_bitrates[index] = new_bitrate;
+  stream->moving_bitrate += new_bitrate;
+
+  stream->moving_index += 1;
+
+  if (stream->moving_index > NUM_LOOKBACK_FRAGMENTS)
+    return stream->moving_bitrate / NUM_LOOKBACK_FRAGMENTS;
+  return stream->moving_bitrate / stream->moving_index;
+}
+
+/* must be called with manifest_lock taken */
+static guint64
 gst_adaptive_demux_stream_update_current_bitrate (GstAdaptiveDemux * demux,
     GstAdaptiveDemuxStream * stream)
 {
-  guint64 bitrate;
+  guint64 average_bitrate;
+  guint64 fragment_bitrate;
 
   if (demux->connection_speed) {
     GST_LOG_OBJECT (demux, "Connection-speed is set to %u kbps, using it",
@@ -1650,12 +1756,27 @@ gst_adaptive_demux_stream_update_current_bitrate (GstAdaptiveDemux * demux,
     return demux->connection_speed;
   }
 
-  g_object_get (stream->queue, "avg-in-rate", &bitrate, NULL);
-  bitrate *= 8;
+  g_object_get (stream->queue, "avg-in-rate", &fragment_bitrate, NULL);
+  fragment_bitrate *= 8;
   GST_DEBUG_OBJECT (demux, "Download bitrate is : %" G_GUINT64_FORMAT " bps",
-      bitrate);
-  stream->current_download_rate = bitrate;
-  return bitrate;
+      fragment_bitrate);
+
+  average_bitrate = _update_average_bitrate (demux, stream, fragment_bitrate);
+
+  GST_INFO_OBJECT (stream, "last fragment bitrate was %" G_GUINT64_FORMAT,
+      fragment_bitrate);
+  GST_INFO_OBJECT (stream,
+      "Last %u fragments average bitrate is %" G_GUINT64_FORMAT,
+      NUM_LOOKBACK_FRAGMENTS, average_bitrate);
+
+  /* Conservative approach, make sure we don't upgrade too fast */
+  stream->current_download_rate = MIN (average_bitrate, fragment_bitrate);
+
+  stream->current_download_rate *= demux->bitrate_limit;
+  GST_DEBUG_OBJECT (demux, "Bitrate after bitrate limit (%0.2f): %"
+      G_GUINT64_FORMAT, demux->bitrate_limit,
+      stream->current_download_rate * 8);
+  return stream->current_download_rate;
 }
 
 /* must be called with manifest_lock taken */
@@ -1860,11 +1981,14 @@ gst_adaptive_demux_stream_data_received_default (GstAdaptiveDemux * demux,
 static GstFlowReturn
 _src_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
-  GstPad *srcpad = (GstPad *) parent;
-  GstAdaptiveDemuxStream *stream = gst_pad_get_element_private (srcpad);
-  GstAdaptiveDemux *demux = stream->demux;
-  GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
+  GstAdaptiveDemuxStream *stream;
+  GstAdaptiveDemux *demux;
+  GstAdaptiveDemuxClass *klass;
   GstFlowReturn ret = GST_FLOW_OK;
+
+  demux = GST_ADAPTIVE_DEMUX_CAST (parent);
+  stream = gst_pad_get_element_private (pad);
+  klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
 
   GST_MANIFEST_LOCK (demux);
 
@@ -2019,8 +2143,7 @@ gst_adaptive_demux_stream_fragment_download_finish (GstAdaptiveDemuxStream *
 static gboolean
 _src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstPad *srcpad = GST_PAD_CAST (parent);
-  GstAdaptiveDemuxStream *stream = gst_pad_get_element_private (srcpad);
+  GstAdaptiveDemuxStream *stream = gst_pad_get_element_private (pad);
   GstAdaptiveDemux *demux = stream->demux;
 
   switch (GST_EVENT_TYPE (event)) {
@@ -2049,6 +2172,8 @@ _src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 static gboolean
 _src_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
+  GstAdaptiveDemuxStream *stream = gst_pad_get_element_private (pad);
+
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_ALLOCATION:
       return FALSE;
@@ -2057,7 +2182,7 @@ _src_query (GstPad * pad, GstObject * parent, GstQuery * query)
       break;
   }
 
-  return gst_pad_query_default (pad, parent, query);
+  return gst_pad_peer_query (stream->pad, query);
 }
 
 /* must be called with manifest_lock taken.
@@ -2120,45 +2245,6 @@ gst_adaptive_demux_stream_wait_manifest_update (GstAdaptiveDemux * demux,
   return ret;
 }
 
-static gboolean
-_adaptive_demux_pad_remove_eos_sticky (GstPad * pad, GstEvent ** event,
-    gpointer udata)
-{
-  if (GST_EVENT_TYPE (*event) == GST_EVENT_EOS) {
-    gst_event_replace (event, NULL);
-    return FALSE;
-  }
-  return TRUE;
-}
-
-/* must be called with manifest_lock taken */
-static void
-gst_adaptive_demux_stream_clear_eos_and_flush_state (GstAdaptiveDemuxStream *
-    stream)
-{
-  GstPad *internal_pad;
-
-  internal_pad =
-      GST_PAD_CAST (gst_proxy_pad_get_internal (GST_PROXY_PAD (stream->pad)));
-  gst_pad_sticky_events_foreach (internal_pad,
-      _adaptive_demux_pad_remove_eos_sticky, NULL);
-  GST_OBJECT_FLAG_UNSET (internal_pad, GST_PAD_FLAG_EOS);
-  /* In case the stream is recovering from a flushing seek it is also needed
-   * to remove the flushing state from this pad. The flushing state is set
-   * because of the flow return propagating until the source element */
-  GST_PAD_UNSET_FLUSHING (internal_pad);
-
-  gst_object_unref (internal_pad);
-}
-
-static void
-gst_adaptive_demux_stream_queue_overrun (GstElement * queue, gpointer user_data)
-{
-  GstAdaptiveDemuxStream *stream = (GstAdaptiveDemuxStream *) user_data;
-  GST_WARNING_OBJECT (stream->pad,
-      "Queue overrun! The fragment to download is too big according to the current queue size limit");
-}
-
 /* must be called with manifest_lock taken */
 static gboolean
 gst_adaptive_demux_stream_update_source (GstAdaptiveDemuxStream * stream,
@@ -2216,7 +2302,7 @@ gst_adaptive_demux_stream_update_source (GstAdaptiveDemuxStream * stream,
     GstElement *queue;
     GstPadLinkReturn pad_link_ret;
     GObjectClass *gobject_class;
-    GstPad *internal_pad;
+    gchar *internal_name, *bin_name;
 
     /* Our src consists of a bin containing uri_handler -> queue2 . The
      * purpose of the queue2 is to allow the uri_handler to download an
@@ -2230,8 +2316,6 @@ gst_adaptive_demux_stream_update_source (GstAdaptiveDemuxStream * stream,
     g_object_set (queue, "max-size-bytes", (guint) SRC_QUEUE_MAX_BYTES, NULL);
     g_object_set (queue, "max-size-buffers", (guint) 0, NULL);
     g_object_set (queue, "max-size-time", (guint64) 0, NULL);
-    g_signal_connect (queue, "overrun",
-        G_CALLBACK (gst_adaptive_demux_stream_queue_overrun), stream);
 
     uri_handler = gst_element_make_from_uri (GST_URI_SRC, uri, NULL, NULL);
     if (uri_handler == NULL) {
@@ -2271,7 +2355,9 @@ gst_adaptive_demux_stream_update_source (GstAdaptiveDemuxStream * stream,
     }
 
     /* Source bin creation */
-    stream->src = gst_bin_new (NULL);
+    bin_name = g_strdup_printf ("srcbin-%s", GST_PAD_NAME (stream->pad));
+    stream->src = gst_bin_new (bin_name);
+    g_free (bin_name);
     if (stream->src == NULL) {
       gst_object_unref (queue);
       gst_object_unref (uri_handler);
@@ -2310,20 +2396,27 @@ gst_adaptive_demux_stream_update_source (GstAdaptiveDemuxStream * stream,
     gst_bin_add (GST_BIN_CAST (demux), stream->src);
     stream->src_srcpad = gst_element_get_static_pad (stream->src, "src");
 
-    gst_ghost_pad_set_target (GST_GHOST_PAD_CAST (stream->pad),
-        stream->src_srcpad);
-
-    /* set up our internal pad to drop all events from
+    /* set up our internal floating pad to drop all events from
      * the http src we don't care about. On the chain function
-     * we just push the buffer forward, but this way dash can get
-     * the flow return from downstream */
-    internal_pad =
-        GST_PAD_CAST (gst_proxy_pad_get_internal (GST_PROXY_PAD (stream->pad)));
-    gst_pad_set_chain_function (GST_PAD_CAST (internal_pad), _src_chain);
-    gst_pad_set_event_function (GST_PAD_CAST (internal_pad), _src_event);
-    /* need to set query otherwise deadlocks happen with allocation queries */
-    gst_pad_set_query_function (GST_PAD_CAST (internal_pad), _src_query);
-    gst_object_unref (internal_pad);
+     * we just push the buffer forward */
+    internal_name = g_strdup_printf ("internal-%s", GST_PAD_NAME (stream->pad));
+    stream->internal_pad = gst_pad_new (internal_name, GST_PAD_SINK);
+    g_free (internal_name);
+    gst_object_set_parent (GST_OBJECT_CAST (stream->internal_pad),
+        GST_OBJECT_CAST (demux));
+    GST_OBJECT_FLAG_SET (stream->internal_pad, GST_PAD_FLAG_NEED_PARENT);
+    gst_pad_set_element_private (stream->internal_pad, stream);
+    gst_pad_set_active (stream->internal_pad, TRUE);
+    gst_pad_set_chain_function (stream->internal_pad, _src_chain);
+    gst_pad_set_event_function (stream->internal_pad, _src_event);
+    gst_pad_set_query_function (stream->internal_pad, _src_query);
+
+    if (gst_pad_link_full (stream->src_srcpad, stream->internal_pad,
+            GST_PAD_LINK_CHECK_NOTHING) != GST_PAD_LINK_OK) {
+      GST_ERROR_OBJECT (stream->pad, "Failed to link internal pad");
+      return FALSE;
+    }
+
     stream->uri_handler = uri_handler;
     stream->queue = queue;
   }
@@ -2427,24 +2520,11 @@ gst_adaptive_demux_stream_download_uri (GstAdaptiveDemux * demux,
     ret = GST_FLOW_CUSTOM_ERROR;
   }
 
-  /* flush the proxypads so that the EOS state is reset */
-  gst_pad_push_event (stream->src_srcpad, gst_event_new_flush_start ());
-
-  /* sending flush stop event will serialiase on stream->src_srcpad.
-   * But the _src_chain function will first get the pad lock and then the
-   * manifest lock, so we cannot hold the manifest lock here while
-   * we will try to get the pad lock (taking locks in reversing order
-   * will lead to deadlock)
-   *
-   * In conclusion, we need to release the manifest lock before flushing
-   */
-  GST_MANIFEST_UNLOCK (demux);
-
-  gst_pad_push_event (stream->src_srcpad, gst_event_new_flush_stop (TRUE));
-
   /* changing src element state might try to join the streaming thread, so
    * we must not hold the manifest lock.
    */
+  GST_MANIFEST_UNLOCK (demux);
+
   gst_element_set_state (stream->src, GST_STATE_READY);
 
   GST_MANIFEST_LOCK (demux);
@@ -2456,7 +2536,10 @@ gst_adaptive_demux_stream_download_uri (GstAdaptiveDemux * demux,
   }
   g_mutex_unlock (&stream->fragment_download_lock);
 
-  gst_adaptive_demux_stream_clear_eos_and_flush_state (stream);
+  /* deactivate and reactivate our ghostpad to make it fresh for a new
+   * stream */
+  gst_pad_set_active (stream->internal_pad, FALSE);
+  gst_pad_set_active (stream->internal_pad, TRUE);
 
   return ret;
 }
@@ -2645,7 +2728,6 @@ gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
   }
 
   if (G_UNLIKELY (stream->restart_download)) {
-    GstSegment segment;
     GstEvent *seg_event;
     GstClockTime cur, ts = 0;
     gint64 pos;
@@ -2688,8 +2770,6 @@ gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
     GST_DEBUG_OBJECT (stream->pad, "Restarting stream at "
         "position %" GST_TIME_FORMAT, GST_TIME_ARGS (ts));
 
-    gst_segment_copy_into (&demux->segment, &segment);
-
     if (GST_CLOCK_TIME_IS_VALID (ts)) {
       GstClockTime offset, period_start;
 
@@ -2698,9 +2778,10 @@ gst_adaptive_demux_stream_download_loop (GstAdaptiveDemuxStream * stream)
       period_start = gst_adaptive_demux_get_period_start_time (demux);
 
       /* TODO check return */
-      gst_adaptive_demux_stream_seek (demux, stream, ts);
+      gst_adaptive_demux_stream_seek (demux, stream, demux->segment.rate >= 0,
+          0, ts, &ts);
 
-      segment.position = ts - period_start + offset;
+      stream->segment.position = ts - period_start + offset;
     }
 
     /* The stream's segment is still correct except for
@@ -3062,12 +3143,13 @@ gst_adaptive_demux_is_live (GstAdaptiveDemux * demux)
 /* must be called with manifest_lock taken */
 static GstFlowReturn
 gst_adaptive_demux_stream_seek (GstAdaptiveDemux * demux,
-    GstAdaptiveDemuxStream * stream, GstClockTime ts)
+    GstAdaptiveDemuxStream * stream, gboolean forward, GstSeekFlags flags,
+    GstClockTime ts, GstClockTime * final_ts)
 {
   GstAdaptiveDemuxClass *klass = GST_ADAPTIVE_DEMUX_GET_CLASS (demux);
 
   if (klass->stream_seek)
-    return klass->stream_seek (stream, ts);
+    return klass->stream_seek (stream, forward, flags, ts, final_ts);
   return GST_FLOW_ERROR;
 }
 

@@ -57,6 +57,7 @@ typedef struct
 {
   IDeckLinkAudioInputPacket *packet;
   GstClockTime capture_time;
+  gboolean discont;
 } CapturePacket;
 
 static void
@@ -411,7 +412,8 @@ gst_decklink_audio_src_get_caps (GstBaseSrc * bsrc, GstCaps * filter)
 
 static void
 gst_decklink_audio_src_got_packet (GstElement * element,
-    IDeckLinkAudioInputPacket * packet, GstClockTime capture_time)
+    IDeckLinkAudioInputPacket * packet, GstClockTime capture_time,
+    gboolean discont)
 {
   GstDecklinkAudioSrc *self = GST_DECKLINK_AUDIO_SRC_CAST (element);
   GstDecklinkVideoSrc *videosrc = NULL;
@@ -447,6 +449,7 @@ gst_decklink_audio_src_got_packet (GstElement * element,
     p = (CapturePacket *) g_malloc0 (sizeof (CapturePacket));
     p->packet = packet;
     p->capture_time = capture_time;
+    p->discont = discont;
     packet->AddRef ();
     g_queue_push_tail (&self->current_packets, p);
     g_cond_signal (&self->cond);
@@ -469,6 +472,7 @@ gst_decklink_audio_src_create (GstPushSrc * bsrc, GstBuffer ** buffer)
   guint64 start_offset, end_offset;
   gboolean discont = FALSE;
 
+retry:
   g_mutex_lock (&self->lock);
   while (g_queue_is_empty (&self->current_packets) && !self->flushing) {
     g_cond_wait (&self->cond, &self->lock);
@@ -488,6 +492,13 @@ gst_decklink_audio_src_create (GstPushSrc * bsrc, GstBuffer ** buffer)
   sample_count = p->packet->GetSampleFrameCount ();
   data_size = self->info.bpf * sample_count;
 
+  if (p->capture_time == GST_CLOCK_TIME_NONE && self->next_offset == (guint64) - 1) {
+    GST_DEBUG_OBJECT (self, "Got packet without timestamp before initial "
+        "timestamp after discont - dropping");
+    capture_packet_free (p);
+    goto retry;
+  }
+
   ap = (AudioPacket *) g_malloc0 (sizeof (AudioPacket));
 
   *buffer =
@@ -501,6 +512,7 @@ gst_decklink_audio_src_create (GstPushSrc * bsrc, GstBuffer ** buffer)
   ap->input->AddRef ();
 
   timestamp = p->capture_time;
+  discont = p->discont;
 
   // Jitter and discontinuity handling, based on audiobasesrc
   start_time = timestamp;
@@ -515,7 +527,7 @@ gst_decklink_audio_src_create (GstPushSrc * bsrc, GstBuffer ** buffer)
 
   duration = end_time - start_time;
 
-  if (self->next_offset == (guint64) - 1) {
+  if (discont || self->next_offset == (guint64) - 1) {
     discont = TRUE;
   } else {
     guint64 diff, max_sample_diff;
@@ -556,9 +568,10 @@ gst_decklink_audio_src_create (GstPushSrc * bsrc, GstBuffer ** buffer)
           self->next_offset, start_offset);
     GST_BUFFER_FLAG_SET (*buffer, GST_BUFFER_FLAG_DISCONT);
     self->next_offset = end_offset;
+    // Got a discont and adjusted, reset the discont_time marker.
+    self->discont_time = GST_CLOCK_TIME_NONE;
   } else {
     // No discont, just keep counting
-    self->discont_time = GST_CLOCK_TIME_NONE;
     timestamp =
         gst_util_uint64_scale (self->next_offset, GST_SECOND, self->info.rate);
     self->next_offset += sample_count;

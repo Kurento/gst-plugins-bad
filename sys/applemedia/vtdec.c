@@ -1,6 +1,6 @@
 /* GStreamer
  * Copyright (C) 2010, 2013 Ole André Vadla Ravnås <oleavr@soundrop.com>
- * Copyright (C) 2012, 2013 Alessandro Decina <alessandro.d@gmail.com>
+ * Copyright (C) 2012-2016 Alessandro Decina <alessandro.d@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -88,6 +88,7 @@ static gboolean compute_h264_decode_picture_buffer_length (GstVtdec * vtdec,
 static gboolean gst_vtdec_compute_reorder_queue_length (GstVtdec * vtdec,
     CMVideoCodecType cm_format, GstBuffer * codec_data);
 static void gst_vtdec_set_latency (GstVtdec * vtdec);
+static void gst_vtdec_set_context (GstElement * element, GstContext * context);
 
 static GstStaticPadTemplate gst_vtdec_sink_template =
     GST_STATIC_PAD_TEMPLATE ("sink",
@@ -120,17 +121,18 @@ static void
 gst_vtdec_class_init (GstVtdecClass * klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
   GstVideoDecoderClass *video_decoder_class = GST_VIDEO_DECODER_CLASS (klass);
 
   /* Setting up pads and setting metadata should be moved to
      base_class_init if you intend to subclass this class. */
-  gst_element_class_add_pad_template (GST_ELEMENT_CLASS (klass),
+  gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_vtdec_sink_template));
-  gst_element_class_add_pad_template (GST_ELEMENT_CLASS (klass),
+  gst_element_class_add_pad_template (element_class,
       gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
           gst_caps_from_string (VIDEO_SRC_CAPS)));
 
-  gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
+  gst_element_class_set_static_metadata (element_class,
       "Apple VideoToolbox decoder",
       "Codec/Decoder/Video",
       "Apple VideoToolbox Decoder",
@@ -138,6 +140,7 @@ gst_vtdec_class_init (GstVtdecClass * klass)
       "Alessandro Decina <alessandro.d@gmail.com>");
 
   gobject_class->finalize = gst_vtdec_finalize;
+  element_class->set_context = gst_vtdec_set_context;
   video_decoder_class->start = GST_DEBUG_FUNCPTR (gst_vtdec_start);
   video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_vtdec_stop);
   video_decoder_class->negotiate = GST_DEBUG_FUNCPTR (gst_vtdec_negotiate);
@@ -152,6 +155,7 @@ static void
 gst_vtdec_init (GstVtdec * vtdec)
 {
   vtdec->reorder_queue = g_async_queue_new ();
+  vtdec->ctxh = gst_gl_context_helper_new (GST_ELEMENT (vtdec));
 }
 
 void
@@ -162,7 +166,7 @@ gst_vtdec_finalize (GObject * object)
   GST_DEBUG_OBJECT (vtdec, "finalize");
 
   g_async_queue_unref (vtdec->reorder_queue);
-
+  gst_gl_context_helper_free (vtdec->ctxh);
 
   G_OBJECT_CLASS (gst_vtdec_parent_class)->finalize (object);
 }
@@ -198,26 +202,6 @@ gst_vtdec_stop (GstVideoDecoder * decoder)
   return TRUE;
 }
 
-static GstGLContext *
-query_gl_context (GstVtdec * vtdec)
-{
-  GstGLContext *gl_context = NULL;
-  GstContext *context = NULL;
-  GstQuery *query;
-
-  query = gst_query_new_context ("gst.gl.local_context");
-  if (gst_pad_peer_query (GST_VIDEO_DECODER_SRC_PAD (vtdec), query)) {
-    gst_query_parse_context (query, &context);
-    if (context) {
-      const GstStructure *s = gst_context_get_structure (context);
-      gst_structure_get (s, "context", GST_GL_TYPE_CONTEXT, &gl_context, NULL);
-    }
-  }
-  gst_query_unref (query);
-
-  return gl_context;
-}
-
 static void
 setup_texture_cache (GstVtdec * vtdec, GstGLContext * context)
 {
@@ -225,21 +209,11 @@ setup_texture_cache (GstVtdec * vtdec, GstGLContext * context)
 
   g_return_if_fail (vtdec->texture_cache == NULL);
 
-  GST_INFO_OBJECT (vtdec, "Setting up texture cache. GL context %p", context);
-
   output_state = gst_video_decoder_get_output_state (GST_VIDEO_DECODER (vtdec));
   vtdec->texture_cache = gst_video_texture_cache_new (context);
   gst_video_texture_cache_set_format (vtdec->texture_cache,
       GST_VIDEO_FORMAT_NV12, output_state->caps);
   gst_video_codec_state_unref (output_state);
-}
-
-static gboolean
-caps_filter_out_gl_memory (GstCapsFeatures * features, GstStructure * structure,
-    gpointer user_data)
-{
-  return !gst_caps_features_contains (features,
-      GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
 }
 
 static gboolean
@@ -250,7 +224,6 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
   GstVideoFormat format;
   GstStructure *structure;
   const gchar *s;
-  GstGLContext *context;
   GstVtdec *vtdec;
   gboolean ret = TRUE;
   GstCapsFeatures *features = NULL;
@@ -263,9 +236,6 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
       gst_caps_make_writable (gst_pad_peer_query_caps (GST_VIDEO_DECODER_SRC_PAD
           (vtdec), templcaps));
   gst_caps_unref (templcaps);
-  context = query_gl_context (vtdec);
-  if (!context)
-    gst_caps_filter_and_map_in_place (caps, caps_filter_out_gl_memory, NULL);
 
   caps = gst_caps_truncate (caps);
   structure = gst_caps_get_structure (caps, 0);
@@ -306,21 +276,29 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
     }
 
     ret = gst_vtdec_create_session (vtdec, format);
-    if (ret) {
-      if (vtdec->texture_cache) {
-        gst_video_texture_cache_free (vtdec->texture_cache);
-        vtdec->texture_cache = NULL;
-      }
+  }
 
-      if (output_textures)
-        setup_texture_cache (vtdec, context);
+  if (ret && output_textures) {
+    /* call this regardless of whether caps have changed or not since a new
+     * local context could have become available
+     */
+    gst_gl_context_helper_ensure_context (vtdec->ctxh);
+
+    GST_INFO_OBJECT (vtdec, "pushing textures, context %p old context %p",
+        vtdec->ctxh->context,
+        vtdec->texture_cache ? vtdec->texture_cache->ctx : NULL);
+
+    if (vtdec->texture_cache
+        && vtdec->texture_cache->ctx != vtdec->ctxh->context) {
+      gst_video_texture_cache_free (vtdec->texture_cache);
+      vtdec->texture_cache = NULL;
     }
+    if (!vtdec->texture_cache)
+      setup_texture_cache (vtdec, vtdec->ctxh->context);
   }
 
   if (prevcaps)
     gst_caps_unref (prevcaps);
-  if (context)
-    gst_object_unref (context);
 
   if (!ret)
     return ret;
@@ -381,7 +359,7 @@ gst_vtdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
     gst_video_codec_state_unref (vtdec->input_state);
   vtdec->input_state = gst_video_codec_state_ref (state);
 
-  return TRUE;
+  return gst_video_decoder_negotiate (decoder);
 }
 
 static gboolean
@@ -767,9 +745,7 @@ gst_vtdec_session_output_callback (void *decompression_output_ref_con,
       GST_WARNING_OBJECT (vtdec, "Output state not configured, release buffer");
       frame->flags &= VTDEC_FRAME_FLAG_SKIP;
     } else {
-      buf =
-          gst_core_video_buffer_new (image_buffer, &state->info,
-          vtdec->texture_cache == NULL);
+      buf = gst_core_video_buffer_new (image_buffer, &state->info);
       gst_video_codec_state_unref (state);
       GST_BUFFER_PTS (buf) = pts.value;
       GST_BUFFER_DURATION (buf) = duration.value;
@@ -1000,6 +976,18 @@ gst_vtdec_set_latency (GstVtdec * vtdec)
   GST_INFO_OBJECT (vtdec, "setting latency frames:%d time:%" GST_TIME_FORMAT,
       vtdec->reorder_queue_length, GST_TIME_ARGS (latency));
   gst_video_decoder_set_latency (GST_VIDEO_DECODER (vtdec), latency, latency);
+}
+
+static void
+gst_vtdec_set_context (GstElement * element, GstContext * context)
+{
+  GstVtdec *vtdec = GST_VTDEC (element);
+
+  GST_INFO_OBJECT (element, "setting context %s",
+      gst_context_get_context_type (context));
+  gst_gl_handle_set_context (element, context,
+      &vtdec->ctxh->display, &vtdec->ctxh->other_context);
+  GST_ELEMENT_CLASS (gst_vtdec_parent_class)->set_context (element, context);
 }
 
 #ifndef HAVE_IOS
