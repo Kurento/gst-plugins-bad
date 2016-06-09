@@ -67,8 +67,8 @@ static GstFlowReturn gst_vtdec_finish (GstVideoDecoder * decoder);
 static GstFlowReturn gst_vtdec_handle_frame (GstVideoDecoder * decoder,
     GstVideoCodecFrame * frame);
 
-static gboolean gst_vtdec_create_session (GstVtdec * vtdec,
-    GstVideoFormat format);
+static OSStatus gst_vtdec_create_session (GstVtdec * vtdec,
+    GstVideoFormat format, gboolean enable_hardware);
 static void gst_vtdec_invalidate_session (GstVtdec * vtdec);
 static CMSampleBufferRef cm_sample_buffer_from_gst_buffer (GstVtdec * vtdec,
     GstBuffer * buf);
@@ -110,10 +110,10 @@ CFSTR ("RequireHardwareAcceleratedVideoDecoder");
 #endif
 
 #define VIDEO_SRC_CAPS \
+    GST_VIDEO_CAPS_MAKE("NV12") ";"                                     \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES(GST_CAPS_FEATURE_MEMORY_GL_MEMORY,\
         "NV12") ", "                                                    \
-    "texture-target = (string) rectangle;"                              \
-    GST_VIDEO_CAPS_MAKE("NV12") ";"
+    "texture-target = (string) rectangle;"
 
 G_DEFINE_TYPE (GstVtdec, gst_vtdec, GST_TYPE_VIDEO_DECODER);
 
@@ -220,30 +220,39 @@ static gboolean
 gst_vtdec_negotiate (GstVideoDecoder * decoder)
 {
   GstVideoCodecState *output_state = NULL;
-  GstCaps *caps = NULL, *templcaps = NULL, *prevcaps = NULL;
+  GstCaps *peercaps = NULL, *caps = NULL, *templcaps = NULL, *prevcaps = NULL;
   GstVideoFormat format;
   GstStructure *structure;
   const gchar *s;
   GstVtdec *vtdec;
-  gboolean ret = TRUE;
+  OSStatus err = noErr;
   GstCapsFeatures *features = NULL;
   gboolean output_textures;
 
   vtdec = GST_VTDEC (decoder);
+  if (vtdec->session)
+    gst_vtdec_push_frames_if_needed (vtdec, TRUE, FALSE);
   templcaps =
       gst_pad_get_pad_template_caps (GST_VIDEO_DECODER_SRC_PAD (decoder));
+  peercaps = gst_pad_peer_query_caps (GST_VIDEO_DECODER_SRC_PAD (vtdec), NULL);
   caps =
-      gst_caps_make_writable (gst_pad_peer_query_caps (GST_VIDEO_DECODER_SRC_PAD
-          (vtdec), templcaps));
+      gst_caps_intersect_full (peercaps, templcaps, GST_CAPS_INTERSECT_FIRST);
   gst_caps_unref (templcaps);
+  gst_caps_unref (peercaps);
 
-  caps = gst_caps_truncate (caps);
+  caps = gst_caps_truncate (gst_caps_make_writable (caps));
   structure = gst_caps_get_structure (caps, 0);
   s = gst_structure_get_string (structure, "format");
   format = gst_video_format_from_string (s);
   features = gst_caps_get_features (caps, 0);
   if (features)
     features = gst_caps_features_copy (features);
+
+  output_state = gst_video_decoder_get_output_state (GST_VIDEO_DECODER (vtdec));
+  if (output_state) {
+    prevcaps = gst_caps_ref (output_state->caps);
+    gst_video_codec_state_unref (output_state);
+  }
 
   output_state = gst_video_decoder_set_output_state (GST_VIDEO_DECODER (vtdec),
       format, vtdec->video_info.width, vtdec->video_info.height,
@@ -265,20 +274,36 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
   }
   gst_caps_unref (caps);
 
-  prevcaps = gst_pad_get_current_caps (decoder->srcpad);
   if (!prevcaps || !gst_caps_is_equal (prevcaps, output_state->caps)) {
-    GST_INFO_OBJECT (vtdec, "negotiated output format %" GST_PTR_FORMAT,
-        output_state->caps);
+    gboolean renegotiating = vtdec->session != NULL;
 
-    if (vtdec->session) {
-      gst_vtdec_push_frames_if_needed (vtdec, TRUE, FALSE);
+    GST_INFO_OBJECT (vtdec,
+        "negotiated output format %" GST_PTR_FORMAT " previous %"
+        GST_PTR_FORMAT, output_state->caps, prevcaps);
+
+    if (vtdec->session)
       gst_vtdec_invalidate_session (vtdec);
+
+    err = gst_vtdec_create_session (vtdec, format, TRUE);
+    if (err == noErr) {
+      GST_INFO_OBJECT (vtdec, "using hardware decoder");
+    } else if (err == kVTVideoDecoderNotAvailableNowErr && renegotiating) {
+      GST_WARNING_OBJECT (vtdec, "hw decoder not available anymore");
+      err = gst_vtdec_create_session (vtdec, format, FALSE);
     }
 
-    ret = gst_vtdec_create_session (vtdec, format);
+    if (err != noErr) {
+      GST_ELEMENT_ERROR (vtdec, RESOURCE, FAILED, (NULL),
+          ("VTDecompressionSessionCreate returned %d", (int) err));
+    }
   }
 
-  if (ret && output_textures) {
+  if (vtdec->texture_cache != NULL && !output_textures) {
+    gst_video_texture_cache_free (vtdec->texture_cache);
+    vtdec->texture_cache = NULL;
+  }
+
+  if (err == noErr && output_textures) {
     /* call this regardless of whether caps have changed or not since a new
      * local context could have become available
      */
@@ -300,8 +325,8 @@ gst_vtdec_negotiate (GstVideoDecoder * decoder)
   if (prevcaps)
     gst_caps_unref (prevcaps);
 
-  if (!ret)
-    return ret;
+  if (err != noErr)
+    return FALSE;
 
   return GST_VIDEO_DECODER_CLASS (gst_vtdec_parent_class)->negotiate (decoder);
 }
@@ -330,11 +355,6 @@ gst_vtdec_set_format (GstVideoDecoder * decoder, GstVideoCodecState * state)
   if (cm_format == kCMVideoCodecType_H264 && state->codec_data == NULL) {
     GST_INFO_OBJECT (vtdec, "no codec data, wait for one");
     return TRUE;
-  }
-
-  if (vtdec->session) {
-    gst_vtdec_push_frames_if_needed (vtdec, TRUE, FALSE);
-    gst_vtdec_invalidate_session (vtdec);
   }
 
   gst_video_info_from_caps (&vtdec->video_info, state->caps);
@@ -444,8 +464,9 @@ gst_vtdec_invalidate_session (GstVtdec * vtdec)
   vtdec->session = NULL;
 }
 
-static gboolean
-gst_vtdec_create_session (GstVtdec * vtdec, GstVideoFormat format)
+static OSStatus
+gst_vtdec_create_session (GstVtdec * vtdec, GstVideoFormat format,
+    gboolean enable_hardware)
 {
   CFMutableDictionaryRef output_image_buffer_attrs;
   VTDecompressionOutputCallbackRecord callback;
@@ -477,8 +498,9 @@ gst_vtdec_create_session (GstVtdec * vtdec, GstVideoFormat format)
   /* This is the default on iOS and the key does not exist there */
 #ifndef HAVE_IOS
   gst_vtutil_dict_set_boolean (videoDecoderSpecification,
-      kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, TRUE);
-  if (vtdec->require_hardware)
+      kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
+      enable_hardware);
+  if (enable_hardware && vtdec->require_hardware)
     gst_vtutil_dict_set_boolean (videoDecoderSpecification,
         kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
         TRUE);
@@ -503,13 +525,7 @@ gst_vtdec_create_session (GstVtdec * vtdec, GstVideoFormat format)
 
   CFRelease (output_image_buffer_attrs);
 
-  if (status != noErr) {
-    GST_ELEMENT_ERROR (vtdec, RESOURCE, FAILED, (NULL),
-        ("VTDecompressionSessionCreate returned %d", (int) status));
-    return FALSE;
-  }
-
-  return TRUE;
+  return status;
 }
 
 static CMFormatDescriptionRef

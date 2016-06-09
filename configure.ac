@@ -3,7 +3,7 @@ AC_PREREQ([2.69])
 dnl initialize autoconf
 dnl when going to/from release please set the nano (fourth number) right !
 dnl releases only do Wall, git and prerelease does Werror too
-AC_INIT([GStreamer Bad Plug-ins],[1.8.0],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
+AC_INIT([GStreamer Bad Plug-ins],[1.8.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
 
 AG_GST_INIT
 
@@ -51,7 +51,7 @@ dnl - interfaces added/removed/changed -> increment CURRENT, REVISION = 0
 dnl - interfaces added -> increment AGE
 dnl - interfaces removed -> AGE = 0
 dnl sets GST_LT_LDFLAGS
-AS_LIBTOOL(GST, 800, 0, 800)
+AS_LIBTOOL(GST, 801, 0, 801)
 
 dnl *** required versions of GStreamer stuff ***
 GST_REQ=1.8.0
@@ -1793,6 +1793,9 @@ AG_GST_CHECK_FEATURE(SHM, [POSIX shared memory source and sink], shm, [
             AC_DEFINE(HAVE_OSX,[1],[Apple Mac OS X operating system detected])
             HAVE_SHM=yes
             ;;
+        *-*-OpenBSD*)
+            HAVE_SHM=yes
+            ;;
         *)
             AC_CHECK_LIB([rt], [shm_open],
                 AC_CHECK_DECL([MSG_NOSIGNAL], HAVE_SHM=yes, HAVE_SHM=no, [
@@ -2715,20 +2718,15 @@ dnl *** OpenJPEG ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_OPENJPEG, true)
 AG_GST_CHECK_FEATURE(OPENJPEG, [openjpeg library], openjpeg, [
   HAVE_OPENJPEG="no"
-
-  save_LIBS="$LIBS"
-  save_CFLAGS="$CFLAGS"
-  OPENJPEG_LIBS="-lopenjp2"
-  LIBS="$LIBS $OPENJPEG_LIBS"
-  CFLAGS="$CFLAGS $OPENJPEG_CFLAGS"
-  AC_LINK_IFELSE([
-    AC_LANG_PROGRAM([#include <openjpeg-2.0/openjpeg.h>],
-                    [return (int) *opj_version ();])
-                 ], [HAVE_OPENJPEG=yes], [HAVE_OPENJPEG=no])
-  LIBS="$save_LIBS"
-  CFLAGS="$save_CFLAGS"
-
-  if test x"$HAVE_OPENJPEG" = x"no"; then
+  AG_GST_PKG_CHECK_MODULES(OPENJPEG, libopenjp2 >= 2.0)
+  if test x"$HAVE_OPENJPEG" = x"yes"; then
+    dnl minor API changes in v2.1
+    AG_GST_PKG_CHECK_MODULES(OPENJPEG_2_1, libopenjp2 >= 2.1)
+    if test x"$HAVE_OPENJPEG" = x"yes"; then
+      AC_DEFINE([HAVE_OPENJPEG_2_1], 1, [Define if OpenJPEG 2.1 is used])
+    fi
+  else
+    # Fallback to v1.5
     OPENJPEG_LIBS=""
     PKG_CHECK_MODULES(OPENJPEG, libopenjpeg1,
       HAVE_OPENJPEG="yes",
