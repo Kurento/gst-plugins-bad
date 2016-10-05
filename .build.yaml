@@ -2,3 +2,4 @@ prebuild-command: "./autogen.sh --enable-gtk-doc"
 dependencies:
   - name: gst-plugins-base
   - name: openh264
+  - name: libsrtp
