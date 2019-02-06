@@ -15,7 +15,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcamerabin2.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstchromaprint.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcoloreffects.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcompositor.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcurl.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstdashdemux.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstdataurisrc.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstdebugutilsbad.so
@@ -60,10 +59,8 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmplex.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstmxf.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstofa.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopenal.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopencv.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopengl.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopenexr.so
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstopenjpeg.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstpcapparse.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstpnm.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrawparse.so
@@ -73,7 +70,6 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrsvg.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrtmp.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstrtponvif.so
 @sbc@
-debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstschro.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstsdpelem.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstsegmentclip.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstshm.so

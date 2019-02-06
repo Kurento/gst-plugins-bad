@@ -33,13 +33,11 @@ libwildmidi-dev (>= 0.2.3)
 gstreamer@GST_ABI@-plugins-base (>= 1.5.0.1~0)
 libofa0-dev (>= 0.9.3)
 libdvdnav-dev (>= 4.1.2) [!hurd-any]
-libssl-dev (>=1.0.2)
-libjasper-dev
+libssl1.0-dev | libssl-dev (<< 1.1.0)
 libx11-dev
 libass-dev (>= 0.9.4)
 libmodplug-dev
 libkate-dev (>= 0.1.7)
-libschroedinger-dev (>= 1.0.7)
 libmimic-dev (>= 1.0)
 libgme-dev
 librsvg2-dev (>= 2.36)
@@ -51,7 +49,6 @@ gstreamer@GST_ABI@-plugins-base-doc
 libzbar-dev (>= 0.9)
 librtmp-dev
 libgnutls28-dev (>= 2.11.3)
-libcurl4-openssl-dev
 libxvidcore-dev
 libvo-aacenc-dev
 libvo-amrwbenc-dev
@@ -65,9 +62,8 @@ libgles2-mesa-dev
 libglu1-mesa-dev
 libxml2-dev (>= 2.4)
 libfluidsynth-dev (>= 1.0)
-libsrtp-dev (>= 1.5.2~0)
+libsrtp0-dev
 libopencv-dev (>= 2.0.0)
-libopenjpeg-dev
 libchromaprint-dev
 libwebp-dev (>= 0.2.1)
 libmjpegtools-dev

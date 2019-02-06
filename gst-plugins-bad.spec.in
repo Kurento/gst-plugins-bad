@@ -210,7 +210,6 @@ make ERROR_CFLAGS='' ERROR_CXXFLAGS=''
 %{_libdir}/gstreamer-%{majorminor}/libgstsmooth.so
 %{_libdir}/gstreamer-%{majorminor}/libgstspeed.so
 %{_libdir}/gstreamer-%{majorminor}/libgstcamerabin2.so
-%{_libdir}/gstreamer-%{majorminor}/libgstcurl.so
 %{_libdir}/gstreamer-%{majorminor}/libgstgdp.so
 %{_libdir}/gstreamer-%{majorminor}/libgstaccurip.so
 %{_libdir}/gstreamer-%{majorminor}/libgstfieldanalysis.so
