@@ -201,9 +201,10 @@ DEB_CONFIGURE_EXTRA_FLAGS += \
 	--disable-pvr
 
 # only build the docs on arches which can
-ifeq (,$(findstring $(DEB_HOST_ARCH),m68k arm))
-DEB_CONFIGURE_EXTRA_FLAGS += --enable-gtk-doc
-endif
+# Kurento: Disable building docs
+#ifeq (,$(findstring $(DEB_HOST_ARCH),m68k arm))
+#DEB_CONFIGURE_EXTRA_FLAGS += --enable-gtk-doc
+#endif
 
 common-binary-fixup-arch::
 	LD_LIBRARY_PATH=debian/libgstreamer-plugins-bad1.5-0/usr/lib/$(DEB_HOST_MULTIARCH):$(LD_LIBRARY_PATH) \

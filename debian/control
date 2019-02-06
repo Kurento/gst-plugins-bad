@@ -27,9 +27,7 @@ Build-Depends: autoconf (>= 2.62),
                libsbc-dev (>= 1.1) [linux-any],
                libwayland-dev (>= 1.0) [linux-any],
                libgstreamer1.5-dev (>= 1.5.0.1~0),
-               gstreamer1.5-doc,
                gstreamer1.5-plugins-base (>= 1.5.0.1~0),
-               gstreamer1.5-plugins-base-doc,
                gtk-doc-tools (>= 1.12),
                ladspa-sdk,
                libass-dev (>= 0.9.4),
@@ -97,31 +95,32 @@ Build-Depends: autoconf (>= 2.62),
                openh264,
                libpcap-dev,
                pkg-config (>= 0.11.0)
+# gstreamer1.5-doc, gstreamer1.5-plugins-base-doc,
 Standards-Version: 3.9.3
 Vcs-Git: git://anonscm.debian.org/pkg-gstreamer/gst-plugins-bad1.5.git
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-gstreamer/gst-plugins-bad1.5.git;a=summary
 Homepage: http://gstreamer.freedesktop.org/modules/gst-plugins-bad.html
 
-Package: gstreamer1.5-plugins-bad-doc
-Architecture: all
-Section: doc
-Depends: ${misc:Depends},
-         gstreamer1.5-doc,
-         gstreamer1.5-plugins-base-doc
-Description: GStreamer documentation for plugins from the "bad" set
- GStreamer is a streaming media framework, based on graphs of filters
- which operate on media data.  Applications using this library can do
- anything from real-time sound processing to playing videos, and just
- about anything else media-related.  Its plugin-based architecture means
- that new data types or processing capabilities can be added simply by
- installing new plug-ins.
- .
- GStreamer Bad Plug-ins is a set of plug-ins that aren't up to par compared
- to the rest. They might be close to being good quality, but they're missing
- something - be it a good code review, some documentation, a set of tests, a
- real live maintainer, or some actual wide use.
- .
- This package contains the documentation for plugins from the "bad" set.
+# Package: gstreamer1.5-plugins-bad-doc
+# Architecture: all
+# Section: doc
+# Depends: ${misc:Depends},
+#          gstreamer1.5-doc,
+#          gstreamer1.5-plugins-base-doc
+# Description: GStreamer documentation for plugins from the "bad" set
+#  GStreamer is a streaming media framework, based on graphs of filters
+#  which operate on media data.  Applications using this library can do
+#  anything from real-time sound processing to playing videos, and just
+#  about anything else media-related.  Its plugin-based architecture means
+#  that new data types or processing capabilities can be added simply by
+#  installing new plug-ins.
+#  .
+#  GStreamer Bad Plug-ins is a set of plug-ins that aren't up to par compared
+#  to the rest. They might be close to being good quality, but they're missing
+#  something - be it a good code review, some documentation, a set of tests, a
+#  real live maintainer, or some actual wide use.
+#  .
+#  This package contains the documentation for plugins from the "bad" set.
 
 Package: gstreamer1.5-plugins-bad
 Architecture: any
