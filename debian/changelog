@@ -1,3 +1,41 @@
+gst-plugins-bad1.5 (1.8.1-1kurento1) UNRELEASED; urgency=medium
+
+  [ David Fernandez ]
+  * Remove bluetooth5 dependency
+  * debian/control: Change curl-gnutls by curl-openssl
+  * Modify debian dependencies
+  * Separate generation of openh264 plugins
+
+  [ Jose Antonio Santos Cadenas ]
+  * Update dependencies to use kurento libsrtp version
+  * debian/rules: Do not install bluez
+  * debian: Fix how to get patch version
+  * debian: Remove liveadder library
+  * debian: Rename plugin from fragmented to hls
+  * debian: Add missing library installations
+  * Require ssl > 1.0.2
+  * Fix build dependencies
+  * Revert "Fix build dependencies"
+  * debian/rules: use gstscancodecs1.5
+  * debian/control: Fix build dependencies for ubuntu wily
+  * Consolidate build dependencies
+  * debian/control: Add libgtk3-dev as a depdendency
+  * debian/control: Require libssl 1.0.2 or bigger
+  * debian/control: Require libpcap
+
+  [ Santiago Carot-Nemesio ]
+  * Update debian packages (some plugins have been moved)
+
+  [ Jose Antonio Santos Cadenas ]
+  * Add libsrtp project as a dependency
+
+  [ Juan Navarro ]
+  * debian: Disable docs for Ubuntu 18.04 build
+  * debian/rules: Run pre-build command with dh-autoreconf
+  * debian: Remove missing deps for Ubuntu 18.04 build
+
+ -- Juan Navarro <juan.navarro@gmx.es>  Wed, 06 Feb 2019 18:57:04 +0100
+
 gst-plugins-bad1.5 (1.5.0.1) experimental; urgency=medium
 
   * Change package name to diferenciate between versions
