@@ -1,3 +1,10 @@
+gst-plugins-bad1.5 (1.8.1-1kurento2) UNRELEASED; urgency=medium
+
+  [ Juan Navarro ]
+  * Prepare release 1.8.1-1kurento2
+
+ -- Juan Navarro <juan.navarro@gmx.es>  Mon, 01 Apr 2019 19:35:39 +0200
+
 gst-plugins-bad1.5 (1.8.1-1kurento1) UNRELEASED; urgency=medium
 
   [ David Fernandez ]
@@ -656,7 +663,7 @@ gst-plugins-bad0.10 (0.10.22-1) unstable; urgency=low
   * New upstream release, "Toy Piano":
     + debian/patches/99_decklink.patch,
       debian/patches/99_decklink-linking.patch:
-      - Dropped, merged upstream.    
+      - Dropped, merged upstream.
     + debian/rules,
       debian/build-deps.in:
       - Build-depend on GStreamer core/base 0.10.33.
@@ -964,7 +971,7 @@ gst-plugins-bad0.10 (0.10.17.2-1) experimental; urgency=low
     + debian/gstreamer-plugins-bad.install,
       debian/build-deps.in:
       - Add adpcmdec, adpcmenc, dataurisrc, flite, jpegformat plugins.
-      - Remove shapewipe plugin, it was moved to gst-plugins-good. 
+      - Remove shapewipe plugin, it was moved to gst-plugins-good.
     + debian/patches/01_cog-orc-memcpy.patch,
       debian/patches/02_cog-link-lm.patch,
       debian/patches/03_frei0r.patch:
@@ -1685,7 +1692,7 @@ gst-plugins-bad0.10 (0.10.5.2-1) experimental; urgency=low
       - Add and update a few build dependencies.
     + debian/gstreamer-plugins-bad.install:
       - Add dvdspu, festival, flv, mpegtsparse, mpeg4videoparse, rawparse,
-        sdp, selector, speexresample, stereo, fbdev, metadata, vcd plugins. 
+        sdp, selector, speexresample, stereo, fbdev, metadata, vcd plugins.
       - Remove equalizer, multifile, spectrum, switch, videoparse, xingheader
         plugins. These have moved to other places now.
       - Sort everything alphabetically.
