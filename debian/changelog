@@ -1,11 +1,18 @@
-gst-plugins-bad1.5 (1.8.1-1kurento2) UNRELEASED; urgency=medium
+gst-plugins-bad1.5 (1.8.1-1kurento3) testing; urgency=medium
+
+  [ Juan Navarro ]
+  * Prepare release 1.8.1-1kurento3
+
+ -- Juan Navarro <juan.navarro@gmx.es>  Fri, 19 Jul 2019 19:15:20 +0200
+
+gst-plugins-bad1.5 (1.8.1-1kurento2) testing; urgency=medium
 
   [ Juan Navarro ]
   * Prepare release 1.8.1-1kurento2
 
  -- Juan Navarro <juan.navarro@gmx.es>  Mon, 01 Apr 2019 19:35:39 +0200
 
-gst-plugins-bad1.5 (1.8.1-1kurento1) UNRELEASED; urgency=medium
+gst-plugins-bad1.5 (1.8.1-1kurento1) testing; urgency=medium
 
   [ David Fernandez ]
   * Remove bluetooth5 dependency
