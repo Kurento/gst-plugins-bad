@@ -35,6 +35,7 @@ Build-Depends: libasound2-dev (>= 0.9.1) [linux-any],
                libbz2-dev,
                libcairo2-dev,
                libchromaprint-dev,
+               libcurl-openssl1.0-dev | libcurl4-openssl-dev,
                libdca-dev,
                libde265-dev,
                libdirectfb-dev (>= 0.9.25),
@@ -92,7 +93,6 @@ Build-Depends: libasound2-dev (>= 0.9.1) [linux-any],
                openh264,
                pkg-config (>= 0.11.0)
 # gstreamer1.5-doc, gstreamer1.5-plugins-base-doc,
-# libcurl4-openssl-dev
 # libopenjpeg-dev
 # libschroedinger-dev
 Standards-Version: 3.9.3

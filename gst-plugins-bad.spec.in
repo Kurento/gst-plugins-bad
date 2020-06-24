@@ -210,6 +210,7 @@ make ERROR_CFLAGS='' ERROR_CXXFLAGS=''
 %{_libdir}/gstreamer-%{majorminor}/libgstsmooth.so
 %{_libdir}/gstreamer-%{majorminor}/libgstspeed.so
 %{_libdir}/gstreamer-%{majorminor}/libgstcamerabin2.so
+%{_libdir}/gstreamer-%{majorminor}/libgstcurl.so
 %{_libdir}/gstreamer-%{majorminor}/libgstgdp.so
 %{_libdir}/gstreamer-%{majorminor}/libgstaccurip.so
 %{_libdir}/gstreamer-%{majorminor}/libgstfieldanalysis.so
@@ -464,4 +465,3 @@ make ERROR_CFLAGS='' ERROR_CXXFLAGS=''
 
 * Sat Nov 07 2009 Bastien Nocera <bnocera@redhat.com> 0.10.16-1
 - First version with -free name, updated to 0.10.16
-

@@ -15,6 +15,7 @@ debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcamerabin2.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstchromaprint.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcoloreffects.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcompositor.so
+debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstcurl.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstdashdemux.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstdataurisrc.so
 debian/tmp/usr/lib/*/gstreamer-@GST_ABI@/libgstdebugutilsbad.so
