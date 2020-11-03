@@ -1,3 +1,9 @@
+gst-plugins-bad1.5 (1.8.1-1kurento5) testing; urgency=medium
+
+  * Restore build of CURL plugin (GstCurl)
+
+ -- Juan Navarro <juan.navarro@gmx.es>  Tue, 03 Nov 2020 17:29:26 +0100
+
 gst-plugins-bad1.5 (1.8.1-1kurento4) testing; urgency=medium
 
   * Prepare release 1.8.1-1kurento4
